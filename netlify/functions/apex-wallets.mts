@@ -451,7 +451,7 @@ export default async function handler(req: Request, _ctx: Context) {
   const url    = new URL(req.url);
   const action = url.searchParams.get("action") || "leaderboard";
   let store: any = null;
-  try { store = getStore("apex-wallets-cache"); } catch {}
+  try { store = getStore("apex-wallets-cache-v3"); } catch {}
 
   try {
     // ── LEADERBOARD ────────────────────────────────────────────────────
@@ -549,13 +549,41 @@ export default async function handler(req: Request, _ctx: Context) {
       // 3. Consensus keresés
       const consensusMarkets = await detectConsensus(apexAddresses, 2);
 
+      // Resolve market names from conditionId via Gamma API
+      const resolvedConsensus = await Promise.all(
+        consensusMarkets.slice(0, 10).map(async (c: any) => {
+          try {
+            const r = await fetch(
+              `${GAMMA_API}/markets?condition_id=${c.market}&limit=1`,
+              { signal: AbortSignal.timeout(4000) }
+            );
+            if (r.ok) {
+              const d = await r.json() as any;
+              const m = (Array.isArray(d) ? d : (d.markets || []))[0];
+              if (m) {
+                // Polymarket URL uses event slug from the event field, or market slug
+                const eventSlug = (m.events?.[0]?.slug) || m.slug || "";
+                return {
+                  ...c,
+                  question:   m.question || "",
+                  slug:       m.slug || "",
+                  url:        eventSlug ? `https://polymarket.com/event/${eventSlug}` : 
+                              m.slug    ? `https://polymarket.com/event/${m.slug}` : "",
+                };
+              }
+            }
+          } catch {}
+          return c;
+        })
+      );
+
       const payload = JSON.stringify({
         ok: true,
         window,
         apex_wallet_count:    apexAddresses.length,
         consensus_markets:    consensusMarkets.length,
-        apex_addresses:       apexAddresses.slice(0, 5), // csak első 5 publikusan
-        consensus:            consensusMarkets.slice(0, 10),
+        apex_addresses:       apexAddresses.slice(0, 5),
+        consensus:            resolvedConsensus,
         methodology: "Top 20% of leaderboard by PnL. Consensus = 2+ apex wallets same side in same market within last 20 trades.",
       });
 

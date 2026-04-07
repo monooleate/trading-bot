@@ -180,7 +180,7 @@ export default async function handler(req: Request, _ctx: Context) {
 
   let store: any = null;
 
-  try { store = getStore("vwap-arb-cache"); } catch {}
+  try { store = getStore("vwap-arb-cache-v3"); } catch {}
   const cKey  = slug ? `market:${slug}` : `scan:${action}`;
 
   try {

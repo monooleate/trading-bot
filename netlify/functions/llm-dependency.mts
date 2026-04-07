@@ -131,7 +131,7 @@ export default async function handler(req: Request, _ctx: Context) {
 
   let store: any = null;
 
-  try { store = getStore("llm-dep-cache"); } catch {}
+  try { store = getStore("llm-dep-cache-v3"); } catch {}
 
   // ── POST: konkrét pár elemzése ────────────────────────────────────────────
   if (req.method === "POST") {

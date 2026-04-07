@@ -29,7 +29,7 @@ export default async function handler(req: Request, context: Context) {
   try {
     // ── Cache ─────────────────────────────────────────────────────────────
     let store: any = null;
-    try { store = getStore("funding-cache"); } catch {}
+    try { store = getStore("funding-cache-v3"); } catch {}
     let cached: any = null; try { cached = store ? await store.getWithMetadata(CACHE_KEY) : null; } catch {}
     if (cached?.metadata) {
       const age = Date.now() - ((cached.metadata as any).ts || 0);

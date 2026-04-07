@@ -164,7 +164,7 @@ export default async function handler(req: Request, _ctx: Context) {
 
   try {
     // Cache
-    const store  = getStore("vol-divergence-cache");
+    const store  = getStore("vol-divergence-cache-v3");
     const cKey   = "vol_div_btc";
     let cached: any = null; try { cached = store ? await store.getWithMetadata(cKey) : null; } catch {}
     if (cached?.metadata) {

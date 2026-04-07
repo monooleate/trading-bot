@@ -214,28 +214,31 @@ export default async function handler(req: Request, _ctx: Context) {
   let tokenId   = url.searchParams.get("token_id");
   const limit   = Math.min(500, parseInt(url.searchParams.get("limit") || "200"));
 
-  // Auto-detect: ha nincs token_id, a top volume piac YES token-je
+  // Auto-detect: aktív, közepes árú piac YES token-je (nem lejárt, nem 0.99+)
   if (!tokenId) {
     try {
       const mRes = await fetch(
-        "https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=5&order=volume24hr&ascending=false",
+        "https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=20&order=volume24hr&ascending=false",
         { signal: AbortSignal.timeout(5000) }
       );
       if (mRes.ok) {
         const mData = await mRes.json() as any;
         const markets = Array.isArray(mData) ? mData : (mData.markets || []);
         for (const m of markets) {
-          // clobTokenIds: stringified array ["tokenId1", "tokenId2"]
+          // Csak közepes árú piacok (0.1 - 0.9) → aktív kereskedés
+          try {
+            const op = typeof m.outcomePrices === "string"
+              ? JSON.parse(m.outcomePrices) : m.outcomePrices;
+            const yp = parseFloat(op?.[0] || 0.5);
+            if (yp < 0.10 || yp > 0.90) continue; // lejárt vagy extremis
+          } catch {}
+
+          // clobTokenIds: stringified array
           try {
             const ids = typeof m.clobTokenIds === "string"
-              ? JSON.parse(m.clobTokenIds)
-              : (m.clobTokenIds || []);
+              ? JSON.parse(m.clobTokenIds) : (m.clobTokenIds || []);
             if (ids.length > 0) { tokenId = ids[0]; break; }
           } catch {}
-          // Fallback: tokens array
-          const tokens = m.tokens || [];
-          const yes = tokens.find((t: any) => (t.outcome || "").toUpperCase() === "YES");
-          if (yes?.token_id) { tokenId = yes.token_id; break; }
         }
       }
     } catch {}
@@ -247,7 +250,7 @@ export default async function handler(req: Request, _ctx: Context) {
 
   // Cache ellenőrzés
   try {
-    const store  = getStore("orderflow-cache");
+    const store  = getStore("orderflow-cache-v3");
     const cKey   = `of:${tokenId}:${limit}`;
     let cached: any = null; try { cached = store ? await store.getWithMetadata(cKey) : null; } catch {}
     if (cached?.metadata) {

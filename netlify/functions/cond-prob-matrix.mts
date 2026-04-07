@@ -134,7 +134,10 @@ function detectViolations(markets: any[]): any[] {
       ["eth",      ["ethereum"," eth "]],
       ["fed",      ["fed ","rate cut","fomc","interest rate"]],
       ["election", ["election","president","senate","congress"]],
-      ["sports",   ["nba","nfl","championship","super bowl","world cup"]],
+      ["nba",      ["nba","nba finals","basketball finals"]],
+      ["nfl",      ["nfl","super bowl","american football"]],
+      ["soccer",   ["world cup","fifa","premier league","champions league"]],
+      ["sports",   ["championship","stanley cup","mlb","world series"]],
     ] as [string, string[]][];
 
     for (const [cat, kws] of keys) {

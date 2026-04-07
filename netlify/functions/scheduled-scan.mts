@@ -42,7 +42,7 @@ async function refreshPolymarket() {
     });
 
   let store: any = null;
-  try { store = getStore("polymarket-cache"); } catch {}
+  try { store = getStore("polymarket-cache-v3"); } catch {}
   try {
     if (store) await store.set("markets_cache", JSON.stringify({
       ok: true,
@@ -83,7 +83,7 @@ async function refreshFunding() {
     .sort((a, b) => Math.abs(b.funding_rate) - Math.abs(a.funding_rate));
 
   let store: any = null;
-  try { store = getStore("funding-cache"); } catch {}
+  try { store = getStore("funding-cache-v3"); } catch {}
   try {
     if (store) await store.set("funding_cache", JSON.stringify({
       ok: true,
@@ -119,7 +119,7 @@ export const handler = schedule("0 * * * *", async () => {
 
   // Log mentése Blobs-ba (utolsó futás rekordja)
   try {
-    const logStore = getStore("scan-logs");
+    const logStore = getStore("scan-logs-v3");
     await logStore.set("last_run", JSON.stringify({
       ran_at: new Date().toISOString(),
       elapsed_ms: elapsed,

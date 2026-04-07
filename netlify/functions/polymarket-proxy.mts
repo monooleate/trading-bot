@@ -29,7 +29,7 @@ export default async function handler(req: Request, context: Context) {
   try {
     // ── 1. Cache ellenőrzés (Netlify Blobs) ──────────────────────────────
     let store: any = null;
-    try { store = getStore("polymarket-cache"); } catch {}
+    try { store = getStore("polymarket-cache-v3"); } catch {}
 
     if (!forceRefresh) {
       let cached: any = null; try { cached = store ? await store.getWithMetadata(CACHE_KEY) : null; } catch {}
