@@ -124,11 +124,19 @@ function detectViolations(markets: any[]): any[] {
     }
   }
 
-  for (const grp of Object.values(groups)) {
+  for (const [cat, grp] of Object.entries(groups)) {
     if (grp.length < 2) continue;
-    // Rendezzük ár szerint csökkenő sorrendbe
+    // Csak azonos szavakat tartalmazó piac-párokon belül ellenőrzünk
+    // Ez kizárja az Iran vs NBA féle értelmetlen összehasonlításokat
     const sorted = [...grp].sort((a, b) => b.yes_price - a.yes_price);
     for (let i = 0; i < sorted.length - 1; i++) {
+      const qa = (sorted[i].question || "").toLowerCase();
+      const qb = (sorted[i+1].question || "").toLowerCase();
+      // Csak ha van közös szó (pl. "btc", "fed", "rate") -> valódi implication
+      const wordsA = qa.split(/\s+/).filter(w => w.length > 3);
+      const wordsB = qb.split(/\s+/).filter(w => w.length > 3);
+      const commonWords = wordsA.filter(w => qb.includes(w));
+      if (commonWords.length < 1) continue; // nincs közös szó -> kihagyjuk
       const v = checkMonotonicity(sorted[i], sorted[i + 1]);
       if (v) violations.push(v);
     }

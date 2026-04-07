@@ -200,16 +200,24 @@ export default async function handler(req: Request, _ctx: Context) {
   if (!tokenId) {
     try {
       const mRes = await fetch(
-        "https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=1&order=volume24hr&ascending=false",
+        "https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=5&order=volume24hr&ascending=false",
         { signal: AbortSignal.timeout(5000) }
       );
       if (mRes.ok) {
         const mData = await mRes.json() as any;
         const markets = Array.isArray(mData) ? mData : (mData.markets || []);
-        if (markets.length > 0) {
-          const tokens = markets[0].tokens || [];
+        for (const m of markets) {
+          // clobTokenIds: stringified array ["tokenId1", "tokenId2"]
+          try {
+            const ids = typeof m.clobTokenIds === "string"
+              ? JSON.parse(m.clobTokenIds)
+              : (m.clobTokenIds || []);
+            if (ids.length > 0) { tokenId = ids[0]; break; }
+          } catch {}
+          // Fallback: tokens array
+          const tokens = m.tokens || [];
           const yes = tokens.find((t: any) => (t.outcome || "").toUpperCase() === "YES");
-          if (yes?.token_id) tokenId = yes.token_id;
+          if (yes?.token_id) { tokenId = yes.token_id; break; }
         }
       }
     } catch {}

@@ -362,20 +362,39 @@ function buildProfile(address: string, trades: any[], activity: any[]) {
 
 // ─── LEADERBOARD ──────────────────────────────────────────────────────────────
 async function getLeaderboard(window: string, limit: number) {
-  // Try multiple endpoints - API changed
-  const endpoints = [
-    "/profiles/leaderboard",
-    "/leaderboard",
-    "/rankings",
-  ];
-  for (const ep of endpoints) {
-    try {
-      const data = await dataGet(ep, { window, limit: String(limit) });
-      const arr = Array.isArray(data) ? data : (data.data || data.results || data.rankings || []);
-      if (arr.length > 0) return arr;
-    } catch {}
-  }
-  return [];
+  // Data API has no public /leaderboard endpoint.
+  // Strategy: fetch recent global trades, aggregate PnL per wallet.
+  try {
+    // Get recent high-volume trades
+    const data = await dataGet("/trades", {
+      limit: "500",
+      sortBy: "TIMESTAMP",
+      sortDirection: "DESC",
+    });
+    const trades: any[] = Array.isArray(data) ? data : [];
+
+    // Aggregate by proxy wallet
+    const walletMap: Record<string, { proxyWalletAddress: string; pnl: number; volume: number; trades: number }> = {};
+    for (const t of trades) {
+      const addr = t.proxyWallet || t.maker || "";
+      if (!addr) continue;
+      if (!walletMap[addr]) walletMap[addr] = { proxyWalletAddress: addr, pnl: 0, volume: 0, trades: 0 };
+      const size  = parseFloat(t.size  || 0);
+      const price = parseFloat(t.price || 0);
+      walletMap[addr].volume += size * price;
+      walletMap[addr].trades += 1;
+      // Simple PnL proxy: SELL trades are positive
+      if ((t.side || "").toUpperCase() === "SELL") {
+        walletMap[addr].pnl += size * price;
+      } else {
+        walletMap[addr].pnl -= size * price;
+      }
+    }
+
+    return Object.values(walletMap)
+      .sort((a, b) => b.pnl - a.pnl)
+      .slice(0, limit);
+  } catch { return []; }
 }
 
 // ─── CONSENSUS DETECTOR ───────────────────────────────────────────────────────

@@ -99,8 +99,7 @@ async function fetchBTCMarkets() {
   // Gamma API search BTC 15m markets
   const params = new URLSearchParams({
     active: "true", closed: "false",
-    limit: "30", order: "volume24hr", ascending: "false",
-    tag_slug: "crypto",
+    limit: "50", order: "volume24hr", ascending: "false",
   });
   const res = await fetch(`${GAMMA_API}/markets?${params}`, {
     signal: AbortSignal.timeout(8000),
