@@ -31,7 +31,7 @@ export default async function handler(req: Request, context: Context) {
     const store = getStore("polymarket-cache");
 
     if (!forceRefresh) {
-      const cached = await store.getWithMetadata(CACHE_KEY);
+      let cached: any = null; try { cached = await store.getWithMetadata(CACHE_KEY); } catch {}
       if (cached?.metadata) {
         const meta = cached.metadata as { ts: number };
         const age  = Date.now() - (meta.ts || 0);

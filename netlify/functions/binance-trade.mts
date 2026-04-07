@@ -66,6 +66,14 @@ async function binanceRequest(
 export default async function handler(req: Request, ctx: Context) {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
 
+  if (!process.env.BINANCE_API_KEY) {
+    return new Response(JSON.stringify({
+      ok: false,
+      error: "BINANCE API key not configured",
+      hint: "Add BINANCE_API_KEY to Netlify env vars"
+    }), { status: 200, headers: CORS });
+  }
+
   const auth = await checkAuth(req);
   if (!auth.ok) return auth.error;
 

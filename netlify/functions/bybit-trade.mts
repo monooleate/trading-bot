@@ -80,6 +80,14 @@ async function bybitRequest(
 export default async function handler(req: Request, ctx: Context) {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
 
+  if (!process.env.BYBIT_API_KEY) {
+    return new Response(JSON.stringify({
+      ok: false,
+      error: "BYBIT API key not configured",
+      hint: "Add BYBIT_API_KEY to Netlify env vars"
+    }), { status: 200, headers: CORS });
+  }
+
   // ── Auth ellenőrzés ───────────────────────────────────────────────────
   const auth = await checkAuth(req);
   if (!auth.ok) return auth.error;

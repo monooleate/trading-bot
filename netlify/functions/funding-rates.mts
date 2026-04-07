@@ -29,7 +29,7 @@ export default async function handler(req: Request, context: Context) {
   try {
     // ── Cache ─────────────────────────────────────────────────────────────
     const store = getStore("funding-cache");
-    const cached = await store.getWithMetadata(CACHE_KEY);
+    let cached: any = null; try { cached = await store.getWithMetadata(CACHE_KEY); } catch {}
     if (cached?.metadata) {
       const age = Date.now() - ((cached.metadata as any).ts || 0);
       if (age < CACHE_TTL_MS) {

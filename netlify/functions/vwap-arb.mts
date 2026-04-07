@@ -182,7 +182,7 @@ export default async function handler(req: Request, _ctx: Context) {
   const cKey  = slug ? `market:${slug}` : `scan:${action}`;
 
   try {
-    const cached = await store.getWithMetadata(cKey);
+    let cached: any = null; try { cached = await store.getWithMetadata(cKey); } catch {}
     if (cached?.metadata && Date.now() - ((cached.metadata as any).ts || 0) < CACHE_TTL) {
       return new Response(cached.data as string, { status: 200, headers: { ...CORS, "X-Cache": "HIT" } });
     }

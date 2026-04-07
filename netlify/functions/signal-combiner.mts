@@ -1,17 +1,9 @@
 // netlify/functions/signal-combiner.mts
 // GET /.netlify/functions/signal-combiner
 //
-// Fundamental Law of Active Management alapú signal kombinátor.
-// IR = IC × √N
-//
-// 5 jelzés forrása:
-//   1. Vol Divergence  → IV-RV spread (volatility signal)
-//   2. OrderFlow       → Kyle λ + VPIN (microstructure signal)  
-//   3. Apex Consensus  → wallet agreement (momentum/smart money)
-//   4. Cond Prob       → mispricing violations (mean reversion)
-//   5. Funding Rate    → cross-venue carry signal
-//
-// Output: combined_probability, kelly_fraction, recommended_action
+// Fundamental Law of Active Management: IR = IC × √N
+// Közvetlenül hívja a külső API-kat (nem belső functions)
+// Output: combined_probability, kelly_fraction, BUY/SELL/WAIT ajánlás
 
 import type { Context } from "@netlify/functions";
 import { getStore } from "@netlify/blobs";
@@ -22,16 +14,12 @@ const CORS = {
   "Content-Type": "application/json",
 };
 
-const FN_BASE = process.env.URL || "http://localhost:8888";
-const CACHE_TTL = 3 * 60 * 1000; // 3 perc
+const GAMMA    = "https://gamma-api.polymarket.com";
+const CLOB     = "https://clob.polymarket.com";
+const DATA_API = "https://data-api.polymarket.com";
+const BINANCE  = "https://api.binance.com";
+const CACHE_TTL = 3 * 60 * 1000;
 
-// ─── Signal definitions ───────────────────────────────────────────────────────
-// IC estimates from literature (Polymarket context):
-// - Vol divergence:  IC ≈ 0.06 (IV>RV → markets overpriced)
-// - OrderFlow VPIN:  IC ≈ 0.09 (informed flow detector)
-// - Apex consensus:  IC ≈ 0.08 (smart money tracking)
-// - Cond prob:       IC ≈ 0.07 (mathematical mispricing)
-// - Funding rate:    IC ≈ 0.05 (carry signal, weakest)
 const SIGNAL_ICS: Record<string, number> = {
   vol_divergence: 0.06,
   orderflow:      0.09,
@@ -40,306 +28,334 @@ const SIGNAL_ICS: Record<string, number> = {
   funding_rate:   0.05,
 };
 
-// ─── Helper: fetch internal functions ─────────────────────────────────────────
-async function fetchSignal(path: string): Promise<any> {
+// ─── 1. VOL DIVERGENCE SIGNAL ─────────────────────────────────────────────────
+async function getVolSignal(): Promise<{ prob: number | null; detail: any }> {
   try {
-    const res = await fetch(`${FN_BASE}/.netlify/functions/${path}`, {
-      signal: AbortSignal.timeout(8000),
-    });
-    if (!res.ok) return null;
-    return res.json();
-  } catch { return null; }
-}
+    // Binance 15m klines → realized vol
+    const r = await fetch(
+      `${BINANCE}/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=15`,
+      { signal: AbortSignal.timeout(5000) }
+    );
+    if (!r.ok) return { prob: null, detail: null };
+    const klines = await r.json() as any[][];
+    const closes = klines.map(k => parseFloat(k[4]));
+    
+    // Realized vol
+    const returns = closes.slice(1).map((c, i) => Math.log(c / closes[i]));
+    const mean    = returns.reduce((s, v) => s + v, 0) / returns.length;
+    const rv15    = Math.sqrt(returns.reduce((s, v) => s + (v - mean) ** 2, 0) / returns.length * 365 * 24 * 60) * 100;
 
-// ─── Signal extractors → implied probability [0,1] ───────────────────────────
+    // Polymarket BTC piacok
+    const mRes = await fetch(
+      `${GAMMA}/markets?active=true&closed=false&limit=10&order=volume24hr&ascending=false&tag_slug=crypto`,
+      { signal: AbortSignal.timeout(5000) }
+    );
+    if (!mRes.ok) return { prob: 0.5 - rv15 / 1000, detail: { rv15 } };
+    const mData = await mRes.json() as any;
+    const markets = Array.isArray(mData) ? mData : (mData.markets || []);
+    
+    // BTC UP/DOWN piacok
+    const btcMarkets = markets.filter((m: any) =>
+      (m.question || "").toLowerCase().includes("btc") ||
+      (m.question || "").toLowerCase().includes("bitcoin")
+    ).slice(0, 3);
 
-function extractVolSignal(data: any): number | null {
-  // IV > RV → piaci félelemi prémium → kontraktok túlárazottak → NO oldal favorizált
-  // IV < RV → vol discount → kontraindikátor
-  if (!data?.vol_spread) return null;
-  const spread = data.vol_spread.spread_15m || 0; // %
-  // spread > 0: IV prémium, kontraindikátor (sell vol = NO bias)
-  // Normalizálás: [-50%, +50%] → [0.3, 0.7] skálán
-  // Magas IV prémium → alacsonyabb YES valószínűség
-  const normalized = 0.5 - (spread / 100) * 0.4;
-  return Math.max(0.1, Math.min(0.9, normalized));
-}
-
-function extractOrderflowSignal(data: any): number | null {
-  // Kyle λ magas → adverse selection → informált kereskedők aktívak
-  // VPIN magas → toxikus flow → ármozdulás várható
-  if (!data) return null;
-  const vpin   = data.vpin     || 0.5;
-  const lambda = data.lambda   || 0;
-  // VPIN: 0=nincs toxikus flow, 1=teljesen toxikus
-  // Ha VPIN magas (>0.7), informált flow → az irányba kell menni
-  // Konzervatív: VPIN-t YES bias-ként értelmezzük
-  const normalized = 0.3 + vpin * 0.4;
-  return Math.max(0.1, Math.min(0.9, normalized));
-}
-
-function extractApexSignal(data: any): number | null {
-  // Apex consensus: ha BUY domináns → YES, ha SELL → NO
-  if (!data?.consensus?.length) return null;
-  const signals = data.consensus as any[];
-  if (signals.length === 0) return null;
-  
-  // Legjobb consensus jel
-  const best = signals[0];
-  const conf = best.confidence || 0.5;
-  if (best.dominant_side === "BUY") {
-    return 0.5 + conf * 0.35;
-  } else {
-    return 0.5 - conf * 0.35;
-  }
-}
-
-function extractCondProbSignal(data: any): number | null {
-  // Conditional prob violations → mispricing irány
-  if (!data?.violations?.length) return null;
-  const violations = data.violations as any[];
-  
-  // Legsúlyosabb violation
-  const top = violations[0];
-  if (!top) return null;
-  
-  const sev = top.severity || 0;
-  // MONOTONICITY: erősebb esemény túlárazott → NO bias
-  // COMPLEMENT: egyik oldal túlárazott
-  if (top.type === "MONOTONICITY") {
-    return 0.5 - sev * 0.30; // sell the overpriced
-  } else if (top.type === "COMPLEMENT") {
-    const gross = (top.price_a || 0.5) + (top.price_b || 0.5);
-    return gross > 1.0 ? 0.5 - sev * 0.25 : 0.5 + sev * 0.25;
-  }
-  return 0.5;
-}
-
-function extractFundingSignal(data: any): number | null {
-  // Funding rate: pozitív funding → long bias a piacon
-  if (!data) return null;
-  const rates = data.rates || data.funding_rates;
-  if (!rates || !rates.BTCUSDT) return null;
-  
-  const rate = parseFloat(rates.BTCUSDT) || 0;
-  // Pozitív funding → shortok fizetnek longoknak → bullish bias
-  const normalized = 0.5 + rate * 50; // rate tipikusan ±0.01 körül
-  return Math.max(0.1, Math.min(0.9, normalized));
-}
-
-// ─── 11-step Alpha Combination (simplified institutional procedure) ────────────
-function combineSignals(signals: Record<string, number | null>): {
-  combined_probability: number;
-  signal_weights:       Record<string, number>;
-  effective_n:          number;
-  information_ratio:    number;
-  kelly_full:           number;
-  kelly_quarter:        number;
-  cv_edge:              number;
-  raw_signals:          Record<string, number | null>;
-} {
-  // Step 1-4: Filter valid signals, normalize to [0,1]
-  const valid: Record<string, number> = {};
-  for (const [name, val] of Object.entries(signals)) {
-    if (val !== null && !isNaN(val)) {
-      valid[name] = val;
+    // Átlag IV becslés
+    let avgIV = rv15;
+    if (btcMarkets.length > 0) {
+      const prices = btcMarkets.map((m: any) => {
+        try {
+          const op = typeof m.outcomePrices === "string" ? JSON.parse(m.outcomePrices) : m.outcomePrices;
+          return parseFloat(op?.[0] || 0.5);
+        } catch { return 0.5; }
+      });
+      const avgP = prices.reduce((s: number, v: number) => s + v, 0) / prices.length;
+      const T    = 15 / (365 * 24 * 60);
+      avgIV      = (2 * Math.abs(avgP - 0.5) / Math.sqrt(T)) * 100;
     }
+
+    const spread = avgIV - rv15;
+    // Magas IV spread → piac túláraz félelmet → NO side favored
+    const prob = Math.max(0.1, Math.min(0.9, 0.5 - (spread / 100) * 0.4));
+    return { prob, detail: { rv15: rv15.toFixed(1), iv: avgIV.toFixed(1), spread: spread.toFixed(1) } };
+  } catch { return { prob: null, detail: null }; }
+}
+
+// ─── 2. ORDER FLOW SIGNAL (VPIN proxy) ────────────────────────────────────────
+async function getOrderflowSignal(): Promise<{ prob: number | null; detail: any }> {
+  try {
+    // Top aktív piac CLOB adatai
+    const mRes = await fetch(
+      `${GAMMA}/markets?active=true&closed=false&limit=5&order=volume24hr&ascending=false`,
+      { signal: AbortSignal.timeout(5000) }
+    );
+    if (!mRes.ok) return { prob: null, detail: null };
+    const mData = await mRes.json() as any;
+    const markets = Array.isArray(mData) ? mData : (mData.markets || []);
+    
+    if (!markets.length) return { prob: null, detail: null };
+    
+    // Első piac YES token order book imbalance
+    const firstMarket = markets[0];
+    const tokens      = firstMarket.tokens || [];
+    const yesToken    = tokens.find((t: any) =>
+      (t.outcome || "").toUpperCase() === "YES"
+    );
+    
+    if (!yesToken?.token_id) return { prob: 0.5, detail: { note: "no token" } };
+    
+    const bookRes = await fetch(`${CLOB}/book?token_id=${yesToken.token_id}`, {
+      signal: AbortSignal.timeout(5000)
+    });
+    if (!bookRes.ok) return { prob: 0.5, detail: null };
+    const book = await bookRes.json() as any;
+    
+    // Order book imbalance: bid volume vs ask volume
+    const bidVol = (book.bids || []).reduce((s: number, b: any) => s + parseFloat(b.size || 0), 0);
+    const askVol = (book.asks || []).reduce((s: number, a: any) => s + parseFloat(a.size || 0), 0);
+    const total  = bidVol + askVol;
+    
+    if (total === 0) return { prob: 0.5, detail: null };
+    
+    // VPIN proxy: bid dominancia → YES side pressure
+    const bidPct = bidVol / total;
+    const prob   = Math.max(0.1, Math.min(0.9, 0.3 + bidPct * 0.4));
+    return { prob, detail: { bid_pct: bidPct.toFixed(2), market: firstMarket.question?.slice(0, 40) } };
+  } catch { return { prob: null, detail: null }; }
+}
+
+// ─── 3. APEX CONSENSUS SIGNAL ─────────────────────────────────────────────────
+async function getApexSignal(): Promise<{ prob: number | null; detail: any }> {
+  try {
+    // Top wallet-ek legutóbbi trade-jei
+    const lbRes = await fetch(
+      `${DATA_API}/leaderboard?window=7d&limit=20`,
+      { signal: AbortSignal.timeout(6000) }
+    );
+    if (!lbRes.ok) return { prob: null, detail: null };
+    const lb = await lbRes.json() as any;
+    const wallets = (Array.isArray(lb) ? lb : []).slice(0, 5);
+    
+    if (!wallets.length) return { prob: null, detail: null };
+    
+    // Top wallet legutóbbi trade-jei
+    const topWallet = wallets[0];
+    const addr      = topWallet.proxyWalletAddress || topWallet.address || topWallet.user;
+    if (!addr) return { prob: null, detail: null };
+    
+    const tradesRes = await fetch(
+      `${DATA_API}/trades?user=${addr}&limit=10`,
+      { signal: AbortSignal.timeout(5000) }
+    );
+    if (!tradesRes.ok) return { prob: 0.5, detail: { wallet: addr?.slice(0, 12) } };
+    const trades = await tradesRes.json() as any;
+    const list: any[] = Array.isArray(trades) ? trades : [];
+    
+    if (!list.length) return { prob: 0.5, detail: null };
+    
+    // BUY/SELL arány → irány meghatározás
+    const buys  = list.filter(t => (t.side || "").toUpperCase() === "BUY").length;
+    const sells = list.length - buys;
+    const buyPct = buys / list.length;
+    
+    // Magas buy arány → pozitív consensus
+    const prob = Math.max(0.1, Math.min(0.9, 0.5 + (buyPct - 0.5) * 0.6));
+    return { prob, detail: { buy_pct: buyPct.toFixed(2), trades: list.length, wallet: addr?.slice(0, 12) } };
+  } catch { return { prob: null, detail: null }; }
+}
+
+// ─── 4. CONDITIONAL PROBABILITY SIGNAL ────────────────────────────────────────
+async function getCondProbSignal(): Promise<{ prob: number | null; detail: any }> {
+  try {
+    // Top piacok complement check
+    const mRes = await fetch(
+      `${GAMMA}/markets?active=true&closed=false&limit=20&order=volume24hr&ascending=false`,
+      { signal: AbortSignal.timeout(6000) }
+    );
+    if (!mRes.ok) return { prob: null, detail: null };
+    const mData = await mRes.json() as any;
+    const markets = Array.isArray(mData) ? mData : (mData.markets || []);
+    
+    let maxViolation = 0;
+    let violationDir = 0; // +1 = YES túlárazott, -1 = NO túlárazott
+    
+    for (const m of markets.slice(0, 10)) {
+      try {
+        const op = typeof m.outcomePrices === "string" ? JSON.parse(m.outcomePrices) : m.outcomePrices;
+        if (!Array.isArray(op) || op.length < 2) continue;
+        const yp = parseFloat(op[0]);
+        const np = parseFloat(op[1]);
+        const total = yp + np;
+        const dev   = total - 1.0;
+        if (Math.abs(dev) > Math.abs(maxViolation)) {
+          maxViolation = dev;
+          violationDir = dev > 0 ? -1 : 1; // sum > 1 → sell both → NO bias
+        }
+      } catch {}
+    }
+    
+    if (Math.abs(maxViolation) < 0.02) return { prob: 0.5, detail: { max_violation: "none" } };
+    
+    // Violation irányából probability
+    const prob = Math.max(0.1, Math.min(0.9, 0.5 + violationDir * Math.min(Math.abs(maxViolation), 0.3));
+    return { prob, detail: { max_violation_pct: (maxViolation * 100).toFixed(1) } };
+  } catch { return { prob: null, detail: null }; }
+}
+
+// ─── 5. FUNDING RATE SIGNAL ───────────────────────────────────────────────────
+async function getFundingSignal(): Promise<{ prob: number | null; detail: any }> {
+  try {
+    const res = await fetch(
+      `${BINANCE}/fapi/v1/premiumIndex?symbol=BTCUSDT`,
+      { signal: AbortSignal.timeout(5000) }
+    );
+    if (!res.ok) return { prob: null, detail: null };
+    const data = await res.json() as any;
+    const rate = parseFloat(data.lastFundingRate || 0);
+    
+    // Pozitív funding → long bias → YES favored
+    const prob = Math.max(0.1, Math.min(0.9, 0.5 + rate * 50));
+    return { prob, detail: { funding_rate: (rate * 100).toFixed(4) + "%" } };
+  } catch { return { prob: null, detail: null }; }
+}
+
+// ─── KOMBINÁTOR ───────────────────────────────────────────────────────────────
+function combine(signals: Record<string, number | null>) {
+  const valid: Record<string, number> = {};
+  for (const [k, v] of Object.entries(signals)) {
+    if (v !== null && !isNaN(v)) valid[k] = v;
   }
 
-  const names  = Object.keys(valid);
-  const n      = names.length;
-  
-  if (n === 0) {
-    return {
-      combined_probability: 0.5, signal_weights: {}, effective_n: 0,
-      information_ratio: 0, kelly_full: 0, kelly_quarter: 0, cv_edge: 1,
-      raw_signals: signals,
-    };
-  }
+  const names = Object.keys(valid);
+  const n     = names.length;
+  if (n === 0) return { combined: 0.5, weights: {}, ir: 0, kelly_q: 0, cv_edge: 1 };
 
-  // Step 5-6: Cross-sectional demeaning
-  // Eltávolítjuk a közös komponenst (az összes jelzés átlagát)
-  const mean_signal = names.reduce((s, k) => s + valid[k], 0) / n;
+  // Cross-sectional demeaning
+  const mean = names.reduce((s, k) => s + valid[k], 0) / n;
   const demeaned: Record<string, number> = {};
-  for (const name of names) {
-    demeaned[name] = valid[name] - mean_signal;
-  }
+  for (const k of names) demeaned[k] = valid[k] - mean;
 
-  // Step 7-9: IC-súlyozás + residual (egyszerűsített: IC alapján direkten súlyozunk)
-  // Valódi implementáció 500+ periódusú return history-t igényel
-  // Mi az IC becsléseket használjuk prioriként
-  const ic_weights: Record<string, number> = {};
-  let total_ic = 0;
-  for (const name of names) {
-    const ic = SIGNAL_ICS[name] || 0.05;
-    ic_weights[name] = ic;
-    total_ic += ic;
+  // IC-súlyozás
+  let totalW = 0;
+  const weights: Record<string, number> = {};
+  for (const k of names) {
+    const ic = SIGNAL_ICS[k] || 0.05;
+    const w  = ic * (1 + Math.abs(demeaned[k]) * 0.5);
+    weights[k] = w;
+    totalW += w;
   }
+  for (const k of names) weights[k] = parseFloat((weights[k] / totalW).toFixed(4));
 
-  // Step 10: Volatility-scaled weights (IC / σ, ahol σ=1 mert már normalizált)
-  // Penalizáljuk a jelzéseket amelyek nagyon messze vannak a többitől
-  const signal_weights: Record<string, number> = {};
-  let weight_sum = 0;
-  for (const name of names) {
-    const ic     = ic_weights[name];
-    const resid  = demeaned[name]; // residual a cross-sectional demean után
-    // Weight = IC × residual direction
-    // Pozitív residual (signal > átlag) + magas IC → erősebb weight
-    const w = ic * (1 + Math.abs(resid) * 0.5);
-    signal_weights[name] = w;
-    weight_sum += w;
-  }
-
-  // Step 11: Normalizálás (összeg = 1)
-  for (const name of names) {
-    signal_weights[name] = parseFloat((signal_weights[name] / weight_sum).toFixed(4));
-  }
-
-  // Weighted combination
+  // Weighted sum
   let combined = 0;
-  for (const name of names) {
-    combined += signal_weights[name] * valid[name];
-  }
+  for (const k of names) combined += weights[k] * valid[k];
 
-  // Effective N (korreláció-korrekció – jelzéseink részben korrelálnak)
-  // Konzervatív becslés: 50% korrelációs veszteség
-  const effective_n = Math.max(1, n * 0.6);
+  // IR = IC × √N (effektív N: 60% korreláció-korrekció)
+  const avgIC    = names.reduce((s, k) => s + (SIGNAL_ICS[k] || 0.05), 0) / n;
+  const effN     = Math.max(1, n * 0.6);
+  const ir       = avgIC * Math.sqrt(effN);
 
-  // Information Ratio (Grinold-Kahn)
-  const avg_ic = total_ic / n;
-  const ir = avg_ic * Math.sqrt(effective_n);
-
-  // Kelly fraction: f = (p*b - q) / b ahol b = payout odds
-  // Binary market: b = (1/p - 1) azaz ha p=0.6, b=0.667
+  // Kelly
   const p      = combined;
-  const q      = 1 - p;
-  const edge   = Math.abs(p - 0.5);
-  const b      = edge > 0.01 ? (1 / p) - 1 : 1;
-  const kelly  = Math.max(0, (p * b - q) / b);
-
-  // CV_edge: Monte Carlo alapú korrekció szimulálva
-  // IR < 0.5 → nagy bizonytalanság → erős Kelly csökkentés
-  const cv_edge = Math.max(0, 1 - ir * 0.8);
-  const kelly_empirical = kelly * (1 - cv_edge);
+  const b      = Math.abs(p - 0.5) > 0.01 ? (1 / p) - 1 : 1;
+  const kelly  = Math.max(0, (p * b - (1 - p)) / b);
+  const cvEdge = Math.max(0, 1 - ir * 0.8);
+  const kellyQ = kelly * (1 - cvEdge) * 0.25;
 
   return {
-    combined_probability: parseFloat(combined.toFixed(4)),
-    signal_weights,
-    effective_n:       parseFloat(effective_n.toFixed(2)),
-    information_ratio: parseFloat(ir.toFixed(4)),
-    kelly_full:        parseFloat(kelly.toFixed(4)),
-    kelly_quarter:     parseFloat((kelly_empirical * 0.25).toFixed(4)),
-    cv_edge:           parseFloat(cv_edge.toFixed(3)),
-    raw_signals:       signals,
+    combined: parseFloat(combined.toFixed(4)),
+    weights,
+    ir:       parseFloat(ir.toFixed(4)),
+    kelly_q:  parseFloat(kellyQ.toFixed(4)),
+    cv_edge:  parseFloat(cvEdge.toFixed(3)),
   };
 }
 
-// ─── Action recommendation ────────────────────────────────────────────────────
-function recommendAction(p: number, kelly_q: number, ir: number): {
-  action:     string;
-  confidence: string;
-  rationale:  string;
-} {
+function recommend(p: number, ir: number, kellyQ: number) {
   const edge = p - 0.5;
-
   if (Math.abs(edge) < 0.05 || ir < 0.1) {
-    return {
-      action:     "WAIT",
-      confidence: "LOW",
-      rationale:  "Jelzések nem konvergálnak – nincs statisztikailag szignifikáns edge",
-    };
+    return { action: "WAIT", confidence: "LOW", rationale: "Jelzések nem konvergálnak – nincs szignifikáns edge" };
   }
-
-  if (kelly_q < 0.01) {
-    return {
-      action:     "WATCH",
-      confidence: "MEDIUM",
-      rationale:  "Van edge de a Kelly méret túl kicsi az execution kockázathoz képest",
-    };
+  if (kellyQ < 0.01) {
+    return { action: "WATCH", confidence: "LOW", rationale: "Van edge de a pozíció méret túl kicsi" };
   }
-
   const side = edge > 0 ? "YES" : "NO";
   const conf = ir > 0.3 ? "HIGH" : ir > 0.2 ? "MEDIUM" : "LOW";
-
   return {
-    action:     `BUY ${side}`,
+    action:    `BUY ${side}`,
     confidence: conf,
-    rationale:  `IR=${ir.toFixed(3)} | p=${(p*100).toFixed(1)}% | ¼-Kelly=${(kelly_q*100).toFixed(1)}% bankroll`,
+    rationale: `IR=${ir.toFixed(3)} | p=${(p * 100).toFixed(1)}% | ¼-Kelly=${(kellyQ * 100).toFixed(1)}% bankroll`,
   };
 }
 
-// ─── Main handler ─────────────────────────────────────────────────────────────
+// ─── MAIN ─────────────────────────────────────────────────────────────────────
 export default async function handler(req: Request, _ctx: Context) {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
 
   // Cache
-  const store = getStore("signal-combiner-cache");
+  let cached: any = null;
+  let store: any  = null;
   try {
-    const cached = await store.getWithMetadata("combined");
+    store  = getStore("signal-combiner-v2");
+    cached = await store.getWithMetadata("combined");
     if (cached?.metadata && Date.now() - ((cached.metadata as any).ts || 0) < CACHE_TTL) {
       return new Response(cached.data as string, { status: 200, headers: { ...CORS, "X-Cache": "HIT" } });
     }
   } catch {}
 
   try {
-    // Párhuzamos signal lekérések
-    const [volData, flowData, apexData, condData, fundData] = await Promise.all([
-      fetchSignal("vol-divergence"),
-      fetchSignal("orderflow-analysis"),
-      fetchSignal("apex-wallets?action=consensus"),
-      fetchSignal("cond-prob-matrix?group=auto"),
-      fetchSignal("funding-rates"),
+    // Párhuzamos signal lekérés – közvetlenül külső API-kból
+    const [vol, flow, apex, cond, fund] = await Promise.all([
+      getVolSignal(),
+      getOrderflowSignal(),
+      getApexSignal(),
+      getCondProbSignal(),
+      getFundingSignal(),
     ]);
 
-    // Signal extraction → implied probability
     const raw_signals: Record<string, number | null> = {
-      vol_divergence: extractVolSignal(volData),
-      orderflow:      extractOrderflowSignal(flowData),
-      apex_consensus: extractApexSignal(apexData),
-      cond_prob:      extractCondProbSignal(condData),
-      funding_rate:   extractFundingSignal(fundData),
+      vol_divergence: vol.prob,
+      orderflow:      flow.prob,
+      apex_consensus: apex.prob,
+      cond_prob:      cond.prob,
+      funding_rate:   fund.prob,
     };
 
-    // 11-step combination
-    const combo = combineSignals(raw_signals);
-    const rec   = recommendAction(
-      combo.combined_probability,
-      combo.kelly_quarter,
-      combo.information_ratio,
-    );
-
-    // Signal quality summary
-    const active_signals = Object.values(raw_signals).filter(v => v !== null).length;
-    const fundamental_law = {
-      avg_ic:     parseFloat(
-        (Object.values(SIGNAL_ICS).reduce((s,v)=>s+v,0)/Object.keys(SIGNAL_ICS).length).toFixed(4)
-      ),
-      n_signals:  active_signals,
-      effective_n: combo.effective_n,
-      ir:         combo.information_ratio,
-      formula:    `IR = IC × √N = ${(Object.values(SIGNAL_ICS).reduce((s,v)=>s+v,0)/Object.keys(SIGNAL_ICS).length).toFixed(3)} × √${active_signals.toFixed(0)} = ${combo.information_ratio.toFixed(3)}`,
-    };
+    const combo = combine(raw_signals);
+    const rec   = recommend(combo.combined, combo.ir, combo.kelly_q);
+    const active = Object.values(raw_signals).filter(v => v !== null).length;
 
     const payload = JSON.stringify({
-      ok: true,
-      fetched_at:          new Date().toISOString(),
-      combined_probability: combo.combined_probability,
-      edge_pct:            parseFloat(((combo.combined_probability - 0.5) * 100).toFixed(2)),
-      signal_weights:      combo.signal_weights,
+      ok:                   true,
+      fetched_at:           new Date().toISOString(),
+      combined_probability: combo.combined,
+      edge_pct:             parseFloat(((combo.combined - 0.5) * 100).toFixed(2)),
+      signal_weights:       combo.weights,
       raw_signals,
-      fundamental_law,
-      kelly: {
-        full:       combo.kelly_full,
-        quarter:    combo.kelly_quarter,
-        cv_edge:    combo.cv_edge,
-        note:       "¼-Kelly empirikus, CV_edge korrekció alkalmazva",
+      signal_details: {
+        vol_divergence: vol.detail,
+        orderflow:      flow.detail,
+        apex_consensus: apex.detail,
+        cond_prob:      cond.detail,
+        funding_rate:   fund.detail,
       },
-      recommendation:      rec,
-      active_signals,
-      methodology: "Grinold-Kahn Fundamental Law of Active Management. IC becslések Polymarket-specifikus priorokból.",
+      fundamental_law: {
+        avg_ic:      0.07,
+        n_signals:   active,
+        effective_n: parseFloat((active * 0.6).toFixed(1)),
+        ir:          combo.ir,
+        formula:     `IR = 0.070 × √${active} = ${combo.ir.toFixed(3)}`,
+      },
+      kelly: {
+        full:     parseFloat((combo.kelly_q * 4).toFixed(4)),
+        quarter:  combo.kelly_q,
+        cv_edge:  combo.cv_edge,
+      },
+      recommendation: rec,
+      active_signals: active,
     });
 
-    try { await store.set("combined", payload, { metadata: { ts: Date.now() } }); } catch {}
+    try { if (store) await store.set("combined", payload, { metadata: { ts: Date.now() } }); } catch {}
 
     return new Response(payload, { status: 200, headers: { ...CORS, "X-Cache": "MISS" } });
 
