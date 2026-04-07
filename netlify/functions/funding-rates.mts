@@ -6,6 +6,7 @@ import type { Context } from "@netlify/functions";
 import { getStore } from "@netlify/blobs";
 
 const BINANCE_FAPI = "https://fapi.binance.com";
+const BYBIT_API    = "https://api.bybit.com";
 const CACHE_KEY    = "funding_cache";
 const CACHE_TTL_MS = 8 * 60 * 60 * 1000; // 8 óra (funding rate periódus)
 
@@ -41,35 +42,73 @@ export default async function handler(req: Request, context: Context) {
       }
     }
 
-    // ── Binance premiumIndex endpoint (funding rate + mark price) ─────────
-    const results = await Promise.allSettled(
-      SYMBOLS.map(s =>
-        fetch(`${BINANCE_FAPI}/fapi/v1/premiumIndex?symbol=${s}`, {
-          signal: AbortSignal.timeout(5000),
-        }).then(r => r.json())
-      )
-    );
+    // ── Funding rate lekérés: Bybit primary, Binance fallback ──────────
+    let pairs: any[] = [];
 
-    const pairs = results
-      .filter((r): r is PromiseFulfilledResult<any> => r.status === "fulfilled")
-      .map(r => r.value)
-      .filter(d => d.symbol)
-      .map(d => {
-        const fr = parseFloat(d.lastFundingRate || 0) * 100; // % formátum
-        const markPrice = parseFloat(d.markPrice || 0);
-        const annual = fr * 3 * 365; // 3 funding/nap * 365 nap
-        return {
-          symbol:       d.symbol.replace("USDT", "/USDT"),
-          mark_price:   markPrice,
-          funding_rate: Math.round(fr * 10000) / 10000,
-          funding_rate_annual_pct: Math.round(annual * 100) / 100,
-          interval_hours: 8,
-          next_funding_time: d.nextFundingTime,
-          quality: Math.abs(fr) > 0.03 ? "strong" : Math.abs(fr) > 0.01 ? "weak" : "skip",
-          direction: fr > 0 ? "Long spot / Short futures" : "Short spot / Long futures",
-        };
-      })
-      .sort((a, b) => Math.abs(b.funding_rate) - Math.abs(a.funding_rate));
+    // 1. Bybit (nem geo-blokkolt)
+    try {
+      const bybitRes = await fetch(
+        `${BYBIT_API}/v5/market/tickers?category=linear`,
+        { signal: AbortSignal.timeout(6000) }
+      );
+      if (bybitRes.ok) {
+        const bybitData = await bybitRes.json() as any;
+        const tickers = bybitData?.result?.list || [];
+        pairs = SYMBOLS
+          .map(s => {
+            const t = tickers.find((tk: any) => tk.symbol === s);
+            if (!t || !t.fundingRate) return null;
+            const fr = parseFloat(t.fundingRate) * 100;
+            const markPrice = parseFloat(t.markPrice || t.lastPrice || 0);
+            const annual = fr * 3 * 365;
+            return {
+              symbol:       s.replace("USDT", "/USDT"),
+              mark_price:   markPrice,
+              funding_rate: Math.round(fr * 10000) / 10000,
+              funding_rate_annual_pct: Math.round(annual * 100) / 100,
+              interval_hours: 8,
+              next_funding_time: parseInt(t.nextFundingTime || 0),
+              quality: Math.abs(fr) > 0.03 ? "strong" : Math.abs(fr) > 0.01 ? "weak" : "skip",
+              direction: fr > 0 ? "Long spot / Short futures" : "Short spot / Long futures",
+              source: "bybit",
+            };
+          })
+          .filter(Boolean) as any[];
+      }
+    } catch {}
+
+    // 2. Binance fallback
+    if (pairs.length === 0) {
+      const results = await Promise.allSettled(
+        SYMBOLS.map(s =>
+          fetch(`${BINANCE_FAPI}/fapi/v1/premiumIndex?symbol=${s}`, {
+            signal: AbortSignal.timeout(5000),
+          }).then(r => r.json())
+        )
+      );
+      pairs = results
+        .filter((r): r is PromiseFulfilledResult<any> => r.status === "fulfilled")
+        .map(r => r.value)
+        .filter(d => d.symbol)
+        .map(d => {
+          const fr = parseFloat(d.lastFundingRate || 0) * 100;
+          const markPrice = parseFloat(d.markPrice || 0);
+          const annual = fr * 3 * 365;
+          return {
+            symbol:       d.symbol.replace("USDT", "/USDT"),
+            mark_price:   markPrice,
+            funding_rate: Math.round(fr * 10000) / 10000,
+            funding_rate_annual_pct: Math.round(annual * 100) / 100,
+            interval_hours: 8,
+            next_funding_time: d.nextFundingTime,
+            quality: Math.abs(fr) > 0.03 ? "strong" : Math.abs(fr) > 0.01 ? "weak" : "skip",
+            direction: fr > 0 ? "Long spot / Short futures" : "Short spot / Long futures",
+            source: "binance",
+          };
+        });
+    }
+
+    pairs.sort((a, b) => Math.abs(b.funding_rate) - Math.abs(a.funding_rate));
 
     const payload = JSON.stringify({
       ok: true,

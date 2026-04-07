@@ -29,18 +29,38 @@ const SIGNAL_ICS: Record<string, number> = {
   funding_rate:   0.05,
 };
 
+// ─── Price data with geo-block fallback ───────────────────────────────────────
+async function fetchCloses(limit: number): Promise<number[]> {
+  // 1. Binance Futures (often not geo-blocked)
+  try {
+    const r = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=1m&limit=${limit}`, { signal: AbortSignal.timeout(5000) });
+    if (r.ok) { const k = await r.json() as any[][]; return k.map(c => parseFloat(c[4])); }
+  } catch {}
+  // 2. Binance Spot
+  try {
+    const r = await fetch(`${BINANCE}/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=${limit}`, { signal: AbortSignal.timeout(5000) });
+    if (r.ok) { const k = await r.json() as any[][]; return k.map(c => parseFloat(c[4])); }
+  } catch {}
+  // 3. CoinGecko OHLC fallback
+  try {
+    const r = await fetch(`https://api.coingecko.com/api/v3/coins/bitcoin/ohlc?vs_currency=usd&days=1`, { signal: AbortSignal.timeout(8000) });
+    if (r.ok) { const d = await r.json() as number[][]; return d.slice(-limit).map(c => c[4]); }
+  } catch {}
+  // 4. CryptoCompare fallback
+  try {
+    const r = await fetch(`https://min-api.cryptocompare.com/data/v2/histominute?fsym=BTC&tsym=USD&limit=${limit}`, { signal: AbortSignal.timeout(6000) });
+    if (r.ok) { const d = await r.json() as any; return (d.Data?.Data || []).map((c: any) => c.close); }
+  } catch {}
+  return [];
+}
+
 // ─── 1. VOL DIVERGENCE SIGNAL ─────────────────────────────────────────────────
 async function getVolSignal(): Promise<{ prob: number | null; detail: any }> {
   try {
-    // Binance 15m klines → realized vol
-    const r = await fetch(
-      `${BINANCE}/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=15`,
-      { signal: AbortSignal.timeout(5000) }
-    );
-    if (!r.ok) return { prob: null, detail: null };
-    const klines = await r.json() as any[][];
-    const closes = klines.map(k => parseFloat(k[4]));
-    
+    // Multi-source price data with fallback
+    const closes = await fetchCloses(15);
+    if (closes.length < 3) return { prob: null, detail: { error: "no price data" } };
+
     // Realized vol
     const returns = closes.slice(1).map((c, i) => Math.log(c / closes[i]));
     const mean    = returns.reduce((s, v) => s + v, 0) / returns.length;
@@ -48,18 +68,18 @@ async function getVolSignal(): Promise<{ prob: number | null; detail: any }> {
 
     // Polymarket BTC piacok
     const mRes = await fetch(
-      `${GAMMA}/markets?active=true&closed=false&limit=10&order=volume24hr&ascending=false&tag_slug=crypto`,
+      `${GAMMA}/markets?active=true&closed=false&limit=10&order=volume24hr&ascending=false`,
       { signal: AbortSignal.timeout(5000) }
     );
-    if (!mRes.ok) return { prob: 0.5 - rv15 / 1000, detail: { rv15 } };
+    if (!mRes.ok) return { prob: 0.5 - rv15 / 1000, detail: { rv15: rv15.toFixed(1) } };
     const mData = await mRes.json() as any;
     const markets = Array.isArray(mData) ? mData : (mData.markets || []);
-    
+
     // BTC UP/DOWN piacok
-    const btcMarkets = markets.filter((m: any) =>
-      (m.question || "").toLowerCase().includes("btc") ||
-      (m.question || "").toLowerCase().includes("bitcoin")
-    ).slice(0, 3);
+    const btcMarkets = markets.filter((m: any) => {
+      const q = (m.question || "").toLowerCase();
+      return q.includes("btc") || q.includes("bitcoin");
+    }).slice(0, 3);
 
     // Átlag IV becslés
     let avgIV = rv15;
@@ -222,19 +242,66 @@ async function getCondProbSignal(): Promise<{ prob: number | null; detail: any }
 
 // ─── 5. FUNDING RATE SIGNAL ───────────────────────────────────────────────────
 async function getFundingSignal(): Promise<{ prob: number | null; detail: any }> {
+  let rate: number | null = null;
+  let source = "";
+
+  // 1. Bybit (nem geo-blokkolt)
   try {
     const res = await fetch(
-      `${BN_FUTURES}/fapi/v1/premiumIndex?symbol=BTCUSDT`,
+      `https://api.bybit.com/v5/market/tickers?category=linear&symbol=BTCUSDT`,
       { signal: AbortSignal.timeout(5000) }
     );
-    if (!res.ok) return { prob: null, detail: null };
-    const data = await res.json() as any;
-    const rate = parseFloat(data.lastFundingRate || 0);
-    
-    // Pozitív funding → long bias → YES favored
-    const prob = Math.max(0.1, Math.min(0.9, 0.5 + rate * 50));
-    return { prob, detail: { funding_rate: (rate * 100).toFixed(4) + "%" } };
-  } catch { return { prob: null, detail: null }; }
+    if (res.ok) {
+      const data = await res.json() as any;
+      const ticker = data?.result?.list?.[0];
+      if (ticker?.fundingRate) {
+        rate = parseFloat(ticker.fundingRate);
+        source = "bybit";
+      }
+    }
+  } catch {}
+
+  // 2. Binance Futures fallback
+  if (rate === null) {
+    try {
+      const res = await fetch(
+        `${BN_FUTURES}/fapi/v1/premiumIndex?symbol=BTCUSDT`,
+        { signal: AbortSignal.timeout(5000) }
+      );
+      if (res.ok) {
+        const data = await res.json() as any;
+        if (data.lastFundingRate) {
+          rate = parseFloat(data.lastFundingRate);
+          source = "binance";
+        }
+      }
+    } catch {}
+  }
+
+  // 3. CryptoCompare fallback – proxy indicator via perpetual premium
+  if (rate === null) {
+    try {
+      const [spotRes, futRes] = await Promise.all([
+        fetch(`https://min-api.cryptocompare.com/data/price?fsym=BTC&tsyms=USD`, { signal: AbortSignal.timeout(5000) }),
+        fetch(`https://min-api.cryptocompare.com/data/price?fsym=BTC&tsyms=USDT`, { signal: AbortSignal.timeout(5000) }),
+      ]);
+      if (spotRes.ok && futRes.ok) {
+        const spot = await spotRes.json() as any;
+        const fut  = await futRes.json() as any;
+        if (spot.USD && fut.USDT) {
+          // Premium/discount as funding proxy
+          rate = (fut.USDT - spot.USD) / spot.USD;
+          source = "premium_proxy";
+        }
+      }
+    } catch {}
+  }
+
+  if (rate === null) return { prob: null, detail: { error: "all funding sources failed" } };
+
+  // Pozitív funding → long bias → YES favored
+  const prob = Math.max(0.1, Math.min(0.9, 0.5 + rate * 50));
+  return { prob, detail: { funding_rate: (rate * 100).toFixed(4) + "%", source } };
 }
 
 // ─── KOMBINÁTOR ───────────────────────────────────────────────────────────────
