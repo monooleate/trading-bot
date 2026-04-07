@@ -399,18 +399,29 @@ async function getLeaderboard(window: string, limit: number) {
 
 // ─── CONSENSUS DETECTOR ───────────────────────────────────────────────────────
 async function detectConsensus(apexWallets: string[], minApex: number = 2) {
-  // Lekérjük az apex walletok legutóbbi trades-eit és keressük ahol többen is aktívak
-  const recentTrades: Record<string, { wallets: string[]; side: string[]; prices: number[] }> = {};
+  // trades response already contains title + slug - no Gamma lookup needed
+  const recentTrades: Record<string, {
+    wallets: string[]; side: string[]; prices: number[];
+    title: string; slug: string;
+  }> = {};
 
   await Promise.allSettled(
-    apexWallets.slice(0, 10).map(async (addr) => {  // max 10 wallet rate limit miatt
+    apexWallets.slice(0, 10).map(async (addr) => {
       try {
         const trades = await dataGet("/trades", { user: addr, limit: "20" });
         const list: any[] = Array.isArray(trades) ? trades : [];
         for (const t of list) {
-          const mkt = t.market || t.conditionId || "";
+          const mkt = t.conditionId || t.market || "";
           if (!mkt) continue;
-          if (!recentTrades[mkt]) recentTrades[mkt] = { wallets: [], side: [], prices: [] };
+          if (!recentTrades[mkt]) recentTrades[mkt] = {
+            wallets: [], side: [], prices: [],
+            // Store title/slug directly from trades response
+            title: t.title || t.question || "",
+            slug:  t.slug  || t.eventSlug || "",
+          };
+          // Update title if we get a better one
+          if (!recentTrades[mkt].title && t.title) recentTrades[mkt].title = t.title;
+          if (!recentTrades[mkt].slug  && t.slug)  recentTrades[mkt].slug  = t.slug;
           recentTrades[mkt].wallets.push(addr);
           recentTrades[mkt].side.push(t.side || "");
           recentTrades[mkt].prices.push(parseFloat(t.price || 0));
@@ -419,12 +430,11 @@ async function detectConsensus(apexWallets: string[], minApex: number = 2) {
     })
   );
 
-  // Konszenzus: ugyanabban a piacban min. 2 apex wallet ugyanolyan irányba
   const consensus: any[] = [];
   for (const [market, data] of Object.entries(recentTrades)) {
     if (data.wallets.length < minApex) continue;
-    const buys  = data.side.filter(s => s.toUpperCase() === "BUY").length;
-    const sells = data.side.filter(s => s.toUpperCase() === "SELL").length;
+    const buys     = data.side.filter(s => s.toUpperCase() === "BUY").length;
+    const sells    = data.side.filter(s => s.toUpperCase() === "SELL").length;
     const dominant = buys >= sells ? "BUY" : "SELL";
     const domCount = Math.max(buys, sells);
     if (domCount < minApex) continue;
@@ -432,6 +442,9 @@ async function detectConsensus(apexWallets: string[], minApex: number = 2) {
     const avgPrice = data.prices.reduce((s, v) => s + v, 0) / data.prices.length;
     consensus.push({
       market,
+      question:          data.title,
+      slug:              data.slug,
+      url:               data.slug ? `https://polymarket.com/event/${data.slug}` : "",
       apex_wallet_count: data.wallets.length,
       dominant_side:     dominant,
       dominant_count:    domCount,
@@ -550,48 +563,14 @@ export default async function handler(req: Request, _ctx: Context) {
       const consensusMarkets = await detectConsensus(apexAddresses, 2);
 
       // Resolve market names from conditionId via Gamma API
-      // Resolve market names - try multiple Gamma API param formats
-      const resolvedConsensus = await Promise.all(
-        consensusMarkets.slice(0, 10).map(async (c: any) => {
-          const condId = c.market || "";
-          // Try condition_id first, then conditionId param
-          const attempts = [
-            `${GAMMA_API}/markets?condition_id=${encodeURIComponent(condId)}&limit=1`,
-            `${GAMMA_API}/markets?conditionId=${encodeURIComponent(condId)}&limit=1`,
-          ];
-          for (const url of attempts) {
-            try {
-              const r = await fetch(url, { signal: AbortSignal.timeout(4000) });
-              if (!r.ok) continue;
-              const d = await r.json() as any;
-              const markets = Array.isArray(d) ? d : (d.markets || []);
-              // Filter: only use if conditionId matches
-              const m = markets.find((x: any) => 
-                x.conditionId === condId || x.condition_id === condId
-              ) || markets[0];
-              if (m && m.conditionId === condId) {
-                return {
-                  ...c,
-                  question: m.question || "",
-                  slug:     m.slug || "",
-                  url:      m.slug ? `https://polymarket.com/event/${m.slug}` : "",
-                };
-              }
-            } catch {}
-          }
-          // No match found - return without question
-          return { ...c, question: "", slug: "", url: "" };
-        })
-      );
-
       const payload = JSON.stringify({
         ok: true,
         window,
         apex_wallet_count:    apexAddresses.length,
         consensus_markets:    consensusMarkets.length,
         apex_addresses:       apexAddresses.slice(0, 5),
-        consensus:            resolvedConsensus,
-        methodology: "Top 20% of leaderboard by PnL. Consensus = 2+ apex wallets same side in same market within last 20 trades.",
+        consensus:            consensusMarkets.slice(0, 10),
+        methodology: "Top 20% by PnL. Consensus = 2+ apex wallets same side, same market, last 20 trades.",
       });
 
       try { if (store) await store.set(cKey, payload, { metadata: { ts: Date.now() } }); } catch {}

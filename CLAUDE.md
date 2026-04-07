@@ -328,3 +328,60 @@ netlify deploy --prod --dir=dist
 
 **Fontos:** `netlify dev` szükséges a functions teszteléséhez lokálisan.  
 `npm run dev` csak a frontend-et indítja, a `/.netlify/functions/` hívások 404-et adnak.
+
+---
+
+## AKTUÁLIS ÁLLAPOT (2026-04-08) – Claude Code folytatáshoz
+
+### Mi működik élőben
+- Tab 06: Vol harvest fut, BTC szűrő javítva (deploy után él)
+- Tab 07: OrderFlow fut, de 1 trade → Kyle λ/VPIN null
+- Tab 08: Apex Consensus fut, piac nevek HIBÁSAK (lásd alább)
+- Tab 09: Cond Prob fut, Iran violation valódi (17.5¢ edge)
+- Tab 10: Signal Combiner fut, WAIT/50% mert kevés aktív signal
+
+### Legfontosabb bug – apex-wallets.mts
+
+A `getLeaderboard()` a Data API `/trades` endpointot hívja.
+A trades response-ban BENNE VAN a `title` és `slug` mező!
+Ezeket kell eltárolni az aggregációban, nem külön Gamma lookup-ot csinálni.
+
+```typescript
+// JELENLEGI HIBÁS MEGKÖZELÍTÉS:
+// 1. /trades lekérés → wallet aggregáció (market conditionId-val)
+// 2. consensus detection → conditionId lista
+// 3. Gamma API lookup conditionId alapján → ROSSZ PIAC NÉV
+
+// HELYES MEGKÖZELÍTÉS:
+// 1. /trades lekérés → wallet aggregáció (conditionId + title + slug eltárolás)
+// 2. consensus detection → conditionId lista + beépített title/slug
+// 3. NINCS szükség Gamma lookupra
+```
+
+A `/trades` response mezői:
+```json
+{
+  "proxyWallet": "0x...",
+  "side": "BUY",
+  "price": 0.54,
+  "size": 100,
+  "title": "Will X happen?",     ← EZT KELL HASZNÁLNI
+  "slug": "will-x-happen",       ← ÉS EZT
+  "conditionId": "0x...",
+  "timestamp": 1234567890
+}
+```
+
+### Signal Combiner – mikor ad valódi jelzést?
+
+Jelenlegi állapot: 2/5 signal aktív, combined = 0.5, WAIT
+Valódi BUY/SELL akkor lesz ha:
+1. Az apex consensus javítva → helyes piac + BUY jelzés
+2. Funding rate signal elérhető
+3. Legalább 3 signal konvergál egy irányba
+
+### Deploy workflow
+```bash
+git add -A && git commit -m "fix" && git push
+```
+Netlify auto-deploy ~1-2 perc után.
