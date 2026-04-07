@@ -28,7 +28,8 @@ export default async function handler(req: Request, context: Context) {
 
   try {
     // ── Cache ─────────────────────────────────────────────────────────────
-    const store = getStore("funding-cache");
+    let store: any = null;
+    try { store = getStore("funding-cache"); } catch {}
     let cached: any = null; try { cached = await store.getWithMetadata(CACHE_KEY); } catch {}
     if (cached?.metadata) {
       const age = Date.now() - ((cached.metadata as any).ts || 0);
@@ -76,7 +77,7 @@ export default async function handler(req: Request, context: Context) {
       pairs,
     });
 
-    await store.set(CACHE_KEY, payload, { metadata: { ts: Date.now() } });
+    try { await store.set(CACHE_KEY, payload, { metadata: { ts: Date.now() } }); } catch {}
 
     return new Response(payload, {
       status: 200,

@@ -41,8 +41,10 @@ async function refreshPolymarket() {
       };
     });
 
-  const store = getStore("polymarket-cache");
-  await store.set("markets_cache", JSON.stringify({
+  let store: any = null;
+
+  try { store = getStore("polymarket-cache"); } catch {}
+  try { await store.set("markets_cache", JSON.stringify({ } catch {}
     ok: true,
     fetched_at: new Date().toISOString(),
     market_count: markets.length,
@@ -79,8 +81,10 @@ async function refreshFunding() {
     })
     .sort((a, b) => Math.abs(b.funding_rate) - Math.abs(a.funding_rate));
 
-  const store = getStore("funding-cache");
-  await store.set("funding_cache", JSON.stringify({
+  let store: any = null;
+
+  try { store = getStore("funding-cache"); } catch {}
+  try { await store.set("funding_cache", JSON.stringify({ } catch {}
     ok: true,
     fetched_at: new Date().toISOString(),
     pairs,

@@ -419,7 +419,8 @@ export default async function handler(req: Request, _ctx: Context) {
 
   const url    = new URL(req.url);
   const action = url.searchParams.get("action") || "leaderboard";
-  const store  = getStore("apex-wallets-cache");
+  let store: any = null;
+  try { store = getStore("apex-wallets-cache"); } catch {}
 
   try {
     // ── LEADERBOARD ────────────────────────────────────────────────────
@@ -446,7 +447,7 @@ export default async function handler(req: Request, _ctx: Context) {
         })),
       });
 
-      await store.set(cKey, payload, { metadata: { ts: Date.now() } });
+      try { await store.set(cKey, payload, { metadata: { ts: Date.now() } }); } catch {}
       return new Response(payload, { status: 200, headers: { ...CORS, "X-Cache": "MISS" } });
     }
 
@@ -473,7 +474,7 @@ export default async function handler(req: Request, _ctx: Context) {
       );
 
       const payload = JSON.stringify({ ok: true, profile });
-      await store.set(cKey, payload, { metadata: { ts: Date.now() } });
+      try { await store.set(cKey, payload, { metadata: { ts: Date.now() } }); } catch {}
       return new Response(payload, { status: 200, headers: { ...CORS, "X-Cache": "MISS" } });
     }
 
@@ -527,7 +528,7 @@ export default async function handler(req: Request, _ctx: Context) {
         methodology: "Top 20% of leaderboard by PnL. Consensus = 2+ apex wallets same side in same market within last 20 trades.",
       });
 
-      await store.set(cKey, payload, { metadata: { ts: Date.now() } });
+      try { await store.set(cKey, payload, { metadata: { ts: Date.now() } }); } catch {}
       return new Response(payload, { status: 200, headers: { ...CORS, "X-Cache": "MISS" } });
     }
 

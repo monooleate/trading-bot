@@ -28,7 +28,8 @@ export default async function handler(req: Request, context: Context) {
 
   try {
     // ── 1. Cache ellenőrzés (Netlify Blobs) ──────────────────────────────
-    const store = getStore("polymarket-cache");
+    let store: any = null;
+    try { store = getStore("polymarket-cache"); } catch {}
 
     if (!forceRefresh) {
       let cached: any = null; try { cached = await store.getWithMetadata(CACHE_KEY); } catch {}
@@ -94,7 +95,7 @@ export default async function handler(req: Request, context: Context) {
     });
 
     // ── 4. Cache mentés ───────────────────────────────────────────────────
-    await store.set(CACHE_KEY, payload, { metadata: { ts: Date.now() } });
+    try { await store.set(CACHE_KEY, payload, { metadata: { ts: Date.now() } }); } catch {}
 
     return new Response(payload, {
       status: 200,

@@ -178,7 +178,9 @@ export default async function handler(req: Request, _ctx: Context) {
   const slug   = url.searchParams.get("slug");
   const size   = parseInt(url.searchParams.get("size") || "200");
 
-  const store = getStore("vwap-arb-cache");
+  let store: any = null;
+
+  try { store = getStore("vwap-arb-cache"); } catch {}
   const cKey  = slug ? `market:${slug}` : `scan:${action}`;
 
   try {

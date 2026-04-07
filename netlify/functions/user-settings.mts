@@ -30,7 +30,9 @@ export default async function handler(req: Request, context: Context) {
     return new Response(null, { status: 204, headers: corsHeaders });
   }
 
-  const store = getStore(STORE_NAME);
+  let store: any = null;
+
+  try { store = getStore(STORE_NAME); } catch {}
 
   // ── GET: beállítások lekérése ──────────────────────────────────────────
   if (req.method === "GET") {
@@ -82,7 +84,7 @@ export default async function handler(req: Request, context: Context) {
       saved_at: new Date().toISOString(),
     };
 
-    await store.set(`user:${uid}`, JSON.stringify(settings));
+    try { await store.set(`user:${uid}`, JSON.stringify(settings)); } catch {}
 
     return new Response(JSON.stringify({ ok: true, settings }), {
       status: 200, headers: corsHeaders,

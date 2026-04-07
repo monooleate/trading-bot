@@ -266,7 +266,7 @@ export default async function handler(req: Request, _ctx: Context) {
       spread_recommendation: spread,
     });
 
-    await store.set(cKey, payload, { metadata: { ts: Date.now() } });
+    try { await store.set(cKey, payload, { metadata: { ts: Date.now() } }); } catch {}
 
     return new Response(payload, { status: 200, headers: { ...CORS, "X-Cache": "MISS" } });
 

@@ -129,7 +129,9 @@ function groupByCategory(markets: any[]): Record<string, any[]> {
 export default async function handler(req: Request, _ctx: Context) {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
 
-  const store = getStore("llm-dep-cache");
+  let store: any = null;
+
+  try { store = getStore("llm-dep-cache"); } catch {}
 
   // ── POST: konkrét pár elemzése ────────────────────────────────────────────
   if (req.method === "POST") {
