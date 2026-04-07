@@ -111,9 +111,21 @@ async function fetchBTCMarkets() {
   // Szűrés: BTC UP/DOWN kontraktok (15 perc)
   return list.filter((m: any) => {
     const q = (m.question || m.title || "").toLowerCase();
-    return (q.includes("btc") || q.includes("bitcoin")) &&
-           (q.includes("15") || q.includes("up") || q.includes("down"));
-  }).slice(0, 6);
+    if (!q.includes("btc") && !q.includes("bitcoin")) return false;
+    // Kizárjuk a lejárt/majdnem lezárt piacokat
+    // Ha nincs endDate vagy nagyon hamar lejár, skip
+    if (m.endDate) {
+      const hoursLeft = (new Date(m.endDate).getTime() - Date.now()) / 3600000;
+      if (hoursLeft < 1) return false; // kevesebb mint 1 óra van hátra
+    }
+    // Kizárjuk az extrém árazású piacokat (lejárt)
+    try {
+      const op = typeof m.outcomePrices === "string" ? JSON.parse(m.outcomePrices) : m.outcomePrices;
+      const yp = parseFloat(op?.[0] || 0.5);
+      if (yp < 0.05 || yp > 0.95) return false;
+    } catch {}
+    return true;
+  }).slice(0, 8);
 }
 
 // ─── CLOB midpoint lekérés ────────────────────────────────────────────────────

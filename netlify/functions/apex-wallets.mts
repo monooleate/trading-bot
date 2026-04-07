@@ -550,30 +550,37 @@ export default async function handler(req: Request, _ctx: Context) {
       const consensusMarkets = await detectConsensus(apexAddresses, 2);
 
       // Resolve market names from conditionId via Gamma API
+      // Resolve market names - try multiple Gamma API param formats
       const resolvedConsensus = await Promise.all(
         consensusMarkets.slice(0, 10).map(async (c: any) => {
-          try {
-            const r = await fetch(
-              `${GAMMA_API}/markets?condition_id=${c.market}&limit=1`,
-              { signal: AbortSignal.timeout(4000) }
-            );
-            if (r.ok) {
+          const condId = c.market || "";
+          // Try condition_id first, then conditionId param
+          const attempts = [
+            `${GAMMA_API}/markets?condition_id=${encodeURIComponent(condId)}&limit=1`,
+            `${GAMMA_API}/markets?conditionId=${encodeURIComponent(condId)}&limit=1`,
+          ];
+          for (const url of attempts) {
+            try {
+              const r = await fetch(url, { signal: AbortSignal.timeout(4000) });
+              if (!r.ok) continue;
               const d = await r.json() as any;
-              const m = (Array.isArray(d) ? d : (d.markets || []))[0];
-              if (m) {
-                // Polymarket URL uses event slug from the event field, or market slug
-                const eventSlug = (m.events?.[0]?.slug) || m.slug || "";
+              const markets = Array.isArray(d) ? d : (d.markets || []);
+              // Filter: only use if conditionId matches
+              const m = markets.find((x: any) => 
+                x.conditionId === condId || x.condition_id === condId
+              ) || markets[0];
+              if (m && m.conditionId === condId) {
                 return {
                   ...c,
-                  question:   m.question || "",
-                  slug:       m.slug || "",
-                  url:        eventSlug ? `https://polymarket.com/event/${eventSlug}` : 
-                              m.slug    ? `https://polymarket.com/event/${m.slug}` : "",
+                  question: m.question || "",
+                  slug:     m.slug || "",
+                  url:      m.slug ? `https://polymarket.com/event/${m.slug}` : "",
                 };
               }
-            }
-          } catch {}
-          return c;
+            } catch {}
+          }
+          // No match found - return without question
+          return { ...c, question: "", slug: "", url: "" };
         })
       );
 
