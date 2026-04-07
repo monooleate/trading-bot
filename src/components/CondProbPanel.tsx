@@ -110,7 +110,13 @@ export default function CondProbPanel({ bankroll }: { bankroll: number }) {
     try {
       const r = await fetch(`${FN}/cond-prob-matrix?group=${g}`);
       const j = await r.json();
-      if (j.ok) setData({ ...j, is_demo: false });
+      // Csak akkor frissítünk ha tényleg van adat
+      if (j.ok && j.markets_analyzed > 0) {
+        setData({ ...j, is_demo: false });
+      } else if (j.ok && j.markets_analyzed === 0) {
+        // API valid de nincs piac – tartsuk a demo-t
+        setData((prev: any) => ({ ...prev, is_demo: true }));
+      }
     } catch {}
     finally { setLoading(false); }
   }, []);

@@ -693,8 +693,10 @@ export default function Dashboard() {
           {tab === "trading"  && <TradingPanel />}
           {tab === "orderflow" && <OrderFlowPanel />}
           {tab === "vol"       && <VolDivergencePanel />}
-          {tab === "apex" && <ApexWalletsPanel bankroll={bankroll} />}
-          {tab === "condprob" && <CondProbPanel bankroll={bankroll} />}
+          {tab === "apex"      && <ApexWalletsPanel bankroll={bankroll} />}
+          {tab === "condprob"  && <CondProbPanel bankroll={bankroll} />}
+          {tab === "signals"   && <SignalCombinerPanel bankroll={bankroll} />}
+          {tab === "arbmatrix" && <ArbMatrixPanel bankroll={bankroll} />}
         </div>
       </div>
     </>
