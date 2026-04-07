@@ -167,14 +167,32 @@ function spreadRecommendation(
 
 // ─── CLOB trade history lekérés ───────────────────────────────────────────────
 async function fetchTrades(tokenId: string, limit: number) {
-  const url = `${CLOB}/trades?market=${encodeURIComponent(tokenId)}&limit=${limit}`;
-  const res = await fetch(url, {
-    headers: { "Accept": "application/json" },
-    signal: AbortSignal.timeout(8000),
-  });
-  if (!res.ok) throw new Error(`CLOB trades ${res.status}`);
-  const data = await res.json() as any;
-  return Array.isArray(data) ? data : (data.data || data.trades || []);
+  // CLOB /trades endpoint requires auth - use /last-trade-price + order book instead
+  // Public endpoint: /last-trade-price
+  // For trade history use Data API /trades with asset filter
+  const urls = [
+    `${CLOB}/last-trade-price?token_id=${encodeURIComponent(tokenId)}`,
+    `https://data-api.polymarket.com/trades?asset=${encodeURIComponent(tokenId)}&limit=${Math.min(limit, 100)}`,
+    `${CLOB}/trades?token_id=${encodeURIComponent(tokenId)}&limit=${limit}`,
+  ];
+
+  for (const url of urls) {
+    try {
+      const res = await fetch(url, {
+        headers: { "Accept": "application/json" },
+        signal: AbortSignal.timeout(6000),
+      });
+      if (!res.ok) continue;
+      const data = await res.json() as any;
+      // last-trade-price returns single object, wrap it
+      if (data?.price !== undefined) {
+        return [{ price: data.price, side: "BUY", size: 100, timestamp: Date.now() / 1000 }];
+      }
+      const arr = Array.isArray(data) ? data : (data.data || data.trades || []);
+      if (arr.length > 0) return arr;
+    } catch {}
+  }
+  return [];
 }
 
 // ─── CLOB midpoint ────────────────────────────────────────────────────────────

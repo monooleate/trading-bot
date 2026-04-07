@@ -75,7 +75,29 @@ function checkComplement(m: any): any | null {
   };
 }
 
+// Mutual exclusion marker phrases - these markets CANNOT be implication chains
+const MUTEX_PATTERNS = [
+  /will .+ win the \d+ .+ world cup/i,
+  /will .+ win the \d+ .+ championship/i,
+  /will .+ win the \d+ nba finals/i,
+  /will .+ win the \d+ nfl/i,
+  /will .+ win the \d+ super bowl/i,
+  /will .+ become .+ president/i,
+];
+
+function isMutuallyExclusive(qa: string, qb: string): boolean {
+  // If both questions match the same competitive event pattern,
+  // they are mutually exclusive - NOT an implication chain
+  for (const pat of MUTEX_PATTERNS) {
+    if (pat.test(qa) && pat.test(qb)) return true;
+  }
+  return false;
+}
+
 function checkMonotonicity(mHigh: any, mLow: any): any | null {
+  // Skip mutual exclusion markets (e.g. "Will Brazil win WC?" vs "Will Switzerland win WC?")
+  if (isMutuallyExclusive(mHigh.question || "", mLow.question || "")) return null;
+
   // mHigh logikailag erősebb feltétel mint mLow → P(mHigh) ≤ P(mLow)
   const diff = mHigh.yes_price - mLow.yes_price;
   if (diff <= 0.03) return null; // legalább 3¢ különbség
