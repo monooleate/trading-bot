@@ -429,7 +429,7 @@ export default async function handler(req: Request, _ctx: Context) {
       const limit  = parseInt(url.searchParams.get("limit") || "50");
       const cKey   = `lb:${window}:${limit}`;
 
-      let cached: any = null; try { cached = store ? await store.getWithMetadata(cKey); } catch {}
+      let cached: any = null; try { cached = store ? await store.getWithMetadata(cKey) : null; } catch {}
       if (cached?.metadata && Date.now() - ((cached.metadata as any).ts || 0) < TTL.leaderboard) {
         return new Response(cached.data as string, { status: 200, headers: { ...CORS, "X-Cache": "HIT" } });
       }
@@ -457,7 +457,7 @@ export default async function handler(req: Request, _ctx: Context) {
       if (!address) return new Response(JSON.stringify({ ok: false, error: "address required" }), { status: 400, headers: CORS });
 
       const cKey = `profile:${address}`;
-      let cached: any = null; try { cached = store ? await store.getWithMetadata(cKey); } catch {}
+      let cached: any = null; try { cached = store ? await store.getWithMetadata(cKey) : null; } catch {}
       if (cached?.metadata && Date.now() - ((cached.metadata as any).ts || 0) < TTL.profile) {
         return new Response(cached.data as string, { status: 200, headers: { ...CORS, "X-Cache": "HIT" } });
       }
@@ -484,7 +484,7 @@ export default async function handler(req: Request, _ctx: Context) {
       const window    = url.searchParams.get("window") || "7d";
       const cKey      = `consensus:${window}:${minSharpe}`;
 
-      let cached: any = null; try { cached = store ? await store.getWithMetadata(cKey); } catch {}
+      let cached: any = null; try { cached = store ? await store.getWithMetadata(cKey) : null; } catch {}
       if (cached?.metadata && Date.now() - ((cached.metadata as any).ts || 0) < TTL.consensus) {
         return new Response(cached.data as string, { status: 200, headers: { ...CORS, "X-Cache": "HIT" } });
       }

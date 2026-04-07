@@ -9,6 +9,9 @@
   directory = "netlify/functions"
   node_bundler = "esbuild"
 
+[functions."*"]
+  node_bundler = "esbuild"
+
 # Scheduled scan: óránként (UTC)
 [functions."scheduled-scan"]
   schedule = "0 * * * *"
@@ -19,7 +22,6 @@
     X-Frame-Options = "DENY"
     X-Content-Type-Options = "nosniff"
 
-# Functions CORS preflight
 [[headers]]
   for = "/.netlify/functions/*"
   [headers.values]

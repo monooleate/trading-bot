@@ -42,14 +42,15 @@ async function refreshPolymarket() {
     });
 
   let store: any = null;
-
   try { store = getStore("polymarket-cache"); } catch {}
-  try { if (store) await store.set("markets_cache", JSON.stringify({ } catch {}
-    ok: true,
-    fetched_at: new Date().toISOString(),
-    market_count: markets.length,
-    markets,
-  }), { metadata: { ts: Date.now() } });
+  try {
+    if (store) await store.set("markets_cache", JSON.stringify({
+      ok: true,
+      fetched_at: new Date().toISOString(),
+      market_count: markets.length,
+      markets,
+    }), { metadata: { ts: Date.now() } });
+  } catch {}
 
   return markets.length;
 }
@@ -82,13 +83,14 @@ async function refreshFunding() {
     .sort((a, b) => Math.abs(b.funding_rate) - Math.abs(a.funding_rate));
 
   let store: any = null;
-
   try { store = getStore("funding-cache"); } catch {}
-  try { if (store) await store.set("funding_cache", JSON.stringify({ } catch {}
-    ok: true,
-    fetched_at: new Date().toISOString(),
-    pairs,
-  }), { metadata: { ts: Date.now() } });
+  try {
+    if (store) await store.set("funding_cache", JSON.stringify({
+      ok: true,
+      fetched_at: new Date().toISOString(),
+      pairs,
+    }), { metadata: { ts: Date.now() } });
+  } catch {}
 
   return pairs.length;
 }

@@ -297,7 +297,7 @@ export default async function handler(req: Request, _ctx: Context) {
   let store: any  = null;
   try {
     store  = getStore("signal-combiner-v2");
-    cached = store ? await store.getWithMetadata("combined");
+    cached = store ? await store.getWithMetadata("combined") : null;
     if (cached?.metadata && Date.now() - ((cached.metadata as any).ts || 0) < CACHE_TTL) {
       return new Response(cached.data as string, { status: 200, headers: { ...CORS, "X-Cache": "HIT" } });
     }
