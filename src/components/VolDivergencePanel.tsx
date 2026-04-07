@@ -107,8 +107,8 @@ function ivColor(iv: number, rv: number) {
 
 // ─── MAIN COMPONENT ───────────────────────────────────────────────────────────
 export default function VolDivergencePanel() {
-  const [data,        setData]        = useState<any>(DEMO);
-  const [loading,     setLoading]     = useState(false);
+  const [data,        setData]        = useState<any>(null);
+  const [loading,     setLoading]     = useState(true);
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [lastUpdate,  setLastUpdate]  = useState<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -119,7 +119,7 @@ export default function VolDivergencePanel() {
       const res  = await fetch(`${FN}/vol-divergence`);
       const json = await res.json();
       if (json.ok) {
-        setData({ ...json, is_demo: false });
+        setData(json);
         setLastUpdate(new Date().toLocaleTimeString("hu-HU"));
       }
     } catch {}
@@ -169,7 +169,7 @@ export default function VolDivergencePanel() {
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            {data?.is_demo && <div className="vd-demo-badge">⚠ DEMO</div>}
+            {loading && <div style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--muted)" }}>Loading...</div>}
             {lastUpdate && <span style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--muted)" }}>{lastUpdate}</span>}
             <button className="vd-btn" onClick={() => setAutoRefresh(a => !a)}
               style={{ borderColor: autoRefresh ? "var(--accent)" : undefined, color: autoRefresh ? "var(--accent)" : undefined }}>

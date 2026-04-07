@@ -246,14 +246,30 @@ const CATS = ["összes","crypto","politics","economics","geopolitics","finance"]
 
 // ─── SCANNER TAB ──────────────────────────────────────────────────────────────
 function ScannerTab({ bankroll }: { bankroll: number }) {
-  const [markets, setMarkets] = useState<Market[]>(DEMO_MARKETS);
-  const [isDemo, setIsDemo]   = useState(true);
+  const [markets, setMarkets] = useState<Market[]>([]);
+  const [isDemo, setIsDemo]   = useState(false);
+  const [loading, setLoading] = useState(true);
   const [sel, setSel]         = useState<Market | null>(null);
   const [up, setUp]           = useState(50);
   const [cat, setCat]         = useState("összes");
   const fileRef = useRef<HTMLInputElement>(null);
 
   const filtered = markets.filter(m => cat === "összes" || m.category === cat);
+
+  // Auto-load from polymarket-proxy on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("/.netlify/functions/polymarket-proxy?limit=30");
+        const json = await res.json();
+        if (json.ok && Array.isArray(json.markets) && json.markets.length) {
+          setMarkets(json.markets);
+          setIsDemo(false);
+        }
+      } catch {}
+      finally { setLoading(false); }
+    })();
+  }, []);
 
   const handleFile = (file: File) => {
     const r = new FileReader();
@@ -271,8 +287,8 @@ function ScannerTab({ bankroll }: { bankroll: number }) {
     <div>
       <div className="ec-sec-title">Polymarket Scanner</div>
       <div className="ec-sec-sub">
-        <span className={`ec-sdot ${isDemo ? "off" : "live"}`} />
-        {isDemo ? "DEMO ADATOK – futtasd a polymarket_scanner.py-t és töltsd be a JSON-t" : "ÉLŐ ADATOK"}
+        <span className={`ec-sdot ${loading ? "off" : "live"}`} />
+        {loading ? "Betöltés..." : `ÉLŐ ADATOK – ${markets.length} piac`}
       </div>
 
       <div className="ec-chip-row">

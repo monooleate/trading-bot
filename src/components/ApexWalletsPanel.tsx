@@ -415,8 +415,8 @@ function TimeHeatmap({ ta }: { ta: any }) {
 }
 
 function LeaderboardTab({ bankroll }: { bankroll: number }) {
-  const [data,    setData]    = useState<any>(DEMO_LB);
-  const [loading, setLoading] = useState(false);
+  const [data,    setData]    = useState<any>(null);
+  const [loading, setLoading] = useState(true);
   const [window,  setWindow]  = useState("7d");
 
   const load = useCallback(async (w: string) => {
@@ -424,10 +424,12 @@ function LeaderboardTab({ bankroll }: { bankroll: number }) {
     try {
       const r = await fetch(`${FN}/apex-wallets?action=leaderboard&window=${w}&limit=50`);
       const j = await r.json();
-      if (j.ok) setData({ ...j, is_demo: false });
+      if (j.ok) setData(j);
     } catch {}
     finally { setLoading(false); }
   }, []);
+
+  useEffect(() => { load("7d"); }, []);
 
   return (
     <div>
@@ -436,7 +438,7 @@ function LeaderboardTab({ bankroll }: { bankroll: number }) {
           <div key={w} className={`aw-chip ${window === w ? "active" : ""}`}
             onClick={() => { setWindow(w); load(w); }}>{w}</div>
         ))}
-        {data?.is_demo && <div className="aw-demo-badge">⚠ DEMO</div>}
+        {loading && <div style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--muted)" }}>Loading...</div>}
       </div>
 
       <div className="aw-card">
@@ -479,18 +481,20 @@ function LeaderboardTab({ bankroll }: { bankroll: number }) {
 }
 
 function ConsensusTab({ bankroll }: { bankroll: number }) {
-  const [data,    setData]    = useState<any>(DEMO_CONSENSUS);
-  const [loading, setLoading] = useState(false);
+  const [data,    setData]    = useState<any>(null);
+  const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const r = await fetch(`${FN}/apex-wallets?action=consensus&window=7d`);
       const j = await r.json();
-      if (j.ok) setData({ ...j, is_demo: false });
+      if (j.ok) setData(j);
     } catch {}
     finally { setLoading(false); }
   }, []);
+
+  useEffect(() => { load(); }, []);
 
   const consensus = data?.consensus || [];
 
@@ -498,7 +502,7 @@ function ConsensusTab({ bankroll }: { bankroll: number }) {
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
         <div>
-          {data?.is_demo && <div className="aw-demo-badge" style={{ marginBottom: 8 }}>⚠ DEMO</div>}
+          {loading && <div style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--muted)", marginBottom: 8 }}>Loading consensus...</div>}
           <div style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--muted)" }}>
             {data?.apex_wallet_count ?? 0} apex wallet elemezve • {data?.consensus_markets ?? 0} consensus piac
           </div>
@@ -553,7 +557,14 @@ function ConsensusTab({ bankroll }: { bankroll: number }) {
                 </div>
 
                 <div style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--text)", marginBottom: 10, lineHeight: 1.5 }}>
-                  {c.market}
+                  {c.url ? (
+                    <a href={c.url} target="_blank" rel="noopener noreferrer"
+                      style={{ color: "var(--text)", textDecoration: "none", borderBottom: "1px dashed var(--border)" }}>
+                      {c.question || c.slug || c.market}
+                    </a>
+                  ) : (
+                    c.question || c.slug || c.market
+                  )}
                 </div>
 
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
@@ -603,7 +614,7 @@ function ConsensusTab({ bankroll }: { bankroll: number }) {
 
 function ProfileTab({ bankroll }: { bankroll: number }) {
   const [address, setAddress] = useState("");
-  const [data,    setData]    = useState<any>(DEMO_PROFILE);
+  const [data,    setData]    = useState<any>(null);
   const [loading, setLoading] = useState(false);
 
   const load = useCallback(async (addr?: string) => {
@@ -613,7 +624,7 @@ function ProfileTab({ bankroll }: { bankroll: number }) {
     try {
       const r = await fetch(`${FN}/apex-wallets?action=profile&address=${encodeURIComponent(a)}`);
       const j = await r.json();
-      if (j.ok) setData({ ...j, is_demo: false });
+      if (j.ok) setData(j);
     } catch {}
     finally { setLoading(false); }
   }, [address]);
@@ -631,7 +642,7 @@ function ProfileTab({ bankroll }: { bankroll: number }) {
             {loading ? "..." : "PROFIL →"}
           </button>
         </div>
-        {data?.is_demo && <div className="aw-demo-badge" style={{ marginTop: 8 }}>⚠ DEMO adat</div>}
+        {loading && <div style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--muted)", marginTop: 8 }}>Loading profile...</div>}
       </div>
 
       {p && (

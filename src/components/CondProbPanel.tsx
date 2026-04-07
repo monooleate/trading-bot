@@ -136,7 +136,7 @@ export default function CondProbPanel({ bankroll }: { bankroll: number }) {
             </div>
           </div>
           <div style={{ display:"flex",gap:8,alignItems:"center" }}>
-            {data?.is_demo && <div className="cp-demo-badge">⚠ DEMO</div>}
+            {loading && <div style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--muted)" }}>Loading...</div>}
             <button className="cp-btn primary" onClick={() => scan(group)} disabled={loading}>
               {loading ? "Scan..." : "⟳ Scan"}
             </button>

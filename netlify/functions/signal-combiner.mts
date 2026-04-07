@@ -17,7 +17,8 @@ const CORS = {
 const GAMMA    = "https://gamma-api.polymarket.com";
 const CLOB     = "https://clob.polymarket.com";
 const DATA_API = "https://data-api.polymarket.com";
-const BINANCE  = "https://api.binance.com";
+const BINANCE    = "https://api.binance.com";
+const BN_FUTURES = "https://fapi.binance.com";
 const CACHE_TTL = 3 * 60 * 1000;
 
 const SIGNAL_ICS: Record<string, number> = {
@@ -127,40 +128,57 @@ async function getOrderflowSignal(): Promise<{ prob: number | null; detail: any 
 // ─── 3. APEX CONSENSUS SIGNAL ─────────────────────────────────────────────────
 async function getApexSignal(): Promise<{ prob: number | null; detail: any }> {
   try {
-    // Top wallet-ek legutóbbi trade-jei
-    const lbRes = await fetch(
-      `${DATA_API}/leaderboard?window=7d&limit=20`,
-      { signal: AbortSignal.timeout(6000) }
-    );
-    if (!lbRes.ok) return { prob: null, detail: null };
-    const lb = await lbRes.json() as any;
-    const wallets = (Array.isArray(lb) ? lb : []).slice(0, 5);
-    
-    if (!wallets.length) return { prob: null, detail: null };
-    
-    // Top wallet legutóbbi trade-jei
-    const topWallet = wallets[0];
-    const addr      = topWallet.proxyWalletAddress || topWallet.address || topWallet.user;
-    if (!addr) return { prob: null, detail: null };
-    
+    // Data API has no /leaderboard – fetch recent global trades, aggregate by wallet
     const tradesRes = await fetch(
-      `${DATA_API}/trades?user=${addr}&limit=10`,
-      { signal: AbortSignal.timeout(5000) }
+      `${DATA_API}/trades?limit=500&sortBy=TIMESTAMP&sortDirection=DESC`,
+      { signal: AbortSignal.timeout(8000) }
     );
-    if (!tradesRes.ok) return { prob: 0.5, detail: { wallet: addr?.slice(0, 12) } };
-    const trades = await tradesRes.json() as any;
-    const list: any[] = Array.isArray(trades) ? trades : [];
-    
-    if (!list.length) return { prob: 0.5, detail: null };
-    
-    // BUY/SELL arány → irány meghatározás
-    const buys  = list.filter(t => (t.side || "").toUpperCase() === "BUY").length;
-    const sells = list.length - buys;
-    const buyPct = buys / list.length;
-    
+    if (!tradesRes.ok) return { prob: null, detail: null };
+    const allTrades: any[] = await tradesRes.json().then(d => Array.isArray(d) ? d : []);
+    if (!allTrades.length) return { prob: null, detail: null };
+
+    // Aggregate PnL per wallet to find top traders
+    const walletMap: Record<string, { pnl: number; trades: any[] }> = {};
+    for (const t of allTrades) {
+      const addr = t.proxyWallet || t.maker || "";
+      if (!addr) continue;
+      if (!walletMap[addr]) walletMap[addr] = { pnl: 0, trades: [] };
+      const size  = parseFloat(t.size  || 0);
+      const price = parseFloat(t.price || 0);
+      walletMap[addr].pnl += (t.side || "").toUpperCase() === "SELL" ? size * price : -(size * price);
+      walletMap[addr].trades.push(t);
+    }
+
+    // Top 5 wallets by PnL
+    const topWallets = Object.entries(walletMap)
+      .sort((a, b) => b[1].pnl - a[1].pnl)
+      .slice(0, 5);
+
+    if (!topWallets.length) return { prob: null, detail: null };
+
+    // Aggregate BUY/SELL across top wallets' recent trades
+    let totalBuys = 0, totalTrades = 0;
+    for (const [, data] of topWallets) {
+      for (const t of data.trades.slice(0, 10)) {
+        totalTrades++;
+        if ((t.side || "").toUpperCase() === "BUY") totalBuys++;
+      }
+    }
+
+    if (totalTrades === 0) return { prob: 0.5, detail: null };
+
+    const buyPct = totalBuys / totalTrades;
     // Magas buy arány → pozitív consensus
     const prob = Math.max(0.1, Math.min(0.9, 0.5 + (buyPct - 0.5) * 0.6));
-    return { prob, detail: { buy_pct: buyPct.toFixed(2), trades: list.length, wallet: addr?.slice(0, 12) } };
+    return {
+      prob,
+      detail: {
+        buy_pct: buyPct.toFixed(2),
+        trades: totalTrades,
+        top_wallets: topWallets.length,
+        top_pnl: topWallets[0][1].pnl.toFixed(0),
+      },
+    };
   } catch { return { prob: null, detail: null }; }
 }
 
@@ -206,7 +224,7 @@ async function getCondProbSignal(): Promise<{ prob: number | null; detail: any }
 async function getFundingSignal(): Promise<{ prob: number | null; detail: any }> {
   try {
     const res = await fetch(
-      `${BINANCE}/fapi/v1/premiumIndex?symbol=BTCUSDT`,
+      `${BN_FUTURES}/fapi/v1/premiumIndex?symbol=BTCUSDT`,
       { signal: AbortSignal.timeout(5000) }
     );
     if (!res.ok) return { prob: null, detail: null };

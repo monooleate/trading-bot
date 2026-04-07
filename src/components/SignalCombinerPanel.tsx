@@ -106,8 +106,8 @@ function actionColor(cls: string): string {
 }
 
 export default function SignalCombinerPanel({ bankroll }: { bankroll: number }) {
-  const [data,    setData]    = useState<any>(DEMO);
-  const [loading, setLoading] = useState(false);
+  const [data,    setData]    = useState<any>(null);
+  const [loading, setLoading] = useState(true);
   const [auto,    setAuto]    = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -116,7 +116,7 @@ export default function SignalCombinerPanel({ bankroll }: { bankroll: number }) 
     try {
       const r = await window.fetch(`${FN}/signal-combiner`);
       const j = await r.json();
-      if (j.ok) setData({ ...j, is_demo: false });
+      if (j.ok) setData(j);
     } catch {}
     finally { setLoading(false); }
   }, []);
@@ -156,7 +156,7 @@ export default function SignalCombinerPanel({ bankroll }: { bankroll: number }) 
             </div>
           </div>
           <div style={{ display:"flex",gap:8,alignItems:"center" }}>
-            {data?.is_demo && <div className="sc-demo">⚠ DEMO</div>}
+            {loading && <div style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--muted)" }}>Loading...</div>}
             <button className={`sc-btn ${auto?"active":""}`} onClick={() => setAuto(a=>!a)}>
               {auto ? "⏸ Auto 3m" : "▶ Auto"}
             </button>

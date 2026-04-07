@@ -562,7 +562,26 @@ export default async function handler(req: Request, _ctx: Context) {
       // 3. Consensus keresés
       const consensusMarkets = await detectConsensus(apexAddresses, 2);
 
-      // Resolve market names from conditionId via Gamma API
+      // Gamma API fallback: resolve market names where title is missing
+      const needLookup = consensusMarkets.filter(c => !c.question);
+      if (needLookup.length > 0) {
+        await Promise.allSettled(needLookup.map(async (c) => {
+          try {
+            const res = await fetch(`${GAMMA_API}/markets?condition_id=${c.market}`, {
+              signal: AbortSignal.timeout(4000),
+            });
+            if (!res.ok) return;
+            const data = await res.json();
+            const mkt = Array.isArray(data) ? data[0] : data;
+            if (mkt?.question) c.question = mkt.question;
+            if (mkt?.slug) {
+              c.slug = mkt.slug;
+              c.url  = `https://polymarket.com/event/${mkt.slug}`;
+            }
+          } catch {}
+        }));
+      }
+
       const payload = JSON.stringify({
         ok: true,
         window,

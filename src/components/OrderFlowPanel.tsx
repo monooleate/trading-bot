@@ -137,7 +137,7 @@ function MarketPicker({ onSelect }: { onSelect: (tokenId: string, question: stri
 export default function OrderFlowPanel() {
   const [tokenId,  setTokenId]  = useState("");
   const [question, setQuestion] = useState("");
-  const [data,     setData]     = useState<any>(DEMO);
+  const [data,     setData]     = useState<any>(null);
   const [loading,  setLoading]  = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [lastUpdate,  setLastUpdate]  = useState<string | null>(null);
@@ -151,7 +151,7 @@ export default function OrderFlowPanel() {
       const res  = await fetch(`${FN}/orderflow-analysis?token_id=${encodeURIComponent(id)}&limit=200`);
       const json = await res.json();
       if (json.ok) {
-        setData({ ...json, is_demo: false });
+        setData(json);
         setLastUpdate(new Date().toLocaleTimeString("hu-HU"));
       }
     } catch {}
@@ -190,7 +190,7 @@ export default function OrderFlowPanel() {
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            {data?.is_demo && <div className="of-demo-badge">⚠ DEMO</div>}
+            {loading && <div style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--muted)" }}>Loading...</div>}
             {lastUpdate && <span style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--muted)" }}>frissítve: {lastUpdate}</span>}
             <button className="of-btn" onClick={() => setAutoRefresh(a => !a)}
               style={{ borderColor: autoRefresh ? "var(--accent)" : undefined, color: autoRefresh ? "var(--accent)" : undefined }}>
