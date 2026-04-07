@@ -32,7 +32,7 @@ export default async function handler(req: Request, context: Context) {
     try { store = getStore("polymarket-cache"); } catch {}
 
     if (!forceRefresh) {
-      let cached: any = null; try { cached = await store.getWithMetadata(CACHE_KEY); } catch {}
+      let cached: any = null; try { cached = store ? await store.getWithMetadata(CACHE_KEY); } catch {}
       if (cached?.metadata) {
         const meta = cached.metadata as { ts: number };
         const age  = Date.now() - (meta.ts || 0);
@@ -95,7 +95,7 @@ export default async function handler(req: Request, context: Context) {
     });
 
     // ── 4. Cache mentés ───────────────────────────────────────────────────
-    try { await store.set(CACHE_KEY, payload, { metadata: { ts: Date.now() } }); } catch {}
+    try { if (store) await store.set(CACHE_KEY, payload, { metadata: { ts: Date.now() } }); } catch {}
 
     return new Response(payload, {
       status: 200,

@@ -84,7 +84,7 @@ export default async function handler(req: Request, context: Context) {
       saved_at: new Date().toISOString(),
     };
 
-    try { await store.set(`user:${uid}`, JSON.stringify(settings)); } catch {}
+    try { if (store) await store.set(`user:${uid}`, JSON.stringify(settings)); } catch {}
 
     return new Response(JSON.stringify({ ok: true, settings }), {
       status: 200, headers: corsHeaders,

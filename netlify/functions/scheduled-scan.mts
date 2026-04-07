@@ -44,7 +44,7 @@ async function refreshPolymarket() {
   let store: any = null;
 
   try { store = getStore("polymarket-cache"); } catch {}
-  try { await store.set("markets_cache", JSON.stringify({ } catch {}
+  try { if (store) await store.set("markets_cache", JSON.stringify({ } catch {}
     ok: true,
     fetched_at: new Date().toISOString(),
     market_count: markets.length,
@@ -84,7 +84,7 @@ async function refreshFunding() {
   let store: any = null;
 
   try { store = getStore("funding-cache"); } catch {}
-  try { await store.set("funding_cache", JSON.stringify({ } catch {}
+  try { if (store) await store.set("funding_cache", JSON.stringify({ } catch {}
     ok: true,
     fetched_at: new Date().toISOString(),
     pairs,

@@ -133,7 +133,7 @@ export default async function handler(req: Request, _ctx: Context) {
     // Cache
     const store  = getStore("vol-divergence-cache");
     const cKey   = "vol_div_btc";
-    let cached: any = null; try { cached = await store.getWithMetadata(cKey); } catch {}
+    let cached: any = null; try { cached = store ? await store.getWithMetadata(cKey); } catch {}
     if (cached?.metadata) {
       const age = Date.now() - ((cached.metadata as any).ts || 0);
       if (age < CACHE_TTL) {
@@ -257,7 +257,7 @@ export default async function handler(req: Request, _ctx: Context) {
       },
     });
 
-    try { await store.set(cKey, payload, { metadata: { ts: Date.now() } }); } catch {}
+    try { if (store) await store.set(cKey, payload, { metadata: { ts: Date.now() } }); } catch {}
 
     return new Response(payload, { status: 200, headers: { ...CORS, "X-Cache": "MISS" } });
 

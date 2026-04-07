@@ -197,7 +197,7 @@ async function getCondProbSignal(): Promise<{ prob: number | null; detail: any }
     if (Math.abs(maxViolation) < 0.02) return { prob: 0.5, detail: { max_violation: "none" } };
     
     // Violation irányából probability
-    const prob = Math.max(0.1, Math.min(0.9, 0.5 + violationDir * Math.min(Math.abs(maxViolation), 0.3));
+    const prob = Math.max(0.1, Math.min(0.9, 0.5 + violationDir * Math.min(Math.abs(maxViolation), 0.3)));
     return { prob, detail: { max_violation_pct: (maxViolation * 100).toFixed(1) } };
   } catch { return { prob: null, detail: null }; }
 }
@@ -297,7 +297,7 @@ export default async function handler(req: Request, _ctx: Context) {
   let store: any  = null;
   try {
     store  = getStore("signal-combiner-v2");
-    cached = await store.getWithMetadata("combined");
+    cached = store ? await store.getWithMetadata("combined");
     if (cached?.metadata && Date.now() - ((cached.metadata as any).ts || 0) < CACHE_TTL) {
       return new Response(cached.data as string, { status: 200, headers: { ...CORS, "X-Cache": "HIT" } });
     }

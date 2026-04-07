@@ -184,7 +184,7 @@ export default async function handler(req: Request, _ctx: Context) {
   const cKey  = slug ? `market:${slug}` : `scan:${action}`;
 
   try {
-    let cached: any = null; try { cached = await store.getWithMetadata(cKey); } catch {}
+    let cached: any = null; try { cached = store ? await store.getWithMetadata(cKey); } catch {}
     if (cached?.metadata && Date.now() - ((cached.metadata as any).ts || 0) < CACHE_TTL) {
       return new Response(cached.data as string, { status: 200, headers: { ...CORS, "X-Cache": "HIT" } });
     }
@@ -241,7 +241,7 @@ export default async function handler(req: Request, _ctx: Context) {
     }
 
     const payload = JSON.stringify(result);
-    try { await store.set(cKey, payload, { metadata: { ts: Date.now() } }); } catch {}
+    try { if (store) await store.set(cKey, payload, { metadata: { ts: Date.now() } }); } catch {}
     return new Response(payload, { status: 200, headers: { ...CORS, "X-Cache": "MISS" } });
 
   } catch (err: any) {

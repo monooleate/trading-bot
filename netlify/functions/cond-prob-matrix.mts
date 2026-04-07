@@ -65,7 +65,13 @@ async function fetchTopMarkets(limit = 40): Promise<any[]> {
         volume_24h: parseFloat(m.volume24hr || 0),
         tags: (m.tags || []).map((t: any) => typeof t === "object" ? t.label : t),
       };
-    });
+    }).filter((m: any) =>
+      // Csak binary piacok: YES + NO ≈ 1.0, és nem pontosan 0.5/0.5 (multi-outcome default)
+      m.slug &&
+      m.question &&
+      (m.yes_price + m.no_price) > 0.5 &&
+      Math.abs(m.yes_price + m.no_price - 1.0) < 0.20
+    );
   } catch { return []; }
 }
 
@@ -187,11 +193,13 @@ export default async function handler(req: Request, _ctx: Context) {
   const url   = new URL(req.url);
   const group = url.searchParams.get("group") || "auto";
 
-  // Cache
-  const store  = getStore("cond-prob-cache");
-  const cKey   = `cp:${group}`;
+  // Cache – safe init
+  let store: any = null;
+  try { store = getStore("cond-prob-cache"); } catch {}
+  const cKey = `cp:${group}`;
   try {
-    let cached: any = null; try { cached = await store.getWithMetadata(cKey); } catch {}
+    let cached: any = null;
+    try { cached = store ? await store.getWithMetadata(cKey) : null; } catch {}
     if (cached?.metadata && Date.now() - ((cached.metadata as any).ts || 0) < CACHE_TTL) {
       return new Response(cached.data as string, { status: 200, headers: { ...CORS, "X-Cache": "HIT" } });
     }
@@ -241,7 +249,7 @@ export default async function handler(req: Request, _ctx: Context) {
       scanned_at: new Date().toISOString(),
     });
 
-    try { await store.set(cKey, payload, { metadata: { ts: Date.now() } }); } catch {}
+    try { if (store) await store.set(cKey, payload, { metadata: { ts: Date.now() } }); } catch {}
 
     return new Response(payload, { status: 200, headers: { ...CORS, "X-Cache": "MISS" } });
 

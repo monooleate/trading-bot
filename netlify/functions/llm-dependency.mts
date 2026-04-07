@@ -147,7 +147,7 @@ export default async function handler(req: Request, _ctx: Context) {
 
     const cKey = `pair:${market_a.slug}:${market_b.slug}`;
     try {
-      let cached: any = null; try { cached = await store.getWithMetadata(cKey); } catch {}
+      let cached: any = null; try { cached = store ? await store.getWithMetadata(cKey); } catch {}
       if (cached?.metadata && Date.now() - ((cached.metadata as any).ts || 0) < CACHE_TTL) {
         return new Response(cached.data as string, { status: 200, headers: { ...CORS, "X-Cache": "HIT" } });
       }
@@ -166,7 +166,7 @@ export default async function handler(req: Request, _ctx: Context) {
         prompt_tokens_est: Math.ceil(prompt.length / 4),
       });
 
-      try { await store.set(cKey, payload, { metadata: { ts: Date.now() } }); } catch {}
+      try { if (store) await store.set(cKey, payload, { metadata: { ts: Date.now() } }); } catch {}
       return new Response(payload, { status: 200, headers: CORS });
 
     } catch (err: any) {
@@ -184,7 +184,7 @@ export default async function handler(req: Request, _ctx: Context) {
 
   const cKey = "auto-scan";
   try {
-    let cached: any = null; try { cached = await store.getWithMetadata(cKey); } catch {}
+    let cached: any = null; try { cached = store ? await store.getWithMetadata(cKey); } catch {}
     if (cached?.metadata && Date.now() - ((cached.metadata as any).ts || 0) < CACHE_TTL) {
       return new Response(cached.data as string, { status: 200, headers: { ...CORS, "X-Cache": "HIT" } });
     }
@@ -238,7 +238,7 @@ export default async function handler(req: Request, _ctx: Context) {
       note: "Claude API alapú elemzés. Magas confidence (>0.8) esetén manuális verifikáció ajánlott.",
     });
 
-    try { await store.set(cKey, payload, { metadata: { ts: Date.now() } }); } catch {}
+    try { if (store) await store.set(cKey, payload, { metadata: { ts: Date.now() } }); } catch {}
     return new Response(payload, { status: 200, headers: CORS });
 
   } catch (err: any) {
