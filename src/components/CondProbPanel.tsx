@@ -101,7 +101,7 @@ function sevColor(s: number) {
 }
 
 export default function CondProbPanel({ bankroll }: { bankroll: number }) {
-  const [data,    setData]    = useState<any>(DEMO);
+  const [data,    setData]    = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [group,   setGroup]   = useState("auto");
 
@@ -110,13 +110,7 @@ export default function CondProbPanel({ bankroll }: { bankroll: number }) {
     try {
       const r = await fetch(`${FN}/cond-prob-matrix?group=${g}`);
       const j = await r.json();
-      // Csak akkor frissítünk ha tényleg van adat
-      if (j.ok && j.markets_analyzed > 0) {
-        setData({ ...j, is_demo: false });
-      } else if (j.ok && j.markets_analyzed === 0) {
-        // API valid de nincs piac – tartsuk a demo-t
-        setData((prev: any) => ({ ...prev, is_demo: true }));
-      }
+      if (j.ok) setData(j);
     } catch {}
     finally { setLoading(false); }
   }, []);
@@ -159,7 +153,15 @@ export default function CondProbPanel({ bankroll }: { bankroll: number }) {
           ))}
         </div>
 
+        {/* Loading / empty state */}
+        {!data && loading && (
+          <div style={{ fontFamily:"var(--mono)",fontSize:12,color:"var(--muted)",padding:"24px 0",textAlign:"center" }}>
+            ⟳ Scanning {50} active markets...
+          </div>
+        )}
+
         {/* Stats */}
+        {data && (
         <div className="cp-grid3">
           <div className="cp-card">
             <div className="cp-big ec-neg">{violations.length}</div>
@@ -174,6 +176,7 @@ export default function CondProbPanel({ bankroll }: { bankroll: number }) {
             <div className="cp-lbl">Piacok elemezve</div>
           </div>
         </div>
+        )}
 
         {/* Violations */}
         <div className="cp-card">

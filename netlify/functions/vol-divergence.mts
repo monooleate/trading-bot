@@ -52,12 +52,46 @@ function impliedVolFromBinaryPrice(p: number, T_hours: number): number {
   return Math.min(sigma, 50); // cap 5000%-on
 }
 
-// ─── Binance klines lekérés ───────────────────────────────────────────────────
+// ─── Price data lekérés (geo-block fallback) ─────────────────────────────────
+async function fetchPriceData(limit: number): Promise<number[]> {
+  // 1. Binance Futures (fapi) - általában nem geo-blokkolt
+  try {
+    const url = `https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=1m&limit=${limit}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(6000) });
+    if (res.ok) {
+      const klines = await res.json() as any[][];
+      return klines.map(k => parseFloat(k[4])); // close price
+    }
+  } catch {}
+
+  // 2. Binance Spot (eredeti)
+  try {
+    const url = `https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=${limit}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(6000) });
+    if (res.ok) {
+      const klines = await res.json() as any[][];
+      return klines.map(k => parseFloat(k[4]));
+    }
+  } catch {}
+
+  // 3. CoinGecko fallback (OHLC data)
+  try {
+    const url = `https://api.coingecko.com/api/v3/coins/bitcoin/ohlc?vs_currency=usd&days=1`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    if (res.ok) {
+      const ohlc = await res.json() as number[][];
+      // [timestamp, open, high, low, close]
+      return ohlc.slice(-limit).map(c => c[4]);
+    }
+  } catch {}
+
+  throw new Error("All price data sources failed");
+}
+
 async function fetchBinanceKlines(symbol: string, interval: string, limit: number) {
-  const url = `${BINANCE_SPOT}/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
-  const res = await fetch(url, { signal: AbortSignal.timeout(6000) });
-  if (!res.ok) throw new Error(`Binance klines ${res.status}`);
-  return res.json() as Promise<any[][]>;
+  const closes = await fetchPriceData(limit);
+  // Alakítsuk vissza klines formátumra [o,h,l,c,...]
+  return closes.map(c => [c, c, c, c, c.toString()]);
 }
 
 // ─── Polymarket BTC 15m kontraktok keresése ───────────────────────────────────

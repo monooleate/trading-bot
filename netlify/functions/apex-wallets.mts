@@ -362,8 +362,20 @@ function buildProfile(address: string, trades: any[], activity: any[]) {
 
 // ─── LEADERBOARD ──────────────────────────────────────────────────────────────
 async function getLeaderboard(window: string, limit: number) {
-  const data = await dataGet("/leaderboard", { window, limit: String(limit) });
-  return Array.isArray(data) ? data : (data.data || data.results || []);
+  // Try multiple endpoints - API changed
+  const endpoints = [
+    "/profiles/leaderboard",
+    "/leaderboard",
+    "/rankings",
+  ];
+  for (const ep of endpoints) {
+    try {
+      const data = await dataGet(ep, { window, limit: String(limit) });
+      const arr = Array.isArray(data) ? data : (data.data || data.results || data.rankings || []);
+      if (arr.length > 0) return arr;
+    } catch {}
+  }
+  return [];
 }
 
 // ─── CONSENSUS DETECTOR ───────────────────────────────────────────────────────

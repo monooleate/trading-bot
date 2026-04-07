@@ -1,10 +1,5 @@
 // netlify/functions/cond-prob-matrix.mts
-// GET /.netlify/functions/cond-prob-matrix?group=btc
-// GET /.netlify/functions/cond-prob-matrix?group=fed
-// GET /.netlify/functions/cond-prob-matrix?group=auto   ← auto-scan top markets
-//
-// Conditional Probability Mispricing Detector
-// Három violation típus: MONOTONICITY | COMPLEMENT | CONDITIONAL
+// GET /.netlify/functions/cond-prob-matrix?group=auto
 
 import type { Context } from "@netlify/functions";
 import { getStore } from "@netlify/blobs";
@@ -15,188 +10,141 @@ const CORS = {
   "Content-Type": "application/json",
 };
 
-const GAMMA = "https://gamma-api.polymarket.com";
-const CACHE_TTL = 5 * 60 * 1000; // 5 perc
+const GAMMA     = "https://gamma-api.polymarket.com";
+const CACHE_TTL = 5 * 60 * 1000;
 
-// ─── Market fetch ─────────────────────────────────────────────────────────────
-async function fetchMarket(slug: string): Promise<any | null> {
+// ─── Parse outcomePrices safely ───────────────────────────────────────────────
+function parsePrices(raw: any): [number, number] | null {
   try {
-    const res = await fetch(`${GAMMA}/markets?slug=${encodeURIComponent(slug)}&limit=1`, {
-      signal: AbortSignal.timeout(6000),
-    });
-    if (!res.ok) return null;
-    const data = await res.json() as any;
-    const list  = Array.isArray(data) ? data : (data.markets || []);
-    if (!list.length) return null;
-    const m = list[0];
-    let yp = 0.5, np = 0.5;
-    try {
-      const op = typeof m.outcomePrices === "string" ? JSON.parse(m.outcomePrices) : m.outcomePrices;
-      if (Array.isArray(op) && op.length >= 2) { yp = parseFloat(op[0]); np = parseFloat(op[1]); }
-    } catch {}
-    return {
-      slug, question: m.question || slug,
-      yes_price: Math.round(yp * 10000) / 10000,
-      no_price:  Math.round(np * 10000) / 10000,
-      volume_24h: parseFloat(m.volume24hr || 0),
-    };
+    const arr = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!Array.isArray(arr) || arr.length < 2) return null;
+    const y = parseFloat(arr[0]);
+    const n = parseFloat(arr[1]);
+    if (isNaN(y) || isNaN(n)) return null;
+    // Csak binary piacok ahol az összeg ≈ 1.0 és árak reálisak
+    if (y < 0.01 || y > 0.99 || n < 0.01 || n > 0.99) return null;
+    if (Math.abs(y + n - 1.0) > 0.25) return null;
+    return [y, n];
   } catch { return null; }
 }
 
-async function fetchTopMarkets(limit = 40): Promise<any[]> {
-  try {
-    const res = await fetch(
-      `${GAMMA}/markets?active=true&closed=false&limit=${limit}&order=volume24hr&ascending=false`,
-      { signal: AbortSignal.timeout(8000) }
-    );
-    if (!res.ok) return [];
-    const data = await res.json() as any;
-    const list  = Array.isArray(data) ? data : (data.markets || []);
-    return list.map((m: any) => {
-      let yp = 0.5, np = 0.5;
-      try {
-        const op = typeof m.outcomePrices === "string" ? JSON.parse(m.outcomePrices) : m.outcomePrices;
-        if (Array.isArray(op) && op.length >= 2) { yp = parseFloat(op[0]); np = parseFloat(op[1]); }
-      } catch {}
-      return {
-        slug: m.slug || "", question: m.question || "",
-        yes_price: Math.round(yp * 10000) / 10000,
-        no_price:  Math.round(np * 10000) / 10000,
-        volume_24h: parseFloat(m.volume24hr || 0),
-        tags: (m.tags || []).map((t: any) => typeof t === "object" ? t.label : t),
-      };
-    }).filter((m: any) =>
-      // Csak binary piacok: YES + NO ≈ 1.0, és nem pontosan 0.5/0.5 (multi-outcome default)
-      m.slug &&
-      m.question &&
-      (m.yes_price + m.no_price) > 0.5 &&
-      Math.abs(m.yes_price + m.no_price - 1.0) < 0.20
-    );
-  } catch { return []; }
+// ─── Fetch top markets ────────────────────────────────────────────────────────
+async function fetchTopMarkets(limit = 50): Promise<any[]> {
+  const res = await fetch(
+    `${GAMMA}/markets?active=true&closed=false&limit=${limit}&order=volume24hr&ascending=false`,
+    { signal: AbortSignal.timeout(8000) }
+  );
+  if (!res.ok) throw new Error(`Gamma API ${res.status}`);
+  const data = await res.json() as any;
+  const list  = Array.isArray(data) ? data : (data.markets || []);
+
+  const result: any[] = [];
+  for (const m of list) {
+    const prices = parsePrices(m.outcomePrices);
+    if (!prices) continue;
+    result.push({
+      slug:       m.slug || "",
+      question:   m.question || "",
+      yes_price:  prices[0],
+      no_price:   prices[1],
+      volume_24h: parseFloat(m.volume24hr || 0),
+    });
+  }
+  return result;
 }
 
-// ─── Violation detectors ───────────────────────────────────────────────────────
-function checkMonotonicity(mStrong: any, mWeak: any): any | null {
-  const pa = mStrong.yes_price, pb = mWeak.yes_price;
-  if (pa <= pb + 0.02) return null;
-  const violation = pa - pb;
-  return {
-    type: "MONOTONICITY",
-    severity: Math.min(1, violation / 0.2),
-    edge_cents: Math.round(violation * 100 * 10) / 10,
-    market_a: mStrong.slug, market_b: mWeak.slug,
-    question_a: mStrong.question, question_b: mWeak.question,
-    price_a: pa, price_b: pb,
-    description: `P(${mStrong.question.slice(0,45)}) = ${pa.toFixed(3)} > P(${mWeak.question.slice(0,45)}) = ${pb.toFixed(3)}`,
-    action: `SELL ${mStrong.slug} YES @ ${pa.toFixed(2)} | BUY ${mWeak.slug} YES @ ${pb.toFixed(2)}`,
-  };
-}
-
+// ─── Violations ───────────────────────────────────────────────────────────────
 function checkComplement(m: any): any | null {
   const total = m.yes_price + m.no_price;
   const dev   = Math.abs(total - 1.0);
-  if (dev < 0.02) return null;
+  if (dev < 0.025) return null; // legalább 2.5¢ eltérés kell
   return {
-    type: "COMPLEMENT",
-    severity: Math.min(1, dev / 0.1),
-    edge_cents: Math.round(dev * 100 * 10) / 10,
-    market_a: m.slug, market_b: m.slug,
-    question_a: m.question, question_b: m.question,
-    price_a: m.yes_price, price_b: m.no_price,
-    description: `P(YES)+P(NO)=${total.toFixed(4)} ≠ 1.000 | Eltérés: ${(dev*100).toFixed(2)}¢`,
-    action: total > 1.0
-      ? `SELL YES (${m.yes_price.toFixed(2)}) + SELL NO (${m.no_price.toFixed(2)})`
-      : `BUY YES (${m.yes_price.toFixed(2)}) + BUY NO (${m.no_price.toFixed(2)})`,
+    type:        "COMPLEMENT",
+    severity:    Math.min(1, dev / 0.10),
+    edge_cents:  parseFloat((dev * 100).toFixed(1)),
+    market_a:    m.slug,
+    market_b:    m.slug,
+    question_a:  m.question,
+    question_b:  m.question,
+    price_a:     m.yes_price,
+    price_b:     m.no_price,
+    description: `P(YES)+P(NO) = ${total.toFixed(3)} ≠ 1.000 | Edge: ${(dev*100).toFixed(1)}¢`,
+    action:      total > 1.0
+      ? `SELL YES @ ${m.yes_price.toFixed(3)} + SELL NO @ ${m.no_price.toFixed(3)}`
+      : `BUY YES @ ${m.yes_price.toFixed(3)} + BUY NO @ ${m.no_price.toFixed(3)}`,
   };
 }
 
-// Auto-scan: hasonló kérdések közötti monotonicitás keresés
-function autoDetectChains(markets: any[]): any[] {
+function checkMonotonicity(mHigh: any, mLow: any): any | null {
+  // mHigh logikailag erősebb feltétel mint mLow → P(mHigh) ≤ P(mLow)
+  const diff = mHigh.yes_price - mLow.yes_price;
+  if (diff <= 0.03) return null; // legalább 3¢ különbség
+  return {
+    type:        "MONOTONICITY",
+    severity:    Math.min(1, diff / 0.20),
+    edge_cents:  parseFloat((diff * 100).toFixed(1)),
+    market_a:    mHigh.slug,
+    market_b:    mLow.slug,
+    question_a:  mHigh.question,
+    question_b:  mLow.question,
+    price_a:     mHigh.yes_price,
+    price_b:     mLow.yes_price,
+    description: `P(A)=${mHigh.yes_price.toFixed(3)} > P(B)=${mLow.yes_price.toFixed(3)} – ha A⊆B, ez sértés`,
+    action:      `SELL A YES @ ${mHigh.yes_price.toFixed(3)} | BUY B YES @ ${mLow.yes_price.toFixed(3)}`,
+  };
+}
+
+function detectViolations(markets: any[]): any[] {
   const violations: any[] = [];
 
-  // Complement minden piacon
+  // 1. Complement check minden piacon
   for (const m of markets) {
     const v = checkComplement(m);
     if (v) violations.push(v);
   }
 
-  // Csoportosítás kulcsszavak szerint
+  // 2. Monotonicity: kulcsszó alapú csoportosítás
   const groups: Record<string, any[]> = {};
   for (const m of markets) {
-    const q = m.question.toLowerCase();
-    // BTC árszint piacok
-    if (q.includes("bitcoin") || q.includes("btc")) {
-      groups["btc"] = groups["btc"] || [];
-      groups["btc"].push(m);
-    }
-    // Fed piacok
-    if (q.includes("fed") || q.includes("rate cut") || q.includes("interest rate")) {
-      groups["fed"] = groups["fed"] || [];
-      groups["fed"].push(m);
-    }
-    // ETH
-    if (q.includes("ethereum") || q.includes(" eth ")) {
-      groups["eth"] = groups["eth"] || [];
-      groups["eth"].push(m);
-    }
-  }
+    const q = (m.question || "").toLowerCase();
+    const keys = [
+      ["btc",      ["bitcoin","btc","15-minute","up-or-down"]],
+      ["eth",      ["ethereum"," eth "]],
+      ["fed",      ["fed ","rate cut","fomc","interest rate"]],
+      ["election", ["election","president","senate","congress"]],
+      ["sports",   ["nba","nfl","championship","super bowl","world cup"]],
+    ] as [string, string[]][];
 
-  // Minden csoporton belül minden párra ellenőrzés
-  for (const [, grp] of Object.entries(groups)) {
-    if (grp.length < 2) continue;
-    for (let i = 0; i < grp.length; i++) {
-      for (let j = i + 1; j < grp.length; j++) {
-        const v1 = checkMonotonicity(grp[i], grp[j]);
-        if (v1) violations.push(v1);
-        const v2 = checkMonotonicity(grp[j], grp[i]);
-        if (v2) violations.push(v2);
+    for (const [cat, kws] of keys) {
+      if (kws.some(kw => q.includes(kw))) {
+        groups[cat] = groups[cat] || [];
+        groups[cat].push(m);
+        break;
       }
     }
   }
 
-  return violations.sort((a, b) => b.severity - a.severity).slice(0, 15);
-}
+  for (const grp of Object.values(groups)) {
+    if (grp.length < 2) continue;
+    // Rendezzük ár szerint csökkenő sorrendbe
+    const sorted = [...grp].sort((a, b) => b.yes_price - a.yes_price);
+    for (let i = 0; i < sorted.length - 1; i++) {
+      const v = checkMonotonicity(sorted[i], sorted[i + 1]);
+      if (v) violations.push(v);
+    }
+  }
 
-// ─── Predefined groups ────────────────────────────────────────────────────────
-const GROUPS: Record<string, { slugs: string[]; chains: [string,string][] }> = {
-  btc: {
-    slugs: [
-      "will-bitcoin-hit-120000-in-2025",
-      "will-bitcoin-hit-100000-in-2025",
-      "will-bitcoin-hit-80000-in-2025",
-      "will-bitcoin-hit-60000-in-2025",
-    ],
-    chains: [
-      ["will-bitcoin-hit-120000-in-2025","will-bitcoin-hit-100000-in-2025"],
-      ["will-bitcoin-hit-100000-in-2025","will-bitcoin-hit-80000-in-2025"],
-      ["will-bitcoin-hit-80000-in-2025","will-bitcoin-hit-60000-in-2025"],
-    ],
-  },
-  fed: {
-    slugs: [
-      "will-the-fed-cut-rates-in-may-2025",
-      "will-the-fed-cut-rates-in-june-2025",
-      "will-the-fed-cut-in-q2-2025",
-      "will-the-fed-cut-rates-in-2025",
-    ],
-    chains: [
-      ["will-the-fed-cut-rates-in-may-2025","will-the-fed-cut-in-q2-2025"],
-      ["will-the-fed-cut-in-q2-2025","will-the-fed-cut-rates-in-2025"],
-    ],
-  },
-};
+  return violations.sort((a, b) => b.edge_cents - a.edge_cents).slice(0, 20);
+}
 
 // ─── Main handler ─────────────────────────────────────────────────────────────
 export default async function handler(req: Request, _ctx: Context) {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
 
-  const url   = new URL(req.url);
-  const group = url.searchParams.get("group") || "auto";
-
-  // Cache – safe init
   let store: any = null;
-  try { store = getStore("cond-prob-cache"); } catch {}
-  const cKey = `cp:${group}`;
+  try { store = getStore("cond-prob-v2"); } catch {}
+
+  const cKey = "auto";
   try {
     let cached: any = null;
     try { cached = store ? await store.getWithMetadata(cKey) : null; } catch {}
@@ -206,51 +154,18 @@ export default async function handler(req: Request, _ctx: Context) {
   } catch {}
 
   try {
-    let violations: any[] = [];
-    let markets_analyzed  = 0;
-
-    if (group === "auto") {
-      // Top 40 market auto-scan
-      const markets = await fetchTopMarkets(40);
-      markets_analyzed = markets.length;
-      violations = autoDetectChains(markets);
-    } else {
-      const grpDef = GROUPS[group];
-      if (!grpDef) {
-        return new Response(JSON.stringify({ ok: false, error: `Unknown group: ${group}` }), { status: 400, headers: CORS });
-      }
-      // Fetch all markets
-      const fetched = await Promise.all(grpDef.slugs.map(fetchMarket));
-      const markets = fetched.filter(Boolean) as any[];
-      markets_analyzed = markets.length;
-      const mMap = Object.fromEntries(markets.map(m => [m.slug, m]));
-
-      // Complement check
-      for (const m of markets) {
-        const v = checkComplement(m);
-        if (v) violations.push(v);
-      }
-      // Chain monotonicity
-      for (const [slugA, slugB] of grpDef.chains) {
-        const ma = mMap[slugA], mb = mMap[slugB];
-        if (ma && mb) {
-          const v = checkMonotonicity(ma, mb);
-          if (v) violations.push(v);
-        }
-      }
-    }
+    const markets    = await fetchTopMarkets(50);
+    const violations = detectViolations(markets);
 
     const payload = JSON.stringify({
-      ok: true,
-      group,
-      markets_analyzed,
+      ok:               true,
+      markets_analyzed: markets.length,
       violations_found: violations.length,
       violations,
-      scanned_at: new Date().toISOString(),
+      scanned_at:       new Date().toISOString(),
     });
 
     try { if (store) await store.set(cKey, payload, { metadata: { ts: Date.now() } }); } catch {}
-
     return new Response(payload, { status: 200, headers: { ...CORS, "X-Cache": "MISS" } });
 
   } catch (err: any) {

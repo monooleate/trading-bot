@@ -193,11 +193,30 @@ export default async function handler(req: Request, _ctx: Context) {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
 
   const url     = new URL(req.url);
-  const tokenId = url.searchParams.get("token_id");
+  let tokenId   = url.searchParams.get("token_id");
   const limit   = Math.min(500, parseInt(url.searchParams.get("limit") || "200"));
 
+  // Auto-detect: ha nincs token_id, a top volume piac YES token-je
   if (!tokenId) {
-    return new Response(JSON.stringify({ ok: false, error: "token_id required" }), { status: 400, headers: CORS });
+    try {
+      const mRes = await fetch(
+        "https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=1&order=volume24hr&ascending=false",
+        { signal: AbortSignal.timeout(5000) }
+      );
+      if (mRes.ok) {
+        const mData = await mRes.json() as any;
+        const markets = Array.isArray(mData) ? mData : (mData.markets || []);
+        if (markets.length > 0) {
+          const tokens = markets[0].tokens || [];
+          const yes = tokens.find((t: any) => (t.outcome || "").toUpperCase() === "YES");
+          if (yes?.token_id) tokenId = yes.token_id;
+        }
+      }
+    } catch {}
+  }
+
+  if (!tokenId) {
+    return new Response(JSON.stringify({ ok: false, error: "token_id required – no active markets found" }), { status: 400, headers: CORS });
   }
 
   // Cache ellenőrzés
