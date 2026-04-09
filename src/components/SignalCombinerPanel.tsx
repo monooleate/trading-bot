@@ -219,6 +219,9 @@ export default function SignalCombinerPanel({ bankroll }: { bankroll: number }) 
           </div>
         )}
 
+        {/* Multi-Market Scanner — TOP */}
+        <MultiMarketScanner bankroll={bankroll} markets={markets} onSelectMarket={(s: string) => { setSlug(s); analyze(s); }} />
+
         {/* Selected Market Info */}
         {data?.market && (
           <div style={{ background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: 3, padding: "10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -413,9 +416,6 @@ export default function SignalCombinerPanel({ bankroll }: { bankroll: number }) 
             csak az egymástól független információ számít.
           </div>
         </div>
-
-        {/* Multi-Market Scanner */}
-        <MultiMarketScanner bankroll={bankroll} markets={markets} onSelectMarket={(s: string) => { setSlug(s); analyze(s); }} />
 
       </div>
     </>
