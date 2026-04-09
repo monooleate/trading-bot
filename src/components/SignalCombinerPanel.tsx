@@ -109,25 +109,39 @@ export default function SignalCombinerPanel({ bankroll }: { bankroll: number }) 
   const [data,    setData]    = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [auto,    setAuto]    = useState(false);
+  const [slug,    setSlug]    = useState("");
+  const [markets, setMarkets] = useState<any[]>([]);
+  const [showPicker, setShowPicker] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const fetch = useCallback(async () => {
+  const analyze = useCallback(async (marketSlug?: string) => {
     setLoading(true);
     try {
-      const r = await window.fetch(`${FN}/signal-combiner`);
+      const qs = marketSlug ? `?slug=${encodeURIComponent(marketSlug)}` : "";
+      const r = await window.fetch(`${FN}/signal-combiner${qs}`);
       const j = await r.json();
       if (j.ok) setData(j);
     } catch {}
     finally { setLoading(false); }
   }, []);
 
-  useEffect(() => { fetch(); }, []);
+  // Load markets list for picker
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await window.fetch(`${FN}/polymarket-proxy?limit=15`);
+        const j = await r.json();
+        if (j.ok && Array.isArray(j.markets)) setMarkets(j.markets);
+      } catch {}
+    })();
+    analyze();
+  }, []);
 
   useEffect(() => {
-    if (auto) timerRef.current = setInterval(fetch, 3 * 60 * 1000);
+    if (auto) timerRef.current = setInterval(() => analyze(slug), 3 * 60 * 1000);
     else if (timerRef.current) clearInterval(timerRef.current);
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
-  }, [auto, fetch]);
+  }, [auto, analyze, slug]);
 
   const p        = data?.combined_probability ?? 0.5;
   const edge     = data?.edge_pct ?? 0;
@@ -160,11 +174,67 @@ export default function SignalCombinerPanel({ bankroll }: { bankroll: number }) 
             <button className={`sc-btn ${auto?"active":""}`} onClick={() => setAuto(a=>!a)}>
               {auto ? "⏸ Auto 3m" : "▶ Auto"}
             </button>
-            <button className="sc-btn primary" onClick={fetch} disabled={loading}>
+            <button className="sc-btn" onClick={() => setShowPicker(p => !p)}>
+              {showPicker ? "✕ Bezár" : "⊕ Piac"}
+            </button>
+            <button className="sc-btn primary" onClick={() => analyze(slug)} disabled={loading}>
               {loading ? "..." : "⟳ Combine"}
             </button>
           </div>
         </div>
+
+        {/* Market Picker */}
+        {showPicker && (
+          <div className="sc-card" style={{ maxHeight: 280, overflowY: "auto" }}>
+            <div className="sc-ct">Piac kiválasztása</div>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: "var(--mono)", fontSize: 11 }}>
+              <thead>
+                <tr style={{ borderBottom: "1px solid var(--border)" }}>
+                  <th style={{ textAlign: "left", padding: "4px 8px", fontSize: 10, color: "var(--muted)" }}>Piac</th>
+                  <th style={{ textAlign: "right", padding: "4px 8px", fontSize: 10, color: "var(--muted)" }}>YES</th>
+                  <th style={{ textAlign: "right", padding: "4px 8px", fontSize: 10, color: "var(--muted)" }}>Vol 24h</th>
+                </tr>
+              </thead>
+              <tbody>
+                {markets.map((m: any, i: number) => (
+                  <tr key={i}
+                    style={{ borderBottom: "1px solid #151520", cursor: "pointer", background: slug === m.slug ? "#0f1f00" : "transparent" }}
+                    onClick={() => { setSlug(m.slug); setShowPicker(false); analyze(m.slug); }}>
+                    <td style={{ padding: "6px 8px", color: slug === m.slug ? "var(--accent)" : "var(--text)" }}>
+                      {(m.question || "").slice(0, 50)}{(m.question || "").length > 50 ? "..." : ""}
+                    </td>
+                    <td style={{ padding: "6px 8px", textAlign: "right", color: m.yes_price > 0.6 ? "var(--accent)" : m.yes_price < 0.4 ? "var(--danger)" : "var(--muted)" }}>
+                      {(m.yes_price * 100).toFixed(0)}¢
+                    </td>
+                    <td style={{ padding: "6px 8px", textAlign: "right", color: "var(--muted)" }}>
+                      ${(m.volume_24h / 1000000).toFixed(1)}M
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* Selected Market Info */}
+        {data?.market && (
+          <div style={{ background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: 3, padding: "10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <a href={data.market.url} target="_blank" rel="noopener noreferrer"
+                style={{ fontFamily: "var(--mono)", fontSize: 12, fontWeight: 700, color: "var(--text)", textDecoration: "none", borderBottom: "1px dashed var(--border)" }}>
+                {data.market.question}
+              </a>
+              <div style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--muted)", marginTop: 4 }}>
+                YES: {(data.market.yes_price * 100).toFixed(1)}¢ • NO: {(data.market.no_price * 100).toFixed(1)}¢ • Vol: ${(data.market.volume_24h / 1000000).toFixed(1)}M
+              </div>
+            </div>
+            {slug && (
+              <button className="sc-btn" onClick={() => { setSlug(""); analyze(""); }} style={{ fontSize: 9 }}>
+                Auto
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Action Box */}
         <div className={`sc-action ${actCls}`}>
@@ -178,8 +248,34 @@ export default function SignalCombinerPanel({ bankroll }: { bankroll: number }) 
             {rec.rationale || "—"}
           </div>
           {rec.action?.includes("BUY") && (
-            <div style={{ fontFamily:"var(--mono)",fontSize:14,fontWeight:700,color:actColor,marginTop:12 }}>
-              Pozíció: ${pos} ({((kelly.quarter??0)*100).toFixed(1)}% bankroll)
+            <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 14 }}>
+              <div style={{ fontFamily:"var(--mono)",fontSize:14,fontWeight:700,color:actColor }}>
+                Pozíció: ${pos} ({((kelly.quarter??0)*100).toFixed(1)}% bankroll)
+              </div>
+              <button className="sc-btn" style={{ fontSize: 10, padding: "5px 10px" }}
+                onClick={async () => {
+                  try {
+                    await window.fetch(`${FN}/trade-logger`, {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        action: "log",
+                        market_slug: data?.market?.slug || "",
+                        market_question: data?.market?.question || "",
+                        side: rec.action,
+                        entry_price: rec.action?.includes("YES") ? data?.market?.yes_price : data?.market?.no_price,
+                        size_usdc: parseFloat(pos),
+                        signal_p: p,
+                        kelly_used: kelly.quarter || 0,
+                        ir_at_trade: fl.ir || 0,
+                        signal_details: raw,
+                      }),
+                    });
+                    alert("Trade logged!");
+                  } catch { alert("Logging failed"); }
+                }}>
+                Log Trade
+              </button>
             </div>
           )}
         </div>

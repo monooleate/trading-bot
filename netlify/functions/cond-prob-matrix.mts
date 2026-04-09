@@ -167,7 +167,147 @@ function detectViolations(markets: any[]): any[] {
     }
   }
 
+  // 3. Event chain detection – temporal monotonicity across deadline-based markets
+  const chains = detectEventChains(markets);
+  for (const chain of chains) {
+    for (const v of chain.violations) {
+      violations.push(v);
+    }
+  }
+
   return violations.sort((a, b) => b.edge_cents - a.edge_cents).slice(0, 20);
+}
+
+// ─── EVENT CHAIN DETECTION ───────────────────────────────────────────────────
+// Markets like "X by April 7", "X by April 15", "X by April 30"
+// must satisfy P(earlier) ≤ P(later) — temporal monotonicity
+
+const MONTHS: Record<string, number> = {
+  january:1,february:2,march:3,april:4,may:5,june:6,
+  july:7,august:8,september:9,october:10,november:11,december:12,
+  jan:1,feb:2,mar:3,apr:4,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12,
+};
+
+function extractDeadline(question: string): Date | null {
+  const q = question.toLowerCase();
+
+  // "by April 7" / "by April 7, 2026" / "by april 30?"
+  const byMatch = q.match(/by\s+(\w+)\s+(\d{1,2})(?:[,\s]+(\d{4}))?/);
+  if (byMatch) {
+    const month = MONTHS[byMatch[1]];
+    if (month) {
+      const day  = parseInt(byMatch[2]);
+      const year = byMatch[3] ? parseInt(byMatch[3]) : new Date().getFullYear();
+      return new Date(year, month - 1, day);
+    }
+  }
+
+  // "in May 2026" / "in May"
+  const inMatch = q.match(/in\s+(\w+)\s*(\d{4})?/);
+  if (inMatch) {
+    const month = MONTHS[inMatch[1]];
+    if (month) {
+      const year = inMatch[2] ? parseInt(inMatch[2]) : new Date().getFullYear();
+      return new Date(year, month, 0); // last day of month
+    }
+  }
+
+  // "by Q1/Q2/Q3/Q4 2026"
+  const qMatch = q.match(/by\s+q([1-4])\s+(\d{4})/);
+  if (qMatch) {
+    const quarter = parseInt(qMatch[1]);
+    const year    = parseInt(qMatch[2]);
+    return new Date(year, quarter * 3, 0); // last day of quarter
+  }
+
+  // "by December 31" / "by year end"
+  if (q.includes("year end") || q.includes("end of year")) {
+    const yearMatch = q.match(/(\d{4})/);
+    const year = yearMatch ? parseInt(yearMatch[1]) : new Date().getFullYear();
+    return new Date(year, 11, 31);
+  }
+
+  return null;
+}
+
+function extractBaseEvent(question: string): string {
+  // Strip temporal markers to get base event
+  return question
+    .replace(/\?$/,  "")
+    .replace(/by\s+\w+\s+\d{1,2}(,?\s*\d{4})?/gi, "")
+    .replace(/by\s+q[1-4]\s+\d{4}/gi, "")
+    .replace(/in\s+\w+\s*\d{0,4}/gi, "")
+    .replace(/by\s+(year end|december \d+)/gi, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+interface EventChain {
+  base_event:  string;
+  markets:     { slug: string; question: string; yes_price: number; deadline: Date }[];
+  violations:  any[];
+  chain_score: number;
+}
+
+function detectEventChains(markets: any[]): EventChain[] {
+  // Group markets by base event
+  const eventGroups: Record<string, { slug: string; question: string; yes_price: number; deadline: Date }[]> = {};
+
+  for (const m of markets) {
+    const deadline = extractDeadline(m.question || "");
+    if (!deadline) continue;
+    const base = extractBaseEvent(m.question || "");
+    if (base.length < 5) continue;
+
+    if (!eventGroups[base]) eventGroups[base] = [];
+    eventGroups[base].push({
+      slug:      m.slug,
+      question:  m.question,
+      yes_price: m.yes_price,
+      deadline,
+    });
+  }
+
+  const chains: EventChain[] = [];
+
+  for (const [base, group] of Object.entries(eventGroups)) {
+    if (group.length < 2) continue;
+
+    // Sort by deadline
+    const sorted = [...group].sort((a, b) => a.deadline.getTime() - b.deadline.getTime());
+    const violations: any[] = [];
+
+    // Check: P(earlier) ≤ P(later)
+    for (let i = 0; i < sorted.length - 1; i++) {
+      const earlier = sorted[i];
+      const later   = sorted[i + 1];
+      const diff    = earlier.yes_price - later.yes_price;
+
+      if (diff > 0.03) { // 3¢ threshold
+        violations.push({
+          type:        "TEMPORAL_CHAIN",
+          severity:    Math.min(1, diff / 0.15),
+          edge_cents:  parseFloat((diff * 100).toFixed(1)),
+          market_a:    earlier.slug,
+          market_b:    later.slug,
+          question_a:  earlier.question,
+          question_b:  later.question,
+          price_a:     earlier.yes_price,
+          price_b:     later.yes_price,
+          description: `EVENT CHAIN: P(${earlier.deadline.toLocaleDateString("en",{month:"short",day:"numeric"})})=${earlier.yes_price.toFixed(3)} > P(${later.deadline.toLocaleDateString("en",{month:"short",day:"numeric"})})=${later.yes_price.toFixed(3)}`,
+          action:      `SELL "${earlier.question.slice(0,40)}..." @ ${earlier.yes_price.toFixed(3)} | BUY "${later.question.slice(0,40)}..." @ ${later.yes_price.toFixed(3)}`,
+        });
+      }
+    }
+
+    if (violations.length > 0 || sorted.length >= 3) {
+      const chainScore = violations.reduce((s, v) => s + v.edge_cents, 0) / sorted.length;
+      chains.push({ base_event: base, markets: sorted, violations, chain_score: parseFloat(chainScore.toFixed(1)) });
+    }
+  }
+
+  return chains.sort((a, b) => b.chain_score - a.chain_score);
 }
 
 // ─── Main handler ─────────────────────────────────────────────────────────────
@@ -189,12 +329,25 @@ export default async function handler(req: Request, _ctx: Context) {
   try {
     const markets    = await fetchTopMarkets(50);
     const violations = detectViolations(markets);
+    const chains     = detectEventChains(markets);
 
     const payload = JSON.stringify({
       ok:               true,
       markets_analyzed: markets.length,
       violations_found: violations.length,
       violations,
+      event_chains:     chains.map(c => ({
+        base_event:     c.base_event,
+        markets_count:  c.markets.length,
+        chain_score:    c.chain_score,
+        violations:     c.violations.length,
+        markets:        c.markets.map(m => ({
+          question:  m.question,
+          slug:      m.slug,
+          yes_price: m.yes_price,
+          deadline:  m.deadline.toISOString().slice(0, 10),
+        })),
+      })),
       scanned_at:       new Date().toISOString(),
     });
 

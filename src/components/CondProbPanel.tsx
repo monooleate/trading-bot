@@ -205,6 +205,7 @@ export default function CondProbPanel({ bankroll }: { bankroll: number }) {
                 <div className={`cp-vtype ${v.type}`}>
                   {v.type === "MONOTONICITY" ? "📐 MONOTONICITY" :
                    v.type === "COMPLEMENT"   ? "⚖️ COMPLEMENT" :
+                   v.type === "TEMPORAL_CHAIN" ? "⛓ TEMPORAL CHAIN" :
                    "🔗 CONDITIONAL"} — Edge: {v.edge_cents.toFixed(1)}¢
                 </div>
 
@@ -230,6 +231,42 @@ export default function CondProbPanel({ bankroll }: { bankroll: number }) {
           })}
         </div>
 
+        {/* Event Chains */}
+        {(data?.event_chains || []).length > 0 && (
+          <div className="cp-card">
+            <div className="cp-ct">Event Chains (Temporal Monotonicity)</div>
+            {(data?.event_chains || []).map((chain: any, ci: number) => (
+              <div key={ci} style={{ marginBottom: 16, paddingBottom: 16, borderBottom: ci < (data?.event_chains?.length || 0) - 1 ? "1px solid var(--border)" : "none" }}>
+                <div style={{ fontFamily: "var(--mono)", fontSize: 11, fontWeight: 700, color: chain.violations > 0 ? "var(--danger)" : "var(--accent)", marginBottom: 8 }}>
+                  {chain.violations > 0 ? "⚠" : "✓"} {chain.base_event.slice(0, 60)} ({chain.markets_count} markets)
+                  {chain.chain_score > 0 && <span style={{ color: "var(--danger)", marginLeft: 8 }}>Score: {chain.chain_score}¢</span>}
+                </div>
+                {/* Timeline visualization */}
+                <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 60, padding: "0 4px" }}>
+                  {(chain.markets || []).map((m: any, mi: number) => {
+                    const pct = m.yes_price * 100;
+                    const isViolation = mi > 0 && m.yes_price < (chain.markets[mi-1]?.yes_price || 0) - 0.03;
+                    return (
+                      <div key={mi} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+                        <div style={{ fontFamily: "var(--mono)", fontSize: 9, fontWeight: 700, color: isViolation ? "var(--danger)" : "var(--accent)" }}>
+                          {pct.toFixed(0)}¢
+                        </div>
+                        <div style={{
+                          width: "100%", maxWidth: 40, height: `${Math.max(4, pct * 0.5)}px`,
+                          background: isViolation ? "var(--danger)" : "var(--accent)", opacity: 0.7, borderRadius: 2,
+                        }} />
+                        <div style={{ fontFamily: "var(--mono)", fontSize: 8, color: "var(--muted)", textAlign: "center" }}>
+                          {m.deadline?.slice(5, 10)}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* Violation types explanation + CLI */}
         <div className="cp-grid2">
           <div className="cp-card">
@@ -237,6 +274,7 @@ export default function CondProbPanel({ bankroll }: { bankroll: number }) {
             {[
               ["📐 MONOTONICITY", "Ha A erősebb feltétel mint B (A⊂B), akkor P(A) ≤ P(B) kötelező. Pl: P(BTC>120k) ≤ P(BTC>100k)","var(--warn)"],
               ["⚖️ COMPLEMENT",   "P(YES) + P(NO) = 1.000 kell. Ha eltér, valamelyik oldal mispriced.","var(--danger)"],
+              ["⛓ TEMPORAL CHAIN","Ha esemény X-ig teljesül, akkor X+N-ig is. P(by Apr 7) ≤ P(by Apr 15) ≤ P(by Apr 30).","var(--accent)"],
               ["🔗 CONDITIONAL",  "P(A∩B) ≤ min(P(A), P(B)). Joint event nem lehet valószínűbb mint a komponensek.","var(--accent2)"],
             ].map(([t,d,c]) => (
               <div key={t as string} style={{ marginBottom:12 }}>

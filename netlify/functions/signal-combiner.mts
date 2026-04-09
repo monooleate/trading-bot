@@ -1,9 +1,10 @@
 // netlify/functions/signal-combiner.mts
-// GET /.netlify/functions/signal-combiner
+// GET /.netlify/functions/signal-combiner?slug=us-x-iran-ceasefire-by-april-30
+// GET /.netlify/functions/signal-combiner  (auto: top volume piac)
 //
 // Fundamental Law of Active Management: IR = IC × √N
-// Közvetlenül hívja a külső API-kat (nem belső functions)
-// Output: combined_probability, kelly_fraction, BUY/SELL/WAIT ajánlás
+// Market-specific: minden signal az adott piacra fut
+// Output: combined_probability, kelly_fraction, BUY YES/NO/WAIT ajánlás
 
 import type { Context } from "@netlify/functions";
 import { getStore } from "@netlify/blobs";
@@ -17,8 +18,6 @@ const CORS = {
 const GAMMA    = "https://gamma-api.polymarket.com";
 const CLOB     = "https://clob.polymarket.com";
 const DATA_API = "https://data-api.polymarket.com";
-const BINANCE    = "https://api.binance.com";
-const BN_FUTURES = "https://fapi.binance.com";
 const CACHE_TTL = 3 * 60 * 1000;
 
 const SIGNAL_ICS: Record<string, number> = {
@@ -29,24 +28,87 @@ const SIGNAL_ICS: Record<string, number> = {
   funding_rate:   0.05,
 };
 
+// ─── Market info type ─────────────────────────────────────────────────────────
+interface MarketInfo {
+  question:     string;
+  slug:         string;
+  conditionId:  string;
+  yesTokenId:   string;
+  noTokenId:    string;
+  yesPrice:     number;
+  noPrice:      number;
+  volume24h:    number;
+  endDate:      string;
+  url:          string;
+}
+
+// ─── Resolve market from slug or auto-pick top volume ─────────────────────────
+async function resolveMarket(slug?: string): Promise<MarketInfo | null> {
+  try {
+    const params = slug
+      ? `slug=${encodeURIComponent(slug)}`
+      : "active=true&closed=false&limit=5&order=volume24hr&ascending=false";
+    const res = await fetch(`${GAMMA}/markets?${params}`, {
+      signal: AbortSignal.timeout(6000),
+    });
+    if (!res.ok) return null;
+    const data = await res.json() as any;
+    const list = Array.isArray(data) ? data : (data.markets || []);
+
+    // Pick first valid market with tokens
+    for (const m of list) {
+      const tokens = m.tokens || [];
+      // Parse clobTokenIds if tokens array is empty
+      let yesToken = tokens.find((t: any) => (t.outcome || "").toUpperCase() === "YES");
+      let noToken  = tokens.find((t: any) => (t.outcome || "").toUpperCase() === "NO");
+
+      // Fallback: try clobTokenIds
+      if (!yesToken?.token_id && m.clobTokenIds) {
+        const ids = typeof m.clobTokenIds === "string" ? JSON.parse(m.clobTokenIds) : m.clobTokenIds;
+        if (ids.length >= 2) {
+          yesToken = { token_id: ids[0] };
+          noToken  = { token_id: ids[1] };
+        }
+      }
+
+      if (!yesToken?.token_id) continue;
+
+      let yp = 0.5, np = 0.5;
+      try {
+        const op = typeof m.outcomePrices === "string" ? JSON.parse(m.outcomePrices) : m.outcomePrices;
+        if (Array.isArray(op) && op.length >= 2) { yp = parseFloat(op[0]); np = parseFloat(op[1]); }
+      } catch {}
+
+      return {
+        question:    m.question || m.title || "",
+        slug:        m.slug || "",
+        conditionId: m.id || m.conditionId || "",
+        yesTokenId:  yesToken.token_id,
+        noTokenId:   noToken?.token_id || "",
+        yesPrice:    yp,
+        noPrice:     np,
+        volume24h:   parseFloat(m.volume24hr || 0),
+        endDate:     m.endDate || "",
+        url:         m.slug ? `https://polymarket.com/event/${m.slug}` : "",
+      };
+    }
+    return null;
+  } catch { return null; }
+}
+
 // ─── Price data with geo-block fallback ───────────────────────────────────────
 async function fetchCloses(limit: number): Promise<number[]> {
-  // 1. Binance Futures (often not geo-blocked)
+  // 1. Binance Futures
   try {
     const r = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=1m&limit=${limit}`, { signal: AbortSignal.timeout(5000) });
     if (r.ok) { const k = await r.json() as any[][]; return k.map(c => parseFloat(c[4])); }
   } catch {}
-  // 2. Binance Spot
-  try {
-    const r = await fetch(`${BINANCE}/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=${limit}`, { signal: AbortSignal.timeout(5000) });
-    if (r.ok) { const k = await r.json() as any[][]; return k.map(c => parseFloat(c[4])); }
-  } catch {}
-  // 3. CoinGecko OHLC fallback
+  // 2. CoinGecko OHLC
   try {
     const r = await fetch(`https://api.coingecko.com/api/v3/coins/bitcoin/ohlc?vs_currency=usd&days=1`, { signal: AbortSignal.timeout(8000) });
     if (r.ok) { const d = await r.json() as number[][]; return d.slice(-limit).map(c => c[4]); }
   } catch {}
-  // 4. CryptoCompare fallback
+  // 3. CryptoCompare
   try {
     const r = await fetch(`https://min-api.cryptocompare.com/data/v2/histominute?fsym=BTC&tsym=USD&limit=${limit}`, { signal: AbortSignal.timeout(6000) });
     if (r.ok) { const d = await r.json() as any; return (d.Data?.Data || []).map((c: any) => c.close); }
@@ -55,109 +117,82 @@ async function fetchCloses(limit: number): Promise<number[]> {
 }
 
 // ─── 1. VOL DIVERGENCE SIGNAL ─────────────────────────────────────────────────
-async function getVolSignal(): Promise<{ prob: number | null; detail: any }> {
+// Market-specific: az adott piac IV-jét hasonlítja a BTC RV-hez
+async function getVolSignal(market: MarketInfo): Promise<{ prob: number | null; detail: any }> {
   try {
-    // Multi-source price data with fallback
     const closes = await fetchCloses(15);
     if (closes.length < 3) return { prob: null, detail: { error: "no price data" } };
 
-    // Realized vol
     const returns = closes.slice(1).map((c, i) => Math.log(c / closes[i]));
     const mean    = returns.reduce((s, v) => s + v, 0) / returns.length;
     const rv15    = Math.sqrt(returns.reduce((s, v) => s + (v - mean) ** 2, 0) / returns.length * 365 * 24 * 60) * 100;
 
-    // Polymarket BTC piacok
-    const mRes = await fetch(
-      `${GAMMA}/markets?active=true&closed=false&limit=10&order=volume24hr&ascending=false`,
-      { signal: AbortSignal.timeout(5000) }
-    );
-    if (!mRes.ok) return { prob: 0.5 - rv15 / 1000, detail: { rv15: rv15.toFixed(1) } };
-    const mData = await mRes.json() as any;
-    const markets = Array.isArray(mData) ? mData : (mData.markets || []);
-
-    // BTC UP/DOWN piacok
-    const btcMarkets = markets.filter((m: any) => {
-      const q = (m.question || "").toLowerCase();
-      return q.includes("btc") || q.includes("bitcoin");
-    }).slice(0, 3);
-
-    // Átlag IV becslés
-    let avgIV = rv15;
-    if (btcMarkets.length > 0) {
-      const prices = btcMarkets.map((m: any) => {
-        try {
-          const op = typeof m.outcomePrices === "string" ? JSON.parse(m.outcomePrices) : m.outcomePrices;
-          return parseFloat(op?.[0] || 0.5);
-        } catch { return 0.5; }
-      });
-      const avgP = prices.reduce((s: number, v: number) => s + v, 0) / prices.length;
-      const T    = 15 / (365 * 24 * 60);
-      avgIV      = (2 * Math.abs(avgP - 0.5) / Math.sqrt(T)) * 100;
+    // IV from market price
+    const yp = market.yesPrice;
+    let timeH = 0.25; // default 15min
+    if (market.endDate) {
+      const rem = (new Date(market.endDate).getTime() - Date.now()) / 3600000;
+      if (rem > 0 && rem < 720) timeH = rem; // max 30 days
     }
+    const T = timeH / (365 * 24);
+    const iv = T > 0 ? (2 * Math.abs(yp - 0.5) / Math.sqrt(T)) * 100 : rv15;
 
-    const spread = avgIV - rv15;
-    // Magas IV spread → piac túláraz félelmet → NO side favored
+    const spread = iv - rv15;
     const prob = Math.max(0.1, Math.min(0.9, 0.5 - (spread / 100) * 0.4));
-    return { prob, detail: { rv15: rv15.toFixed(1), iv: avgIV.toFixed(1), spread: spread.toFixed(1) } };
+    return { prob, detail: { rv15: rv15.toFixed(1), iv: iv.toFixed(1), spread: spread.toFixed(1) } };
   } catch { return { prob: null, detail: null }; }
 }
 
-// ─── 2. ORDER FLOW SIGNAL (VPIN proxy) ────────────────────────────────────────
-async function getOrderflowSignal(): Promise<{ prob: number | null; detail: any }> {
+// ─── 2. ORDER FLOW SIGNAL ────────────────────────────────────────────────────
+// Market-specific: az adott piac CLOB order book imbalance-a
+async function getOrderflowSignal(market: MarketInfo): Promise<{ prob: number | null; detail: any }> {
   try {
-    // Top aktív piac CLOB adatai
-    const mRes = await fetch(
-      `${GAMMA}/markets?active=true&closed=false&limit=5&order=volume24hr&ascending=false`,
-      { signal: AbortSignal.timeout(5000) }
-    );
-    if (!mRes.ok) return { prob: null, detail: null };
-    const mData = await mRes.json() as any;
-    const markets = Array.isArray(mData) ? mData : (mData.markets || []);
-    
-    if (!markets.length) return { prob: null, detail: null };
-    
-    // Első piac YES token order book imbalance
-    const firstMarket = markets[0];
-    const tokens      = firstMarket.tokens || [];
-    const yesToken    = tokens.find((t: any) =>
-      (t.outcome || "").toUpperCase() === "YES"
-    );
-    
-    if (!yesToken?.token_id) return { prob: 0.5, detail: { note: "no token" } };
-    
-    const bookRes = await fetch(`${CLOB}/book?token_id=${yesToken.token_id}`, {
-      signal: AbortSignal.timeout(5000)
+    if (!market.yesTokenId) return { prob: null, detail: { note: "no token_id" } };
+
+    const bookRes = await fetch(`${CLOB}/book?token_id=${market.yesTokenId}`, {
+      signal: AbortSignal.timeout(5000),
     });
-    if (!bookRes.ok) return { prob: 0.5, detail: null };
+    if (!bookRes.ok) return { prob: 0.5, detail: { note: "book unavailable" } };
     const book = await bookRes.json() as any;
-    
-    // Order book imbalance: bid volume vs ask volume
+
     const bidVol = (book.bids || []).reduce((s: number, b: any) => s + parseFloat(b.size || 0), 0);
     const askVol = (book.asks || []).reduce((s: number, a: any) => s + parseFloat(a.size || 0), 0);
     const total  = bidVol + askVol;
-    
-    if (total === 0) return { prob: 0.5, detail: null };
-    
-    // VPIN proxy: bid dominancia → YES side pressure
+
+    if (total === 0) {
+      // Fallback: midpoint vs current price
+      try {
+        const midRes = await fetch(`${CLOB}/midpoint?token_id=${market.yesTokenId}`, { signal: AbortSignal.timeout(4000) });
+        if (midRes.ok) {
+          const midData = await midRes.json() as any;
+          const mid = parseFloat(midData.mid || 0.5);
+          const drift = mid - market.yesPrice;
+          const prob = Math.max(0.1, Math.min(0.9, 0.5 + drift * 2));
+          return { prob, detail: { mid, drift: drift.toFixed(3), source: "midpoint" } };
+        }
+      } catch {}
+      return { prob: 0.5, detail: { note: "empty book" } };
+    }
+
     const bidPct = bidVol / total;
     const prob   = Math.max(0.1, Math.min(0.9, 0.3 + bidPct * 0.4));
-    return { prob, detail: { bid_pct: bidPct.toFixed(2), market: firstMarket.question?.slice(0, 40) } };
+    return { prob, detail: { bid_pct: bidPct.toFixed(2), bid_vol: bidVol.toFixed(0), ask_vol: askVol.toFixed(0) } };
   } catch { return { prob: null, detail: null }; }
 }
 
 // ─── 3. APEX CONSENSUS SIGNAL ─────────────────────────────────────────────────
-async function getApexSignal(): Promise<{ prob: number | null; detail: any }> {
+// Market-specific: top walletok trade-jeit szűri az adott piac conditionId-jára
+async function getApexSignal(market: MarketInfo): Promise<{ prob: number | null; detail: any }> {
   try {
-    // Data API has no /leaderboard – fetch recent global trades, aggregate by wallet
     const tradesRes = await fetch(
       `${DATA_API}/trades?limit=500&sortBy=TIMESTAMP&sortDirection=DESC`,
-      { signal: AbortSignal.timeout(8000) }
+      { signal: AbortSignal.timeout(8000) },
     );
     if (!tradesRes.ok) return { prob: null, detail: null };
     const allTrades: any[] = await tradesRes.json().then(d => Array.isArray(d) ? d : []);
     if (!allTrades.length) return { prob: null, detail: null };
 
-    // Aggregate PnL per wallet to find top traders
+    // Aggregate PnL per wallet
     const walletMap: Record<string, { pnl: number; trades: any[] }> = {};
     for (const t of allTrades) {
       const addr = t.proxyWallet || t.maker || "";
@@ -169,137 +204,155 @@ async function getApexSignal(): Promise<{ prob: number | null; detail: any }> {
       walletMap[addr].trades.push(t);
     }
 
-    // Top 5 wallets by PnL
+    // Top 10 wallets
     const topWallets = Object.entries(walletMap)
       .sort((a, b) => b[1].pnl - a[1].pnl)
-      .slice(0, 5);
+      .slice(0, 10);
 
-    if (!topWallets.length) return { prob: null, detail: null };
-
-    // Aggregate BUY/SELL across top wallets' recent trades
-    let totalBuys = 0, totalTrades = 0;
+    // Filter trades for THIS market's conditionId
+    const cid = market.conditionId;
+    let marketBuys = 0, marketSells = 0, marketWallets = 0;
     for (const [, data] of topWallets) {
-      for (const t of data.trades.slice(0, 10)) {
-        totalTrades++;
-        if ((t.side || "").toUpperCase() === "BUY") totalBuys++;
+      const mktTrades = data.trades.filter((t: any) =>
+        (t.conditionId || t.market || "") === cid
+      );
+      if (mktTrades.length > 0) {
+        marketWallets++;
+        for (const t of mktTrades) {
+          if ((t.side || "").toUpperCase() === "BUY") marketBuys++;
+          else marketSells++;
+        }
       }
     }
 
-    if (totalTrades === 0) return { prob: 0.5, detail: null };
+    const total = marketBuys + marketSells;
+    if (total === 0) {
+      // No apex trades for this specific market → use global signal
+      let globalBuys = 0, globalTotal = 0;
+      for (const [, data] of topWallets.slice(0, 5)) {
+        for (const t of data.trades.slice(0, 10)) {
+          globalTotal++;
+          if ((t.side || "").toUpperCase() === "BUY") globalBuys++;
+        }
+      }
+      if (globalTotal === 0) return { prob: 0.5, detail: { note: "no data" } };
+      const gBuyPct = globalBuys / globalTotal;
+      return {
+        prob: Math.max(0.1, Math.min(0.9, 0.5 + (gBuyPct - 0.5) * 0.3)),
+        detail: { buy_pct: gBuyPct.toFixed(2), scope: "global", wallets: topWallets.length },
+      };
+    }
 
-    const buyPct = totalBuys / totalTrades;
-    // Magas buy arány → pozitív consensus
+    const buyPct = marketBuys / total;
     const prob = Math.max(0.1, Math.min(0.9, 0.5 + (buyPct - 0.5) * 0.6));
     return {
       prob,
       detail: {
         buy_pct: buyPct.toFixed(2),
-        trades: totalTrades,
-        top_wallets: topWallets.length,
-        top_pnl: topWallets[0][1].pnl.toFixed(0),
+        buys: marketBuys, sells: marketSells,
+        apex_wallets: marketWallets,
+        scope: "market-specific",
       },
     };
   } catch { return { prob: null, detail: null }; }
 }
 
 // ─── 4. CONDITIONAL PROBABILITY SIGNAL ────────────────────────────────────────
-async function getCondProbSignal(): Promise<{ prob: number | null; detail: any }> {
+// Market-specific: az adott piac complement check + related markets monotonicity
+async function getCondProbSignal(market: MarketInfo): Promise<{ prob: number | null; detail: any }> {
   try {
-    // Top piacok complement check
-    const mRes = await fetch(
-      `${GAMMA}/markets?active=true&closed=false&limit=20&order=volume24hr&ascending=false`,
-      { signal: AbortSignal.timeout(6000) }
-    );
-    if (!mRes.ok) return { prob: null, detail: null };
-    const mData = await mRes.json() as any;
-    const markets = Array.isArray(mData) ? mData : (mData.markets || []);
-    
-    let maxViolation = 0;
-    let violationDir = 0; // +1 = YES túlárazott, -1 = NO túlárazott
-    
-    for (const m of markets.slice(0, 10)) {
+    // 1. Complement check for THIS market
+    const complement = market.yesPrice + market.noPrice;
+    const dev = complement - 1.0;
+
+    // 2. Search related markets for monotonicity violations
+    const q = market.question.toLowerCase();
+    const keywords = q.split(/\s+/).filter(w => w.length > 3).slice(0, 3);
+    let monotonViolation = 0;
+    let relatedCount = 0;
+
+    if (keywords.length > 0) {
       try {
-        const op = typeof m.outcomePrices === "string" ? JSON.parse(m.outcomePrices) : m.outcomePrices;
-        if (!Array.isArray(op) || op.length < 2) continue;
-        const yp = parseFloat(op[0]);
-        const np = parseFloat(op[1]);
-        const total = yp + np;
-        const dev   = total - 1.0;
-        if (Math.abs(dev) > Math.abs(maxViolation)) {
-          maxViolation = dev;
-          violationDir = dev > 0 ? -1 : 1; // sum > 1 → sell both → NO bias
+        const mRes = await fetch(
+          `${GAMMA}/markets?active=true&closed=false&limit=30&order=volume24hr&ascending=false`,
+          { signal: AbortSignal.timeout(5000) },
+        );
+        if (mRes.ok) {
+          const mData = await mRes.json() as any;
+          const all = Array.isArray(mData) ? mData : (mData.markets || []);
+          const related = all.filter((m: any) => {
+            if (m.slug === market.slug) return false;
+            const mq = (m.question || "").toLowerCase();
+            return keywords.some(kw => mq.includes(kw));
+          });
+
+          for (const r of related.slice(0, 5)) {
+            try {
+              const op = typeof r.outcomePrices === "string" ? JSON.parse(r.outcomePrices) : r.outcomePrices;
+              const rYes = parseFloat(op?.[0] || 0.5);
+              relatedCount++;
+              // If related market has earlier deadline, its price should be ≤ later deadline
+              if (r.endDate && market.endDate) {
+                const rEnd = new Date(r.endDate).getTime();
+                const mEnd = new Date(market.endDate).getTime();
+                if (rEnd < mEnd && rYes > market.yesPrice + 0.03) {
+                  monotonViolation = Math.max(monotonViolation, rYes - market.yesPrice);
+                } else if (rEnd > mEnd && rYes < market.yesPrice - 0.03) {
+                  monotonViolation = Math.max(monotonViolation, market.yesPrice - rYes);
+                }
+              }
+            } catch {}
+          }
         }
       } catch {}
     }
-    
-    if (Math.abs(maxViolation) < 0.02) return { prob: 0.5, detail: { max_violation: "none" } };
-    
-    // Violation irányából probability
-    const prob = Math.max(0.1, Math.min(0.9, 0.5 + violationDir * Math.min(Math.abs(maxViolation), 0.3)));
-    return { prob, detail: { max_violation_pct: (maxViolation * 100).toFixed(1) } };
+
+    const totalViolation = Math.abs(dev) + monotonViolation;
+    if (totalViolation < 0.02) return { prob: 0.5, detail: { complement: complement.toFixed(3), monotonicity: "ok", related: relatedCount } };
+
+    const violationDir = dev > 0 ? -1 : 1;
+    const prob = Math.max(0.1, Math.min(0.9, 0.5 + violationDir * Math.min(totalViolation, 0.3)));
+    return {
+      prob,
+      detail: {
+        complement: complement.toFixed(3),
+        complement_dev: (dev * 100).toFixed(1) + "¢",
+        monoton_violation: (monotonViolation * 100).toFixed(1) + "¢",
+        related: relatedCount,
+      },
+    };
   } catch { return { prob: null, detail: null }; }
 }
 
 // ─── 5. FUNDING RATE SIGNAL ───────────────────────────────────────────────────
+// Global (cross-venue BTC funding)
 async function getFundingSignal(): Promise<{ prob: number | null; detail: any }> {
   let rate: number | null = null;
   let source = "";
 
-  // 1. Bybit (nem geo-blokkolt)
   try {
-    const res = await fetch(
-      `https://api.bybit.com/v5/market/tickers?category=linear&symbol=BTCUSDT`,
-      { signal: AbortSignal.timeout(5000) }
-    );
-    if (res.ok) {
-      const data = await res.json() as any;
-      const ticker = data?.result?.list?.[0];
-      if (ticker?.fundingRate) {
-        rate = parseFloat(ticker.fundingRate);
-        source = "bybit";
-      }
-    }
+    const res = await fetch(`https://api.bybit.com/v5/market/tickers?category=linear&symbol=BTCUSDT`, { signal: AbortSignal.timeout(5000) });
+    if (res.ok) { const d = await res.json() as any; const t = d?.result?.list?.[0]; if (t?.fundingRate) { rate = parseFloat(t.fundingRate); source = "bybit"; } }
   } catch {}
 
-  // 2. Binance Futures fallback
   if (rate === null) {
     try {
-      const res = await fetch(
-        `${BN_FUTURES}/fapi/v1/premiumIndex?symbol=BTCUSDT`,
-        { signal: AbortSignal.timeout(5000) }
-      );
-      if (res.ok) {
-        const data = await res.json() as any;
-        if (data.lastFundingRate) {
-          rate = parseFloat(data.lastFundingRate);
-          source = "binance";
-        }
-      }
+      const res = await fetch(`https://fapi.binance.com/fapi/v1/premiumIndex?symbol=BTCUSDT`, { signal: AbortSignal.timeout(5000) });
+      if (res.ok) { const d = await res.json() as any; if (d.lastFundingRate) { rate = parseFloat(d.lastFundingRate); source = "binance"; } }
     } catch {}
   }
 
-  // 3. CryptoCompare fallback – proxy indicator via perpetual premium
   if (rate === null) {
     try {
-      const [spotRes, futRes] = await Promise.all([
+      const [s, f] = await Promise.all([
         fetch(`https://min-api.cryptocompare.com/data/price?fsym=BTC&tsyms=USD`, { signal: AbortSignal.timeout(5000) }),
         fetch(`https://min-api.cryptocompare.com/data/price?fsym=BTC&tsyms=USDT`, { signal: AbortSignal.timeout(5000) }),
       ]);
-      if (spotRes.ok && futRes.ok) {
-        const spot = await spotRes.json() as any;
-        const fut  = await futRes.json() as any;
-        if (spot.USD && fut.USDT) {
-          // Premium/discount as funding proxy
-          rate = (fut.USDT - spot.USD) / spot.USD;
-          source = "premium_proxy";
-        }
-      }
+      if (s.ok && f.ok) { const sd = await s.json() as any; const fd = await f.json() as any; if (sd.USD && fd.USDT) { rate = (fd.USDT - sd.USD) / sd.USD; source = "premium_proxy"; } }
     } catch {}
   }
 
-  if (rate === null) return { prob: null, detail: { error: "all funding sources failed" } };
-
-  // Pozitív funding → long bias → YES favored
+  if (rate === null) return { prob: null, detail: { error: "all sources failed" } };
   const prob = Math.max(0.1, Math.min(0.9, 0.5 + rate * 50));
   return { prob, detail: { funding_rate: (rate * 100).toFixed(4) + "%", source } };
 }
@@ -315,12 +368,10 @@ function combine(signals: Record<string, number | null>) {
   const n     = names.length;
   if (n === 0) return { combined: 0.5, weights: {}, ir: 0, kelly_q: 0, cv_edge: 1 };
 
-  // Cross-sectional demeaning
   const mean = names.reduce((s, k) => s + valid[k], 0) / n;
   const demeaned: Record<string, number> = {};
   for (const k of names) demeaned[k] = valid[k] - mean;
 
-  // IC-súlyozás
   let totalW = 0;
   const weights: Record<string, number> = {};
   for (const k of names) {
@@ -331,16 +382,13 @@ function combine(signals: Record<string, number | null>) {
   }
   for (const k of names) weights[k] = parseFloat((weights[k] / totalW).toFixed(4));
 
-  // Weighted sum
   let combined = 0;
   for (const k of names) combined += weights[k] * valid[k];
 
-  // IR = IC × √N (effektív N: 60% korreláció-korrekció)
-  const avgIC    = names.reduce((s, k) => s + (SIGNAL_ICS[k] || 0.05), 0) / n;
-  const effN     = Math.max(1, n * 0.6);
-  const ir       = avgIC * Math.sqrt(effN);
+  const avgIC = names.reduce((s, k) => s + (SIGNAL_ICS[k] || 0.05), 0) / n;
+  const effN  = Math.max(1, n * 0.6);
+  const ir    = avgIC * Math.sqrt(effN);
 
-  // Kelly
   const p      = combined;
   const b      = Math.abs(p - 0.5) > 0.01 ? (1 / p) - 1 : 1;
   const kelly  = Math.max(0, (p * b - (1 - p)) / b);
@@ -361,7 +409,7 @@ function recommend(p: number, ir: number, kellyQ: number) {
   if (Math.abs(edge) < 0.05 || ir < 0.1) {
     return { action: "WAIT", confidence: "LOW", rationale: "Jelzések nem konvergálnak – nincs szignifikáns edge" };
   }
-  if (kellyQ < 0.01) {
+  if (kellyQ < 0.005) {
     return { action: "WATCH", confidence: "LOW", rationale: "Van edge de a pozíció méret túl kicsi" };
   }
   const side = edge > 0 ? "YES" : "NO";
@@ -377,24 +425,33 @@ function recommend(p: number, ir: number, kellyQ: number) {
 export default async function handler(req: Request, _ctx: Context) {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
 
-  // Cache
-  let cached: any = null;
-  let store: any  = null;
+  const url  = new URL(req.url);
+  const slug = url.searchParams.get("slug") || "";
+
+  // Cache keyed by market
+  const cKey = `combined:${slug || "auto"}`;
+  let store: any = null;
   try {
-    store  = getStore("signal-combiner-v2");
-    cached = store ? await store.getWithMetadata("combined") : null;
+    store = getStore("signal-combiner-v3");
+    const cached = store ? await store.getWithMetadata(cKey) : null;
     if (cached?.metadata && Date.now() - ((cached.metadata as any).ts || 0) < CACHE_TTL) {
       return new Response(cached.data as string, { status: 200, headers: { ...CORS, "X-Cache": "HIT" } });
     }
   } catch {}
 
   try {
-    // Párhuzamos signal lekérés – közvetlenül külső API-kból
+    // 1. Resolve target market
+    const market = await resolveMarket(slug || undefined);
+    if (!market) {
+      return new Response(JSON.stringify({ ok: false, error: "Market not found" }), { status: 404, headers: CORS });
+    }
+
+    // 2. Parallel signal fetch — all market-specific
     const [vol, flow, apex, cond, fund] = await Promise.all([
-      getVolSignal(),
-      getOrderflowSignal(),
-      getApexSignal(),
-      getCondProbSignal(),
+      getVolSignal(market),
+      getOrderflowSignal(market),
+      getApexSignal(market),
+      getCondProbSignal(market),
       getFundingSignal(),
     ]);
 
@@ -413,6 +470,15 @@ export default async function handler(req: Request, _ctx: Context) {
     const payload = JSON.stringify({
       ok:                   true,
       fetched_at:           new Date().toISOString(),
+      market: {
+        question:  market.question,
+        slug:      market.slug,
+        url:       market.url,
+        yes_price: market.yesPrice,
+        no_price:  market.noPrice,
+        volume_24h: market.volume24h,
+        end_date:   market.endDate,
+      },
       combined_probability: combo.combined,
       edge_pct:             parseFloat(((combo.combined - 0.5) * 100).toFixed(2)),
       signal_weights:       combo.weights,
@@ -440,7 +506,7 @@ export default async function handler(req: Request, _ctx: Context) {
       active_signals: active,
     });
 
-    try { if (store) await store.set("combined", payload, { metadata: { ts: Date.now() } }); } catch {}
+    try { if (store) await store.set(cKey, payload, { metadata: { ts: Date.now() } }); } catch {}
 
     return new Response(payload, { status: 200, headers: { ...CORS, "X-Cache": "MISS" } });
 
