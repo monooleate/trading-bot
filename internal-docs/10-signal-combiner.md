@@ -35,19 +35,34 @@ Intézményi jelzések: $IC \in [0.05, 0.15]$ – azaz **a legjobb jelzés is 85
 
 ---
 
-## Az 5 jelzés és IC becslések
+## A 8 jelzés és IC becslések
 
-| Jelzés | Tab | IC becslés | Alap |
-|--------|-----|-----------|------|
-| Vol Divergence | 07 | 0.06 | IV-RV spread mint kontraindikátor |
-| Order Flow | 06 | 0.09 | Kyle λ + VPIN informált flow detekció |
-| Apex Consensus | 08 | 0.08 | Smart money tracking |
-| Cond. Prob | 09 | 0.07 | Matematikai mispricing |
-| Funding Rate | 03 | 0.05 | Cross-venue carry |
+| Jelzés | Tab/Forrás | IC becslés | Alap |
+|--------|------------|-----------|------|
+| Vol Divergence | Tab 07 | 0.06 | IV-RV spread mint kontraindikátor |
+| Order Flow | Tab 06 | 0.09 | CLOB order book bid/ask imbalance |
+| Apex Consensus | Tab 08 | 0.08 | Smart money tracking (conditionId-specifikus) |
+| Cond. Prob | Tab 09 | 0.07 | Complement + monotonicity violation |
+| Funding Rate | Tab 03 | 0.05 | Bybit BTC funding rate (cross-venue) |
+| Momentum | K.3.1 | 0.06 | Kakushadze price momentum (Jegadeesh & Titman 1993) |
+| Contrarian | K.10.3 | 0.05 | Kakushadze mean-reversion vs market index (Wang & Yu 2004) |
+| Pairs Spread | K.3.8 | 0.07 | Kakushadze pairs Z-score related markets |
 
-**Átlag IC:** 0.070  
-**Effektív N:** 3.0 (50% korreláció-veszteség becslés)  
-**IR:** $0.070 \times \sqrt{3.0} = 0.121$
+**Átlag IC:** 0.066
+**Effektív N:** 4.8 (60% korreláció-veszteség becslés)
+**IR:** $0.066 \times \sqrt{4.8} = 0.145$
+
+### Új signalok (v9, 151 Trading Strategies)
+
+**Momentum (K.3.1):** $R_{cum} = (P_{now} - P_{past}) / P_{past}$. Price inertia — ha az ár emelkedett, az tovább emelkedik rövid távon.
+
+**Contrarian (K.10.3):** $w_i = -\alpha [R_i - R_m]$. A piaci átlagtól kiugró árak visszatérnek a normálhoz. Buy losers, sell winners.
+
+**Pairs Spread (K.3.8):** Korrelált piacok (pl. "ceasefire by Apr 7" vs "by Apr 15") spread-je. Ha a spread eltér az expected temporális struktúrától → arbitrage signal.
+
+### Multi-Market Scanner
+
+A Signal Combiner Tab 10 tartalmaz egy "Scan Top 10" funkciót, ami parallelben elemzi a top 10 aktív Polymarket piacot, és egy táblázatban mutatja a BUY/SELL/WAIT jelzéseket edge és Kelly méretezéssel.
 
 ---
 

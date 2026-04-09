@@ -389,7 +389,7 @@ export default function SignalCombinerPanel({ bankroll }: { bankroll: number }) 
             <div className="sc-row"><span className="lbl">CV_edge korrekció</span>
               <span className="val ec-neg">-{((kelly.cv_edge??0)*100).toFixed(0)}%</span></div>
             <div className="sc-row"><span className="lbl">Aktív jelzések</span>
-              <span className="val">{data?.active_signals ?? 0} / 5</span></div>
+              <span className="val">{data?.active_signals ?? 0} / 8</span></div>
             <div className="sc-row"><span className="lbl">Eff. független N</span>
               <span className="val ec-neu">{fl.effective_n ?? 0}</span></div>
             <div style={{ fontFamily:"var(--mono)",fontSize:10,color:"var(--muted)",marginTop:10,lineHeight:1.7 }}>
@@ -414,7 +414,131 @@ export default function SignalCombinerPanel({ bankroll }: { bankroll: number }) 
           </div>
         </div>
 
+        {/* Multi-Market Scanner */}
+        <MultiMarketScanner bankroll={bankroll} markets={markets} onSelectMarket={(s: string) => { setSlug(s); analyze(s); }} />
+
       </div>
     </>
+  );
+}
+
+// ─── MULTI-MARKET SCANNER ─────────────────────────────────────────────────────
+function MultiMarketScanner({ bankroll, markets, onSelectMarket }: { bankroll: number; markets: any[]; onSelectMarket: (slug: string) => void }) {
+  const [results, setResults] = useState<any[]>([]);
+  const [scanning, setScanning] = useState(false);
+  const [scanned, setScanned]   = useState(false);
+
+  const scanAll = useCallback(async () => {
+    if (markets.length === 0) return;
+    setScanning(true);
+    setResults([]);
+
+    // Filter markets with good prices (not extreme)
+    const targets = markets.filter((m: any) => m.yes_price > 0.1 && m.yes_price < 0.9).slice(0, 10);
+
+    const scanResults: any[] = [];
+    // Run in parallel batches of 3
+    for (let i = 0; i < targets.length; i += 3) {
+      const batch = targets.slice(i, i + 3);
+      const batchResults = await Promise.allSettled(
+        batch.map(async (m: any) => {
+          try {
+            const r = await window.fetch(`${FN}/signal-combiner?slug=${encodeURIComponent(m.slug)}`);
+            const j = await r.json();
+            if (j.ok) return j;
+          } catch {}
+          return null;
+        })
+      );
+      for (const r of batchResults) {
+        if (r.status === "fulfilled" && r.value) scanResults.push(r.value);
+      }
+      setResults([...scanResults]);
+    }
+
+    // Sort by absolute edge (strongest signal first)
+    scanResults.sort((a, b) => Math.abs(b.edge_pct) - Math.abs(a.edge_pct));
+    setResults(scanResults);
+    setScanning(false);
+    setScanned(true);
+  }, [markets]);
+
+  const actionIcon = (action: string) => {
+    if (action?.includes("YES")) return "▲";
+    if (action?.includes("NO"))  return "▼";
+    if (action === "WATCH")      return "◆";
+    return "—";
+  };
+
+  return (
+    <div className="sc-card">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+        <div className="sc-ct" style={{ margin: 0 }}>Multi-Market Scanner</div>
+        <button className="sc-btn primary" onClick={scanAll} disabled={scanning || markets.length === 0}>
+          {scanning ? `Scanning ${results.length}/${Math.min(markets.length, 10)}...` : "⟳ Scan Top 10"}
+        </button>
+      </div>
+
+      {!scanned && !scanning && (
+        <div style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--muted)", padding: "12px 0", textAlign: "center" }}>
+          Kattints a "Scan Top 10" gombra az összes aktív piac elemzéséhez
+        </div>
+      )}
+
+      {results.length > 0 && (
+        <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: "var(--mono)", fontSize: 11 }}>
+          <thead>
+            <tr style={{ borderBottom: "1px solid var(--border)" }}>
+              <th style={{ textAlign: "left", padding: "5px 8px", fontSize: 10, color: "var(--muted)" }}>Piac</th>
+              <th style={{ textAlign: "center", padding: "5px 4px", fontSize: 10, color: "var(--muted)" }}>Jelzés</th>
+              <th style={{ textAlign: "right", padding: "5px 4px", fontSize: 10, color: "var(--muted)" }}>Edge</th>
+              <th style={{ textAlign: "right", padding: "5px 4px", fontSize: 10, color: "var(--muted)" }}>Prob</th>
+              <th style={{ textAlign: "right", padding: "5px 4px", fontSize: 10, color: "var(--muted)" }}>IR</th>
+              <th style={{ textAlign: "right", padding: "5px 4px", fontSize: 10, color: "var(--muted)" }}>Kelly</th>
+              <th style={{ textAlign: "right", padding: "5px 8px", fontSize: 10, color: "var(--muted)" }}>Sig</th>
+            </tr>
+          </thead>
+          <tbody>
+            {results.map((r: any, i: number) => {
+              const rec = r.recommendation || {};
+              const mkt = r.market || {};
+              const isBuy = rec.action?.includes("BUY");
+              const isYes = rec.action?.includes("YES");
+              const edgeColor = Math.abs(r.edge_pct) > 10 ? (r.edge_pct > 0 ? "var(--accent)" : "var(--danger)") : "var(--muted)";
+              return (
+                <tr key={i} style={{ borderBottom: "1px solid #151520", cursor: "pointer" }}
+                  onClick={() => onSelectMarket(mkt.slug || "")}>
+                  <td style={{ padding: "7px 8px", maxWidth: 200 }}>
+                    <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: isBuy ? (isYes ? "var(--accent)" : "var(--danger)") : "var(--muted)" }}>
+                      {(mkt.question || "?").slice(0, 45)}
+                    </div>
+                    <div style={{ fontSize: 9, color: "var(--border)" }}>{(mkt.yes_price * 100).toFixed(0)}¢ YES</div>
+                  </td>
+                  <td style={{ textAlign: "center", padding: "7px 4px", fontWeight: 700, fontSize: 12,
+                    color: isBuy ? (isYes ? "var(--accent)" : "var(--danger)") : "var(--warn)" }}>
+                    {actionIcon(rec.action)} {rec.action || "WAIT"}
+                  </td>
+                  <td style={{ textAlign: "right", padding: "7px 4px", fontWeight: 700, color: edgeColor }}>
+                    {r.edge_pct >= 0 ? "+" : ""}{r.edge_pct.toFixed(1)}%
+                  </td>
+                  <td style={{ textAlign: "right", padding: "7px 4px" }}>
+                    {(r.combined_probability * 100).toFixed(0)}%
+                  </td>
+                  <td style={{ textAlign: "right", padding: "7px 4px", color: "var(--accent2)" }}>
+                    {r.fundamental_law?.ir?.toFixed(3)}
+                  </td>
+                  <td style={{ textAlign: "right", padding: "7px 4px", color: "var(--accent)" }}>
+                    {(r.kelly?.quarter * 100).toFixed(1)}%
+                  </td>
+                  <td style={{ textAlign: "right", padding: "7px 8px" }}>
+                    {r.active_signals}/8
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </div>
   );
 }
