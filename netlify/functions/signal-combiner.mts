@@ -45,15 +45,37 @@ interface MarketInfo {
 // ─── Resolve market from slug or auto-pick top volume ─────────────────────────
 async function resolveMarket(slug?: string): Promise<MarketInfo | null> {
   try {
-    const params = slug
-      ? `slug=${encodeURIComponent(slug)}`
-      : "active=true&closed=false&limit=5&order=volume24hr&ascending=false";
-    const res = await fetch(`${GAMMA}/markets?${params}`, {
-      signal: AbortSignal.timeout(6000),
-    });
-    if (!res.ok) return null;
-    const data = await res.json() as any;
-    const list = Array.isArray(data) ? data : (data.markets || []);
+    let list: any[] = [];
+
+    if (slug) {
+      // Try exact slug first
+      const r1 = await fetch(`${GAMMA}/markets?slug=${encodeURIComponent(slug)}&limit=1`, { signal: AbortSignal.timeout(5000) });
+      if (r1.ok) { const d = await r1.json() as any; list = Array.isArray(d) ? d : []; }
+
+      // If not found, try stripping numeric suffix (polymarket-proxy adds it)
+      if (list.length === 0) {
+        const stripped = slug.replace(/-\d+$/, "");
+        if (stripped !== slug) {
+          const r2 = await fetch(`${GAMMA}/markets?slug=${encodeURIComponent(stripped)}&limit=1`, { signal: AbortSignal.timeout(5000) });
+          if (r2.ok) { const d = await r2.json() as any; list = Array.isArray(d) ? d : []; }
+        }
+      }
+
+      // Last resort: search in top markets by matching slug substring
+      if (list.length === 0) {
+        const r3 = await fetch(`${GAMMA}/markets?active=true&closed=false&limit=30&order=volume24hr&ascending=false`, { signal: AbortSignal.timeout(6000) });
+        if (r3.ok) {
+          const d = await r3.json() as any;
+          const all = Array.isArray(d) ? d : [];
+          list = all.filter((m: any) => (m.slug || "").includes(slug.replace(/-\d+$/, "").slice(0, 20)));
+        }
+      }
+    } else {
+      const res = await fetch(`${GAMMA}/markets?active=true&closed=false&limit=5&order=volume24hr&ascending=false`, { signal: AbortSignal.timeout(6000) });
+      if (res.ok) { const d = await res.json() as any; list = Array.isArray(d) ? d : []; }
+    }
+
+    if (!list.length) return null;
 
     // Pick first valid market with tokens
     for (const m of list) {

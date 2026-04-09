@@ -73,6 +73,19 @@ export default async function handler(req: Request, context: Context) {
           if (!Array.isArray(m.tags) || !m.tags[0]) return "egyéb";
           return (typeof m.tags[0] === "object" ? m.tags[0].label : m.tags[0] || "egyéb").toLowerCase();
         })();
+        // Parse clobTokenIds for CLOB order book access
+        let tokens: { outcome: string; token_id: string }[] = [];
+        try {
+          if (m.tokens && Array.isArray(m.tokens) && m.tokens.length > 0) {
+            tokens = m.tokens.map((t: any) => ({ outcome: t.outcome || "", token_id: t.token_id || "" }));
+          } else if (m.clobTokenIds) {
+            const ids = typeof m.clobTokenIds === "string" ? JSON.parse(m.clobTokenIds) : m.clobTokenIds;
+            if (Array.isArray(ids) && ids.length >= 2) {
+              tokens = [{ outcome: "YES", token_id: ids[0] }, { outcome: "NO", token_id: ids[1] }];
+            }
+          }
+        } catch {}
+
         return {
           question:   m.question || m.title || "N/A",
           slug:       m.slug || "",
@@ -82,6 +95,7 @@ export default async function handler(req: Request, context: Context) {
           volume_24h: parseFloat(m.volume24hr || 0),
           liquidity:  parseFloat(m.liquidityNum || m.liquidity || 0),
           end_date:   m.endDate || "",
+          tokens,
           signal_note: yp < 0.1 ? "⚠ Nagyon alacsony ár" : yp > 0.9 ? "⚠ Nagyon magas ár" : "Közel 50/50 – saját kutatás kell",
           url: m.slug ? `https://polymarket.com/event/${m.slug}` : "https://polymarket.com",
         };
