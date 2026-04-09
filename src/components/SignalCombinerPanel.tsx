@@ -132,7 +132,7 @@ export default function SignalCombinerPanel({ bankroll }: { bankroll: number }) 
   useEffect(() => {
     (async () => {
       try {
-        const r = await window.fetch(`${FN}/polymarket-proxy?limit=15`);
+        const r = await window.fetch(`${FN}/polymarket-proxy?limit=15&refresh=1`);
         const j = await r.json();
         if (j.ok && Array.isArray(j.markets)) setMarkets(j.markets);
       } catch {}
@@ -429,12 +429,22 @@ function MultiMarketScanner({ bankroll, markets, onSelectMarket }: { bankroll: n
   const [scanned, setScanned]   = useState(false);
 
   const scanAll = useCallback(async () => {
-    if (markets.length === 0) return;
     setScanning(true);
     setResults([]);
 
-    // Filter markets with good prices (not extreme)
-    const targets = markets.filter((m: any) => m.yes_price > 0.1 && m.yes_price < 0.9).slice(0, 10);
+    // Use provided markets or fetch fresh
+    let pool = markets;
+    if (pool.length === 0) {
+      try {
+        const r = await window.fetch(`${FN}/polymarket-proxy?limit=15&refresh=1`);
+        const j = await r.json();
+        if (j.ok && Array.isArray(j.markets)) pool = j.markets;
+      } catch {}
+    }
+    if (pool.length === 0) { setScanning(false); return; }
+
+    const targets = pool.filter((m: any) => m.yes_price > 0.01 && m.yes_price < 0.99 && m.slug).slice(0, 10);
+    if (targets.length === 0) { setScanning(false); return; }
 
     const scanResults: any[] = [];
     // Run in parallel batches of 3
@@ -474,7 +484,7 @@ function MultiMarketScanner({ bankroll, markets, onSelectMarket }: { bankroll: n
     <div className="sc-card">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
         <div className="sc-ct" style={{ margin: 0 }}>Multi-Market Scanner</div>
-        <button className="sc-btn primary" onClick={scanAll} disabled={scanning || markets.length === 0}>
+        <button className="sc-btn primary" onClick={scanAll} disabled={scanning}>
           {scanning ? `Scanning ${results.length}/${Math.min(markets.length, 10)}...` : "⟳ Scan Top 10"}
         </button>
       </div>
