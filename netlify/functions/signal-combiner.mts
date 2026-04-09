@@ -115,6 +115,7 @@ async function resolveMarket(slug?: string): Promise<MarketInfo | null> {
         volume24h:   parseFloat(m.volume24hr || 0),
         endDate:     m.endDate || "",
         url:         m.slug ? `https://polymarket.com/event/${m.slug}` : "",
+        // Note: URL uses market slug — the frontend polymarket-proxy has the correct event/market URL format
       };
     }
     return null;

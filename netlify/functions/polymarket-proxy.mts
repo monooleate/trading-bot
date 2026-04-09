@@ -45,35 +45,38 @@ export default async function handler(req: Request, context: Context) {
       }
     }
 
-    // ── 2. Friss adat a Gamma API-ról ─────────────────────────────────────
-    const apiUrl = `${GAMMA_API}/markets?active=true&closed=false&limit=${limit}&order=volume24hr&ascending=false`;
-    const res = await fetch(apiUrl, {
+    // ── 2. Events API → helyes event slug + market slugs + tokens ───────
+    const eventsUrl = `${GAMMA_API}/events?limit=${limit}&order=volume24hr&ascending=false&active=true`;
+    const res = await fetch(eventsUrl, {
       headers: { "Accept": "application/json", "User-Agent": "EdgeCalc/1.0" },
       signal: AbortSignal.timeout(8000),
     });
 
-    if (!res.ok) {
-      throw new Error(`Gamma API error: ${res.status}`);
-    }
+    if (!res.ok) throw new Error(`Gamma API error: ${res.status}`);
 
-    const raw = await res.json() as any;
-    const list: any[] = Array.isArray(raw) ? raw : (raw.markets || raw.data || []);
+    const events: any[] = await res.json().then(d => Array.isArray(d) ? d : []);
 
-    // ── 3. Feldolgozás ────────────────────────────────────────────────────
-    const markets = list
-      .filter((m: any) => parseFloat(m.volume24hr || 0) > 5000)
-      .slice(0, parseInt(limit))
-      .map((m: any) => {
+    // ── 3. Flatten events → markets with correct URLs ────────────────────
+    const markets: any[] = [];
+    for (const evt of events) {
+      const eventSlug = evt.slug || "";
+      for (const m of (evt.markets || [])) {
+        const vol = parseFloat(m.volume24hr || m.volume || 0);
+        if (vol < 5000) continue;
+
         let yp = 0.5, np = 0.5;
         try {
           const op = typeof m.outcomePrices === "string" ? JSON.parse(m.outcomePrices) : m.outcomePrices;
           if (Array.isArray(op) && op.length >= 2) { yp = parseFloat(op[0]); np = parseFloat(op[1]); }
         } catch {}
+
         const cat = (() => {
-          if (!Array.isArray(m.tags) || !m.tags[0]) return "egyéb";
-          return (typeof m.tags[0] === "object" ? m.tags[0].label : m.tags[0] || "egyéb").toLowerCase();
+          const tags = evt.tags || m.tags || [];
+          if (!Array.isArray(tags) || !tags[0]) return "egyéb";
+          return (typeof tags[0] === "object" ? tags[0].label : tags[0] || "egyéb").toLowerCase();
         })();
-        // Parse clobTokenIds for CLOB order book access
+
+        // Parse clobTokenIds for CLOB order book
         let tokens: { outcome: string; token_id: string }[] = [];
         try {
           if (m.tokens && Array.isArray(m.tokens) && m.tokens.length > 0) {
@@ -86,20 +89,34 @@ export default async function handler(req: Request, context: Context) {
           }
         } catch {}
 
-        return {
-          question:   m.question || m.title || "N/A",
-          slug:       m.slug || "",
-          category:   cat,
-          yes_price:  Math.round(yp * 10000) / 10000,
-          no_price:   Math.round(np * 10000) / 10000,
-          volume_24h: parseFloat(m.volume24hr || 0),
-          liquidity:  parseFloat(m.liquidityNum || m.liquidity || 0),
-          end_date:   m.endDate || "",
+        const marketSlug = m.slug || "";
+        // Correct URL: /event/{eventSlug}/{marketSlug}
+        const url = eventSlug && marketSlug
+          ? `https://polymarket.com/event/${eventSlug}/${marketSlug}`
+          : eventSlug
+            ? `https://polymarket.com/event/${eventSlug}`
+            : "https://polymarket.com";
+
+        markets.push({
+          question:    m.question || m.title || evt.title || "N/A",
+          slug:        marketSlug,
+          event_slug:  eventSlug,
+          category:    cat,
+          yes_price:   Math.round(yp * 10000) / 10000,
+          no_price:    Math.round(np * 10000) / 10000,
+          volume_24h:  vol,
+          liquidity:   parseFloat(m.liquidityNum || m.liquidity || 0),
+          end_date:    m.endDate || "",
           tokens,
           signal_note: yp < 0.1 ? "⚠ Nagyon alacsony ár" : yp > 0.9 ? "⚠ Nagyon magas ár" : "Közel 50/50 – saját kutatás kell",
-          url: m.slug ? `https://polymarket.com/event/${m.slug}` : "https://polymarket.com",
-        };
-      });
+          url,
+        });
+      }
+    }
+
+    // Sort by volume and take top N
+    markets.sort((a, b) => b.volume_24h - a.volume_24h);
+    markets.splice(parseInt(limit));
 
     const payload = JSON.stringify({
       ok: true,
