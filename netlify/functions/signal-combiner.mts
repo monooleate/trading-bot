@@ -48,75 +48,77 @@ interface MarketInfo {
 // ─── Resolve market from slug or auto-pick top volume ─────────────────────────
 async function resolveMarket(slug?: string): Promise<MarketInfo | null> {
   try {
-    let list: any[] = [];
+    // Use events API for correct event_slug → URL mapping
+    const eventsUrl = slug
+      ? `${GAMMA}/events?slug=${encodeURIComponent(slug.replace(/-\d+$/, ""))}&limit=5`
+      : `${GAMMA}/events?limit=5&order=volume24hr&ascending=false&active=true`;
+    const evRes = await fetch(eventsUrl, { signal: AbortSignal.timeout(6000) });
+    if (!evRes.ok) return null;
+    const events: any[] = await evRes.json().then(d => Array.isArray(d) ? d : []);
 
-    if (slug) {
-      // Try exact slug first
-      const r1 = await fetch(`${GAMMA}/markets?slug=${encodeURIComponent(slug)}&limit=1`, { signal: AbortSignal.timeout(5000) });
-      if (r1.ok) { const d = await r1.json() as any; list = Array.isArray(d) ? d : []; }
-
-      // If not found, try stripping numeric suffix (polymarket-proxy adds it)
-      if (list.length === 0) {
-        const stripped = slug.replace(/-\d+$/, "");
-        if (stripped !== slug) {
-          const r2 = await fetch(`${GAMMA}/markets?slug=${encodeURIComponent(stripped)}&limit=1`, { signal: AbortSignal.timeout(5000) });
-          if (r2.ok) { const d = await r2.json() as any; list = Array.isArray(d) ? d : []; }
+    // If slug search returned nothing, try top events
+    if (events.length === 0 && slug) {
+      const fallback = await fetch(`${GAMMA}/events?limit=10&order=volume24hr&ascending=false&active=true`, { signal: AbortSignal.timeout(6000) });
+      if (fallback.ok) {
+        const all: any[] = await fallback.json().then(d => Array.isArray(d) ? d : []);
+        // Search within all event markets for matching slug
+        for (const evt of all) {
+          for (const m of (evt.markets || [])) {
+            if ((m.slug || "").includes(slug.replace(/-\d+$/, "").slice(0, 15))) {
+              events.push(evt);
+              break;
+            }
+          }
+          if (events.length > 0) break;
         }
       }
-
-      // Last resort: search in top markets by matching slug substring
-      if (list.length === 0) {
-        const r3 = await fetch(`${GAMMA}/markets?active=true&closed=false&limit=30&order=volume24hr&ascending=false`, { signal: AbortSignal.timeout(6000) });
-        if (r3.ok) {
-          const d = await r3.json() as any;
-          const all = Array.isArray(d) ? d : [];
-          list = all.filter((m: any) => (m.slug || "").includes(slug.replace(/-\d+$/, "").slice(0, 20)));
-        }
-      }
-    } else {
-      const res = await fetch(`${GAMMA}/markets?active=true&closed=false&limit=5&order=volume24hr&ascending=false`, { signal: AbortSignal.timeout(6000) });
-      if (res.ok) { const d = await res.json() as any; list = Array.isArray(d) ? d : []; }
     }
 
-    if (!list.length) return null;
+    // Find the right market within events
+    for (const evt of events) {
+      const eventSlug = evt.slug || "";
+      for (const m of (evt.markets || [])) {
+        // If specific slug requested, match it
+        if (slug && !(m.slug || "").includes(slug.replace(/-\d+$/, "").slice(0, 15))) continue;
 
-    // Pick first valid market with tokens
-    for (const m of list) {
-      const tokens = m.tokens || [];
-      // Parse clobTokenIds if tokens array is empty
-      let yesToken = tokens.find((t: any) => (t.outcome || "").toUpperCase() === "YES");
-      let noToken  = tokens.find((t: any) => (t.outcome || "").toUpperCase() === "NO");
-
-      // Fallback: try clobTokenIds
-      if (!yesToken?.token_id && m.clobTokenIds) {
-        const ids = typeof m.clobTokenIds === "string" ? JSON.parse(m.clobTokenIds) : m.clobTokenIds;
-        if (ids.length >= 2) {
-          yesToken = { token_id: ids[0] };
-          noToken  = { token_id: ids[1] };
+        // Parse tokens
+        let yesToken: any = null, noToken: any = null;
+        if (m.tokens?.length > 0) {
+          yesToken = m.tokens.find((t: any) => (t.outcome || "").toUpperCase() === "YES");
+          noToken  = m.tokens.find((t: any) => (t.outcome || "").toUpperCase() === "NO");
         }
+        if (!yesToken?.token_id && m.clobTokenIds) {
+          try {
+            const ids = typeof m.clobTokenIds === "string" ? JSON.parse(m.clobTokenIds) : m.clobTokenIds;
+            if (ids.length >= 2) { yesToken = { token_id: ids[0] }; noToken = { token_id: ids[1] }; }
+          } catch {}
+        }
+        if (!yesToken?.token_id) continue;
+
+        let yp = 0.5, np = 0.5;
+        try {
+          const op = typeof m.outcomePrices === "string" ? JSON.parse(m.outcomePrices) : m.outcomePrices;
+          if (Array.isArray(op) && op.length >= 2) { yp = parseFloat(op[0]); np = parseFloat(op[1]); }
+        } catch {}
+
+        const marketSlug = m.slug || "";
+        return {
+          question:    m.question || m.title || evt.title || "",
+          slug:        marketSlug,
+          conditionId: m.id || m.conditionId || "",
+          yesTokenId:  yesToken.token_id,
+          noTokenId:   noToken?.token_id || "",
+          yesPrice:    yp,
+          noPrice:     np,
+          volume24h:   parseFloat(m.volume24hr || m.volume || 0),
+          endDate:     m.endDate || "",
+          url:         eventSlug && marketSlug
+            ? `https://polymarket.com/event/${eventSlug}/${marketSlug}`
+            : eventSlug
+              ? `https://polymarket.com/event/${eventSlug}`
+              : "",
+        };
       }
-
-      if (!yesToken?.token_id) continue;
-
-      let yp = 0.5, np = 0.5;
-      try {
-        const op = typeof m.outcomePrices === "string" ? JSON.parse(m.outcomePrices) : m.outcomePrices;
-        if (Array.isArray(op) && op.length >= 2) { yp = parseFloat(op[0]); np = parseFloat(op[1]); }
-      } catch {}
-
-      return {
-        question:    m.question || m.title || "",
-        slug:        m.slug || "",
-        conditionId: m.id || m.conditionId || "",
-        yesTokenId:  yesToken.token_id,
-        noTokenId:   noToken?.token_id || "",
-        yesPrice:    yp,
-        noPrice:     np,
-        volume24h:   parseFloat(m.volume24hr || 0),
-        endDate:     m.endDate || "",
-        url:         m.slug ? `https://polymarket.com/event/${m.slug}` : "",
-        // Note: URL uses market slug — the frontend polymarket-proxy has the correct event/market URL format
-      };
     }
     return null;
   } catch { return null; }
