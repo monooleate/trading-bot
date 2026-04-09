@@ -97,35 +97,14 @@ function MarketPicker({ onSelect }: { onSelect: (tokenId: string, question: stri
   const [resolving, setResolving] = useState("");
 
   useEffect(() => {
-    // Fetch markets directly from Gamma API (bypass proxy cache for fresh clobTokenIds)
     (async () => {
       try {
-        const res = await window.fetch(
-          "https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=15&order=volume24hr&ascending=false"
-        );
+        // refresh=1 bypasses 1h cache to get fresh data with tokens
+        const res = await window.fetch(`${FN}/polymarket-proxy?limit=15&refresh=1`);
         const data = await res.json();
-        const list = Array.isArray(data) ? data : [];
-        const parsed = list.map((m: any) => {
-          let yp = 0.5;
-          try {
-            const op = typeof m.outcomePrices === "string" ? JSON.parse(m.outcomePrices) : m.outcomePrices;
-            if (Array.isArray(op)) yp = parseFloat(op[0]);
-          } catch {}
-          // Extract token IDs from clobTokenIds
-          let tokenId = "";
-          try {
-            if (m.tokens?.length > 0) {
-              const yes = m.tokens.find((t: any) => (t.outcome || "").toUpperCase() === "YES");
-              tokenId = yes?.token_id || m.tokens[0]?.token_id || "";
-            }
-            if (!tokenId && m.clobTokenIds) {
-              const ids = typeof m.clobTokenIds === "string" ? JSON.parse(m.clobTokenIds) : m.clobTokenIds;
-              if (Array.isArray(ids) && ids.length > 0) tokenId = ids[0];
-            }
-          } catch {}
-          return { question: m.question || "", slug: m.slug || "", yes_price: yp, volume_24h: parseFloat(m.volume24hr || 0), tokenId };
-        }).filter((m: any) => m.yes_price > 0.05 && m.yes_price < 0.95);
-        setMarkets(parsed);
+        if (data.ok && Array.isArray(data.markets)) {
+          setMarkets(data.markets);
+        }
       } catch {}
       finally { setLoading(false); }
     })();
@@ -140,23 +119,23 @@ function MarketPicker({ onSelect }: { onSelect: (tokenId: string, question: stri
       <table className="of-tbl">
         <thead><tr><th>Kérdés</th><th>YES</th><th>Vol 24h</th></tr></thead>
         <tbody>
-          {markets.map((m: any, i: number) => (
-            <tr key={i} style={{ cursor: "pointer" }}
-              onClick={() => {
-                if (m.tokenId) {
-                  onSelect(m.tokenId, m.question);
-                } else {
-                  // Auto-analyze without token_id — the backend resolves it
-                  setResolving(m.question.slice(0, 30));
-                  onSelect("auto", m.question);
-                  setTimeout(() => setResolving(""), 3000);
-                }
-              }}>
-              <td><div className="of-mq">{m.question}</div></td>
-              <td className="ec-pos" style={{ fontWeight: 700 }}>{(m.yes_price * 100).toFixed(1)}¢</td>
-              <td style={{ color: "var(--muted)" }}>${((m.volume_24h || 0) / 1000000).toFixed(1)}M</td>
-            </tr>
-          ))}
+          {markets.map((m: any, i: number) => {
+            const tokens = Array.isArray(m.tokens) ? m.tokens : [];
+            const yesToken = tokens.find((t: any) => (t.outcome || "").toUpperCase() === "YES");
+            const tokenId = yesToken?.token_id || (tokens[0]?.token_id) || "";
+            return (
+              <tr key={i} style={{ cursor: tokenId ? "pointer" : "default", opacity: tokenId ? 1 : 0.4 }}
+                onClick={() => {
+                  if (tokenId) {
+                    onSelect(tokenId, m.question);
+                  }
+                }}>
+                <td><div className="of-mq">{m.question}</div></td>
+                <td className="ec-pos" style={{ fontWeight: 700 }}>{(m.yes_price * 100).toFixed(1)}¢</td>
+                <td style={{ color: "var(--muted)" }}>${((m.volume_24h || 0) / 1000000).toFixed(1)}M</td>
+              </tr>
+            );
+          })}
           {markets.length === 0 && (
             <tr><td colSpan={3} style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--muted)", padding: 12 }}>
               API nem elérhető – írd be manuálisan a token ID-t
