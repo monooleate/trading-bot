@@ -97,7 +97,8 @@ function MarketPicker({ onSelect }: { onSelect: (tokenId: string, question: stri
 
   useEffect(() => {
     setLoading(true);
-    fetch(`${FN}/polymarket-proxy?limit=15`)
+    // refresh=1 forces cache bypass to get fresh tokens data
+    fetch(`${FN}/polymarket-proxy?limit=15&refresh=1`)
       .then(r => r.json())
       .then(d => { if (d.ok) setMarkets(d.markets || []); })
       .catch(() => {})
@@ -113,9 +114,13 @@ function MarketPicker({ onSelect }: { onSelect: (tokenId: string, question: stri
         <thead><tr><th>Kérdés</th><th>YES</th><th>Vol 24h</th></tr></thead>
         <tbody>
           {markets.map((m, i) => {
-            const token = Array.isArray(m.tokens) ? m.tokens.find((t: any) => t.outcome?.toUpperCase() === "YES") : null;
+            const tokens = Array.isArray(m.tokens) ? m.tokens : [];
+            const token = tokens.find((t: any) => (t.outcome || "").toUpperCase() === "YES");
+            const tokenId = token?.token_id || (tokens.length > 0 ? tokens[0].token_id : "");
+            const hasToken = !!tokenId;
             return (
-              <tr key={i} onClick={() => token && onSelect(token.token_id, m.question)}>
+              <tr key={i} style={{ opacity: hasToken ? 1 : 0.4, cursor: hasToken ? "pointer" : "default" }}
+                onClick={() => hasToken && onSelect(tokenId, m.question)}>
                 <td><div className="of-mq">{m.question}</div></td>
                 <td className="ec-pos" style={{ fontWeight: 700 }}>{(m.yes_price * 100).toFixed(1)}¢</td>
                 <td style={{ color: "var(--muted)" }}>${((m.volume_24h || 0) / 1000).toFixed(0)}k</td>

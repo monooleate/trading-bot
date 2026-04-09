@@ -26,6 +26,9 @@ const SIGNAL_ICS: Record<string, number> = {
   apex_consensus: 0.08,
   cond_prob:      0.07,
   funding_rate:   0.05,
+  momentum:       0.06,  // Kakushadze 3.1: price momentum (Jegadeesh & Titman 1993)
+  contrarian:     0.05,  // Kakushadze 10.3: mean-reversion vs market index (Wang & Yu 2004)
+  pairs_spread:   0.07,  // Kakushadze 3.8: pairs Z-score on related markets
 };
 
 // ─── Market info type ─────────────────────────────────────────────────────────
@@ -379,6 +382,171 @@ async function getFundingSignal(): Promise<{ prob: number | null; detail: any }>
   return { prob, detail: { funding_rate: (rate * 100).toFixed(4) + "%", source } };
 }
 
+// ─── 6. MOMENTUM SIGNAL (Kakushadze 3.1: Price Momentum) ──────────────────────
+// "future returns are positively correlated with past returns"
+// Rcum = (P_now - P_past) / P_past → short-term directional bias
+async function getMomentumSignal(market: MarketInfo): Promise<{ prob: number | null; detail: any }> {
+  try {
+    if (!market.yesTokenId) return { prob: null, detail: null };
+
+    // Get current midpoint
+    let currentMid = market.yesPrice;
+    try {
+      const midRes = await fetch(`${CLOB}/midpoint?token_id=${market.yesTokenId}`, { signal: AbortSignal.timeout(4000) });
+      if (midRes.ok) { const d = await midRes.json() as any; currentMid = parseFloat(d.mid || market.yesPrice); }
+    } catch {}
+
+    // Get price history — try CLOB prices-history, fallback to Gamma timeseries
+    let pastPrice = market.yesPrice;
+    try {
+      // Gamma market history endpoint
+      const histRes = await fetch(
+        `${GAMMA}/markets/${market.slug}?limit=1`,
+        { signal: AbortSignal.timeout(4000) },
+      );
+      if (histRes.ok) {
+        const hist = await histRes.json() as any;
+        // Use the market's stored price as "past" reference
+        const op = typeof hist.outcomePrices === "string" ? JSON.parse(hist.outcomePrices) : hist.outcomePrices;
+        if (Array.isArray(op)) pastPrice = parseFloat(op[0]);
+      }
+    } catch {}
+
+    // If we can't get historical price, use deviation from 0.5 as proxy
+    if (Math.abs(currentMid - pastPrice) < 0.001) {
+      // Momentum proxy: distance from 0.5 indicates recent movement
+      const dist = currentMid - 0.5;
+      const prob = Math.max(0.1, Math.min(0.9, 0.5 + dist * 0.4));
+      return { prob, detail: { current: currentMid.toFixed(3), source: "distance_proxy" } };
+    }
+
+    // Rcum = (P_now - P_past) / P_past — Kakushadze Eq. 3.1
+    const rcum = pastPrice > 0.01 ? (currentMid - pastPrice) / pastPrice : 0;
+    // Positive momentum → YES bias, negative → NO bias
+    const prob = Math.max(0.1, Math.min(0.9, 0.5 + rcum * 2.0));
+    return {
+      prob,
+      detail: { current: currentMid.toFixed(3), past: pastPrice.toFixed(3), rcum: (rcum * 100).toFixed(1) + "%" },
+    };
+  } catch { return { prob: null, detail: null }; }
+}
+
+// ─── 7. CONTRARIAN SIGNAL (Kakushadze 10.3: Mean-Reversion) ──────────────────
+// wi = -α × [Ri - Rm] — buy losers, sell winners relative to market index
+async function getContrarianSignal(market: MarketInfo): Promise<{ prob: number | null; detail: any }> {
+  try {
+    // Fetch top active markets to compute "market index"
+    const mRes = await fetch(
+      `${GAMMA}/markets?active=true&closed=false&limit=15&order=volume24hr&ascending=false`,
+      { signal: AbortSignal.timeout(5000) },
+    );
+    if (!mRes.ok) return { prob: null, detail: null };
+    const mData = await mRes.json() as any;
+    const all = Array.isArray(mData) ? mData : [];
+
+    const prices: number[] = [];
+    for (const m of all) {
+      try {
+        const op = typeof m.outcomePrices === "string" ? JSON.parse(m.outcomePrices) : m.outcomePrices;
+        if (Array.isArray(op)) prices.push(parseFloat(op[0]));
+      } catch {}
+    }
+
+    if (prices.length < 3) return { prob: null, detail: null };
+
+    // Rm = market index (mean YES price)  — Kakushadze Eq. 10.7
+    const rm = prices.reduce((s, p) => s + p, 0) / prices.length;
+
+    // Deviation from market mean — Kakushadze Eq. 10.8
+    const dev = market.yesPrice - rm;
+
+    // Contrarian: if price is above market mean → expect reversion down (NO bias)
+    // If below mean → expect reversion up (YES bias)
+    if (Math.abs(dev) < 0.05) return { prob: 0.5, detail: { rm: rm.toFixed(3), dev: dev.toFixed(3), note: "within normal range" } };
+
+    const prob = Math.max(0.1, Math.min(0.9, 0.5 - dev * 0.3));
+    return {
+      prob,
+      detail: { rm: rm.toFixed(3), dev: dev.toFixed(3), markets_sampled: prices.length },
+    };
+  } catch { return { prob: null, detail: null }; }
+}
+
+// ─── 8. PAIRS SPREAD SIGNAL (Kakushadze 3.8: Pairs Z-Score) ──────────────────
+// If related markets exist (same event, different deadlines), check spread consistency
+async function getPairsSpreadSignal(market: MarketInfo): Promise<{ prob: number | null; detail: any }> {
+  try {
+    // Find related markets by keyword matching (same base event)
+    const q = market.question.toLowerCase();
+    const keywords = q.split(/\s+/).filter(w => w.length > 3 && !["will","the","by","and","for","from","with","this","that","what"].includes(w)).slice(0, 4);
+    if (keywords.length < 2) return { prob: null, detail: { note: "insufficient keywords" } };
+
+    const mRes = await fetch(
+      `${GAMMA}/markets?active=true&closed=false&limit=30&order=volume24hr&ascending=false`,
+      { signal: AbortSignal.timeout(5000) },
+    );
+    if (!mRes.ok) return { prob: null, detail: null };
+    const mData = await mRes.json() as any;
+    const all = Array.isArray(mData) ? mData : [];
+
+    // Find related markets (share 2+ keywords, different slug)
+    const related: { slug: string; yesPrice: number; question: string; endDate: string }[] = [];
+    for (const m of all) {
+      if ((m.slug || "") === market.slug) continue;
+      const mq = (m.question || "").toLowerCase();
+      const matches = keywords.filter(kw => mq.includes(kw)).length;
+      if (matches >= 2) {
+        try {
+          const op = typeof m.outcomePrices === "string" ? JSON.parse(m.outcomePrices) : m.outcomePrices;
+          if (Array.isArray(op)) {
+            related.push({
+              slug: m.slug, yesPrice: parseFloat(op[0]),
+              question: m.question || "", endDate: m.endDate || "",
+            });
+          }
+        } catch {}
+      }
+    }
+
+    if (related.length === 0) return { prob: 0.5, detail: { note: "no related markets", keywords: keywords.slice(0, 3).join(",") } };
+
+    // Calculate spread vs each related market — Kakushadze Eq. 3.18-3.22
+    let totalSpreadDev = 0;
+    let pairCount = 0;
+    const pairDetails: string[] = [];
+
+    for (const r of related.slice(0, 3)) {
+      const spread = market.yesPrice - r.yesPrice;
+
+      // Expected spread based on deadline difference
+      let expectedSpread = 0;
+      if (market.endDate && r.endDate) {
+        const mEnd = new Date(market.endDate).getTime();
+        const rEnd = new Date(r.endDate).getTime();
+        const daysDiff = (mEnd - rEnd) / 86400000;
+        // Later deadline → should have higher or equal price
+        expectedSpread = daysDiff > 0 ? -Math.abs(daysDiff) * 0.002 : Math.abs(daysDiff) * 0.002;
+      }
+
+      const dev = spread - expectedSpread;
+      totalSpreadDev += dev;
+      pairCount++;
+      pairDetails.push(`${r.slug.slice(0, 20)}:${(dev * 100).toFixed(1)}c`);
+    }
+
+    if (pairCount === 0) return { prob: 0.5, detail: { note: "no valid pairs" } };
+
+    const avgDev = totalSpreadDev / pairCount;
+    // Positive dev = market overpriced vs pairs → NO bias
+    // Negative dev = market underpriced → YES bias
+    const prob = Math.max(0.1, Math.min(0.9, 0.5 - avgDev * 2.0));
+    return {
+      prob,
+      detail: { pairs: pairCount, avg_dev: (avgDev * 100).toFixed(1) + "c", pairs_detail: pairDetails },
+    };
+  } catch { return { prob: null, detail: null }; }
+}
+
 // ─── KOMBINÁTOR ───────────────────────────────────────────────────────────────
 function combine(signals: Record<string, number | null>) {
   const valid: Record<string, number> = {};
@@ -468,13 +636,16 @@ export default async function handler(req: Request, _ctx: Context) {
       return new Response(JSON.stringify({ ok: false, error: "Market not found" }), { status: 404, headers: CORS });
     }
 
-    // 2. Parallel signal fetch — all market-specific
-    const [vol, flow, apex, cond, fund] = await Promise.all([
+    // 2. Parallel signal fetch — all market-specific (8 signals)
+    const [vol, flow, apex, cond, fund, mom, contr, pairs] = await Promise.all([
       getVolSignal(market),
       getOrderflowSignal(market),
       getApexSignal(market),
       getCondProbSignal(market),
       getFundingSignal(),
+      getMomentumSignal(market),
+      getContrarianSignal(market),
+      getPairsSpreadSignal(market),
     ]);
 
     const raw_signals: Record<string, number | null> = {
@@ -483,6 +654,9 @@ export default async function handler(req: Request, _ctx: Context) {
       apex_consensus: apex.prob,
       cond_prob:      cond.prob,
       funding_rate:   fund.prob,
+      momentum:       mom.prob,
+      contrarian:     contr.prob,
+      pairs_spread:   pairs.prob,
     };
 
     const combo = combine(raw_signals);
@@ -511,6 +685,9 @@ export default async function handler(req: Request, _ctx: Context) {
         apex_consensus: apex.detail,
         cond_prob:      cond.detail,
         funding_rate:   fund.detail,
+        momentum:       mom.detail,
+        contrarian:     contr.detail,
+        pairs_spread:   pairs.detail,
       },
       fundamental_law: {
         avg_ic:      0.07,

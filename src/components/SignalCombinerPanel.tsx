@@ -89,6 +89,9 @@ const SIGNAL_META: Record<string, { label: string; tab: string; color: string; i
   apex_consensus: { label: "Apex Consensus",   tab: "Tab 08", color: "var(--accent)",  ic: 0.08 },
   cond_prob:      { label: "Cond. Prob",        tab: "Tab 09", color: "#f16535",        ic: 0.07 },
   funding_rate:   { label: "Funding Rate",      tab: "Tab 03", color: "#a78bfa",        ic: 0.05 },
+  momentum:       { label: "Momentum",          tab: "K.3.1",  color: "#f1c435",        ic: 0.06 },
+  contrarian:     { label: "Contrarian",         tab: "K.10.3", color: "#35f1a0",        ic: 0.05 },
+  pairs_spread:   { label: "Pairs Spread",      tab: "K.3.8",  color: "#f135a0",        ic: 0.07 },
 };
 
 function actionClass(action: string): string {
