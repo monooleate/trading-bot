@@ -157,8 +157,11 @@ export default function OrderFlowPanel() {
   const [lastUpdate,  setLastUpdate]  = useState<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  const tokenRef = useRef(tokenId);
+  tokenRef.current = tokenId;
+
   const analyze = useCallback(async (tid?: string) => {
-    const id = tid || tokenId;
+    const id = tid || tokenRef.current;
     if (!id.trim()) return;
     setLoading(true);
     try {
@@ -170,7 +173,7 @@ export default function OrderFlowPanel() {
       }
     } catch {}
     finally { setLoading(false); }
-  }, [tokenId]);
+  }, []);
 
   // Auto-refresh 60mp-ként
   useEffect(() => {
