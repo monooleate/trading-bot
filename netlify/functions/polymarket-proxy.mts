@@ -61,6 +61,12 @@ export default async function handler(req: Request, context: Context) {
     for (const evt of events) {
       const eventSlug = evt.slug || "";
       for (const m of (evt.markets || [])) {
+        // Skip closed/expired markets
+        if (m.closed === true) continue;
+        if (m.endDate) {
+          const end = new Date(m.endDate).getTime();
+          if (end < Date.now()) continue;
+        }
         const vol = parseFloat(m.volume24hr || m.volume || 0);
         if (vol < 5000) continue;
 

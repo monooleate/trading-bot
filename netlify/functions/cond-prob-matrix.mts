@@ -40,6 +40,9 @@ async function fetchTopMarkets(limit = 50): Promise<any[]> {
 
   const result: any[] = [];
   for (const m of list) {
+    // Skip closed/expired markets
+    if (m.closed === true) continue;
+    if (m.endDate && new Date(m.endDate).getTime() < Date.now()) continue;
     const prices = parsePrices(m.outcomePrices);
     if (!prices) continue;
     result.push({

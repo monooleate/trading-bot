@@ -74,10 +74,12 @@ async function resolveMarket(slug?: string): Promise<MarketInfo | null> {
       }
     }
 
-    // Find the right market within events
+    // Find the right market within events (skip closed/expired)
     for (const evt of events) {
       const eventSlug = evt.slug || "";
       for (const m of (evt.markets || [])) {
+        if (m.closed === true) continue;
+        if (m.endDate && new Date(m.endDate).getTime() < Date.now()) continue;
         // If specific slug requested, match it
         if (slug && !(m.slug || "").includes(slug.replace(/-\d+$/, "").slice(0, 15))) continue;
 
