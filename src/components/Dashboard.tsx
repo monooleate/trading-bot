@@ -242,7 +242,7 @@ const SWARM_PRESETS = [
   { label:"Egyedi",    mp:0.50, es:0.50 },
 ];
 
-const CATS = ["összes","crypto","politics","economics","geopolitics","finance"];
+const CATS = ["összes","geopolitics","sports","crypto","politics","economics"];
 
 // ─── SCANNER TAB ──────────────────────────────────────────────────────────────
 function ScannerTab({ bankroll }: { bankroll: number }) {
@@ -254,13 +254,25 @@ function ScannerTab({ bankroll }: { bankroll: number }) {
   const [cat, setCat]         = useState("összes");
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const filtered = markets.filter(m => cat === "összes" || m.category === cat);
+  const CAT_ALIASES: Record<string, string[]> = {
+    crypto: ["crypto","bitcoin","ethereum","cryptocurrency"],
+    politics: ["politics","elections","political"],
+    economics: ["economics","finance","economy"],
+    geopolitics: ["geopolitics","middle east","world","global"],
+    sports: ["sports","soccer","esports","nba","nfl","mlb","nhl","football","basketball"],
+  };
+  const filtered = markets.filter(m => {
+    if (cat === "összes") return true;
+    const mc = (m.category || "").toLowerCase();
+    const aliases = CAT_ALIASES[cat] || [cat];
+    return aliases.some(a => mc.includes(a) || a.includes(mc));
+  });
 
   // Auto-load from polymarket-proxy on mount
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch("/.netlify/functions/polymarket-proxy?limit=30");
+        const res = await fetch("/.netlify/functions/polymarket-proxy?limit=30&refresh=1");
         const json = await res.json();
         if (json.ok && Array.isArray(json.markets) && json.markets.length) {
           setMarkets(json.markets);
