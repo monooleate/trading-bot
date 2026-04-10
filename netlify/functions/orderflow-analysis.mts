@@ -170,10 +170,11 @@ async function fetchTrades(tokenId: string, limit: number) {
   // CLOB /trades endpoint requires auth - use /last-trade-price + order book instead
   // Public endpoint: /last-trade-price
   // For trade history use Data API /trades with asset filter
+  // Data API first (most reliable, has trade history), CLOB last (requires auth)
   const urls = [
-    `${CLOB}/last-trade-price?token_id=${encodeURIComponent(tokenId)}`,
     `https://data-api.polymarket.com/trades?asset=${encodeURIComponent(tokenId)}&limit=${Math.min(limit, 100)}`,
     `${CLOB}/trades?token_id=${encodeURIComponent(tokenId)}&limit=${limit}`,
+    `${CLOB}/last-trade-price?token_id=${encodeURIComponent(tokenId)}`,
   ];
 
   for (const url of urls) {
