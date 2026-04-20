@@ -16,6 +16,10 @@
 [functions."scheduled-scan"]
   schedule = "0 * * * *"
 
+# Auto-trader: minden 3 percben (UTC)
+[functions."auto-trader"]
+  schedule = "*/3 * * * *"
+
 [[headers]]
   for = "/*"
   [headers.values]

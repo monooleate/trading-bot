@@ -7,6 +7,7 @@ import ApexWalletsPanel from "./ApexWalletsPanel";
 import CondProbPanel from "./CondProbPanel";
 import SignalCombinerPanel from "./SignalCombinerPanel";
 import ArbMatrixPanel from "./ArbMatrixPanel";
+import TraderStatus from "./trader/TraderStatus";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 interface Market {
@@ -695,7 +696,7 @@ function SwarmTab({ bankroll }: { bankroll: number }) {
 export default function Dashboard() {
   const [tab, setTab]         = useState<string>("swarm");
   const [bankroll, setBankroll] = useState(200);
-  const TABS = [["scanner","01 // Scanner"],["ev","02 // EV Kalk."],["funding","03 // Funding Arb"],["swarm","04 // Swarm"],["trading","05 // Trading"],["orderflow","06 // Order Flow"],["vol","07 // Vol Harvest"],["apex","08 // Apex Wallets"],["condprob","09 // Cond. Prob"],["signals","10 // Signals"],["arbmatrix","11 // Arb Matrix"]] as const;
+  const TABS = [["scanner","01 // Scanner"],["ev","02 // EV Kalk."],["funding","03 // Funding Arb"],["swarm","04 // Swarm"],["trading","05 // Trading"],["orderflow","06 // Order Flow"],["vol","07 // Vol Harvest"],["apex","08 // Apex Wallets"],["condprob","09 // Cond. Prob"],["signals","10 // Signals"],["arbmatrix","11 // Arb Matrix"],["autotrader","12 // Auto-Trader"]] as const;
 
   return (
     <>
@@ -725,6 +726,7 @@ export default function Dashboard() {
           {tab === "condprob"  && <CondProbPanel bankroll={bankroll} />}
           {tab === "signals"   && <SignalCombinerPanel bankroll={bankroll} />}
           {tab === "arbmatrix" && <ArbMatrixPanel bankroll={bankroll} />}
+          {tab === "autotrader" && <TraderStatus />}
         </div>
       </div>
     </>

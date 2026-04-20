@@ -1,138 +1,182 @@
-# EdgeCalc – Polymarket Trading Dashboard
+# EdgeCalc Auto-Trader – Architecture
 
-**Verzió:** v8  
-**Stack:** Astro 5 + React 18 + Netlify Functions + Supabase  
-**Python scriptek:** 4 lokális elemző eszköz  
+> Quantitative Polymarket auto-trading system built on EdgeCalc signal infrastructure.
 
 ---
 
-## Mi ez?
+## Overview
 
-EdgeCalc egy kvantitatív kereskedési elemző dashboard Polymarket predikciós piacokhoz. Nem copy-trade bot, nem affiliate platform – saját implementáció matematikai alapokon, nyilvánosan elérhető akadémiai irodalom alapján.
+EdgeCalc Auto-Trader is a **serverless trading bot** that runs on Netlify Functions.
+It consumes signals from the existing EdgeCalc dashboard endpoints and executes
+trades on Polymarket via the CLOB API.
 
-**Fő forrásaink:**
-- *"Unravelling the Probabilistic Forest: Arbitrage in Prediction Markets"* (arXiv:2508.03474v1)
-- *Grinold & Kahn: Active Portfolio Management* (Fundamental Law)
-- Hubble Research: Polymarket bot detection methodology
-- Avellaneda-Stoikov market making framework
+**Core principle:** Signal layer is inherited (not rewritten), execution layer is new.
 
 ---
 
-## Architektúra
+## System Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  Frontend (Astro 5 + React 18)                              │
-│  11 tab, minden tab önálló React komponens                  │
-├─────────────────────────────────────────────────────────────┤
-│  Netlify Functions (15 serverless endpoint)                 │
-│  Cache: Netlify Blobs KV store                              │
-├───────────────┬─────────────────────────────────────────────┤
-│  Polymarket   │  Binance/Bybit                              │
-│  Gamma API    │  Futures API                                │
-│  CLOB API     │  Funding rates                              │
-│  Data API     │  Klines (OHLCV)                             │
-└───────────────┴─────────────────────────────────────────────┘
-```
-
----
-
-## A 11 Tab áttekintése
-
-| Tab | Neve | Fő technika | Dokumentáció |
-|-----|------|-------------|--------------|
-| 01 | Scanner | Polymarket piac scanner, EV calc | [01-scanner.md](./01-scanner.md) |
-| 02 | EV Calc | Expected Value + Kelly | [02-ev-kelly.md](./02-ev-kelly.md) |
-| 03 | Funding Arb | Delta-neutral funding rate | [03-funding-arb.md](./03-funding-arb.md) |
-| 04 | Swarm | Multi-agent Monte Carlo | [04-swarm.md](./04-swarm.md) |
-| 05 | Trading | Bybit/Binance/Polymarket exec | [05-trading.md](./05-trading.md) |
-| 06 | Order Flow | Kyle λ + VPIN + Hawkes | [06-orderflow.md](./06-orderflow.md) |
-| 07 | Vol Harvest | IV vs RV divergence | [07-vol-harvest.md](./07-vol-harvest.md) |
-| 08 | Apex Wallets | Bot detector + Category specialist | [08-apex-wallets.md](./08-apex-wallets.md) |
-| 09 | Cond. Prob | Marginal polytope violations | [09-cond-prob.md](./09-cond-prob.md) |
-| 10 | Signals | Fundamental Law kombinátor | [10-signal-combiner.md](./10-signal-combiner.md) |
-| 11 | Arb Matrix | VWAP + LLM Dependency + Polytope | [11-arb-matrix.md](./11-arb-matrix.md) |
-
----
-
-## Python CLI scriptek
-
-| Script | Funkció | Fő parancsok |
-|--------|---------|--------------|
-| `apex_wallet_profiler.py` | Leaderboard + Sharpe + Payout + Category | `--demo`, `--consensus`, `--profile 0x...` |
-| `vol_divergence.py` | BTC realized vs implied vol | `--demo`, `--watch`, `--json` |
-| `orderflow_analyzer.py` | Kyle λ + VPIN + Hawkes MLE | `--demo`, `--list-markets` |
-| `conditional_prob_matrix.py` | Monotonicity + Complement violations | `--demo`, `--scan-btc`, `--cli` |
-
----
-
-## Netlify Functions (15 endpoint)
-
-| Endpoint | Cache | Funkció |
-|----------|-------|---------|
-| `/apex-wallets` | 5-10 perc | Leaderboard, profil, consensus, bot detect |
-| `/vol-divergence` | 2 perc | Binance klines + PM implied vol |
-| `/orderflow-analysis` | 5 perc | Kyle λ, VPIN, Hawkes |
-| `/cond-prob-matrix` | 5 perc | Constraint violation scanner |
-| `/signal-combiner` | 3 perc | IR = IC × √N kombinátor |
-| `/vwap-arb` | 90 mp | Order book VWAP arb scanner |
-| `/llm-dependency` | 30 perc | Claude API piac függőség |
-| `/funding-rates` | 8 óra | Binance funding rates |
-| `/polymarket-proxy` | 1 óra | Gamma API CORS proxy |
-| `/bybit-trade` | – | Bybit v5 authenticated |
-| `/binance-trade` | – | Binance Futures authenticated |
-| `/polymarket-trade` | – | PM CLOB order exec |
-| `/auth` | – | JWT + SHA-256 session |
-| `/user-settings` | – | Bankroll/Kelly Blobs |
-| `/scheduled-scan` | cron | Óránkénti auto-refresh |
-
----
-
-## Gyors indítás
-
-```bash
-# Kicsomagolás és telepítés
-unzip edge-calc-v8.zip && cd edge-calc
-npm install
-
-# Lokális dev (Netlify CLI szükséges)
-netlify dev   # localhost:8888
-
-# Build
-npm run build
-
-# Deploy
-netlify deploy --prod --dir=dist
-```
-
-### Szükséges env vars (Netlify dashboard):
-
-```
-JWT_SECRET=<32+ karakter>
-AUTH_PASSWORD_HASH=<sha256>
-ANTHROPIC_API_KEY=<sk-ant-...>   # LLM dependency detectorhoz
-BYBIT_API_KEY=...
-BYBIT_API_SECRET=...
-BINANCE_API_KEY=...
-BINANCE_API_SECRET=...
-```
-
-### Hash generálás:
-```bash
-node -e "console.log(require('crypto').createHash('sha256').update('jelszo').digest('hex'))"
+┌─────────────────────────────────────────────────────────┐
+│  SIGNAL LAYER  (inherited from EdgeCalc v8)             │
+│                                                         │
+│  /funding-rates        → funding rate anomaly score     │
+│  /orderflow-analysis   → Kyle λ + VPIN + Hawkes         │
+│  /vol-divergence       → IV vs RV spread                │
+│  /apex-wallets         → smart money consensus          │
+│  /signal-combiner      → IR = IC × √N aggregation      │
+│  /cond-prob-matrix     → monotonicity violations        │
+└─────────────────────┬───────────────────────────────────┘
+                      │
+┌─────────────────────▼───────────────────────────────────┐
+│  AUTO-TRADER  (new, /auto-trader endpoint)              │
+│                                                         │
+│  1. Market Discovery   → Gamma API BTC up/down finder   │
+│  2. Signal Aggregation → parallel fetch from above      │
+│  3. Decision Engine    → edge threshold + Kelly sizing  │
+│  4. Execution          → @polymarket/clob-client orders │
+│  5. Session Manager    → PnL tracking, loss limits      │
+│  6. Monitoring         → Telegram alerts + NDJSON log   │
+└─────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Részletes dokumentáció
+## File Structure
 
-→ [01-scanner.md](./01-scanner.md) – Piac scanner és EV kalkulátor  
-→ [02-ev-kelly.md](./02-ev-kelly.md) – Expected Value és Kelly criterion  
-→ [03-funding-arb.md](./03-funding-arb.md) – Funding rate arbitrázs  
-→ [06-orderflow.md](./06-orderflow.md) – Order flow analízis (Kyle λ, VPIN, Hawkes)  
-→ [07-vol-harvest.md](./07-vol-harvest.md) – Volatility harvesting  
-→ [08-apex-wallets.md](./08-apex-wallets.md) – Apex wallet profiler  
-→ [09-cond-prob.md](./09-cond-prob.md) – Conditional probability matrix  
-→ [10-signal-combiner.md](./10-signal-combiner.md) – Signal kombinátor  
-→ [11-arb-matrix.md](./11-arb-matrix.md) – Arbitrage matrix  
-→ [roadmap.md](./roadmap.md) – Fejlesztési útvonal
+```
+netlify/functions/auto-trader/
+├── index.ts                    ← Netlify Function entry point
+│                                  Actions: run | status | reset | stop
+│                                  Scheduled: */3 * * * *
+├── crypto/
+│   ├── btc-market-finder.ts    ← Gamma API: active BTC up/down markets
+│   ├── signal-aggregator.ts    ← Fetches signal-combiner + fallback
+│   ├── decision-engine.ts      ← Edge calc, fee deduction, Kelly cap
+│   ├── execution.ts            ← @polymarket/clob-client BUY/SELL
+│   ├── order-lifecycle.ts      ← Fill polling, emergency FOK sell
+│   └── session-manager.ts      ← Netlify Blobs state persistence
+├── shared/
+│   ├── types.ts                ← All TypeScript interfaces
+│   ├── config.ts               ← Env vars, API endpoints, constants
+│   ├── logger.ts               ← NDJSON event logger
+│   └── telegram.ts             ← Telegram Bot API alerts
+├── sports/index.ts             ← Sprint 2 placeholder
+├── politics/index.ts           ← Sprint 3 placeholder
+└── macro/index.ts              ← Sprint 4 placeholder
+
+src/components/trader/
+├── CategorySelector.tsx        ← 4-category picker UI
+├── CryptoTrader.tsx            ← Crypto dashboard (run/status/reset/stop)
+└── TraderStatus.tsx            ← Router: category → trader view
+```
+
+---
+
+## Category Strategy Map
+
+| Category | Sprint | Mode | Edge Source | Min Edge | Fee |
+|----------|--------|------|-------------|----------|-----|
+| Crypto   | 1      | AUTO | FR + VPIN + Vol + Apex + CondProb | 15% | 1.8% |
+| Sports   | 2      | ALERT | Statistical model vs fan bias | 8% | 0.6% |
+| Politics | 3      | ALERT | LLM sentiment + polls | TBD | ~1% |
+| Macro    | 4      | ALERT | Weather/Fed/CPI data | TBD | TBD |
+
+Only **Crypto** is implemented in Sprint 1. Others are placeholder stubs.
+
+---
+
+## Decision Engine Parameters
+
+```
+edge_threshold       = 15% net (after 3.6% roundtrip fees)
+max_kelly_fraction   = 20% bankroll per trade
+cooldown             = 300s per market slug
+session_loss_limit   = $20 (configurable via env)
+min_open_interest    = $500
+min_active_signals   = 2
+```
+
+### Edge Calculation
+
+```
+gross_edge  = |final_prob - market_price|
+net_edge    = gross_edge - 0.036          (1.8% entry + 1.8% exit)
+shouldTrade = net_edge > EDGE_THRESHOLD
+```
+
+### Kelly Sizing
+
+```
+kelly_full    = max(0, (p*b - q) / b)     where b = 1/price - 1
+kelly_quarter = kelly_full * 0.25          institutional standard
+kelly_capped  = min(kelly_quarter, 0.20)   hard cap
+position_size = bankroll * kelly_capped
+```
+
+---
+
+## Execution Flow
+
+```
+1. findBtcMarkets()           → active BTC up/down markets from Gamma API
+2. aggregateSignals(slug)     → call /signal-combiner (or fallback to individual)
+3. makeDecision(signal, ...)  → edge check, kelly sizing, cooldown/loss guards
+4. placeBuyOrder(...)         → GTC limit order via clob-client (or paper sim)
+5. handleBuyLifecycle(...)    → wait for fill (paper: instant, live: poll)
+6. handleSellLifecycle(...)   → GTC sell → emergency FOK if timeout
+7. saveSession(...)           → persist to Netlify Blobs
+8. alertTradeClosed(...)      → Telegram notification
+```
+
+---
+
+## Environment Variables
+
+```env
+# Required for live trading
+POLY_PRIVATE_KEY=0x...
+POLY_FUNDER_ADDRESS=0x...
+POLY_SIGNATURE_TYPE=1
+
+# Auto-trader config
+PAPER_MODE=true                  # MUST be explicitly set to false for live
+SESSION_LOSS_LIMIT=20
+MAX_KELLY_FRACTION=0.20
+EDGE_THRESHOLD_CRYPTO=0.15
+COOLDOWN_SECONDS=300
+
+# Monitoring
+TELEGRAM_BOT_TOKEN=...
+TELEGRAM_CHAT_ID=...
+```
+
+---
+
+## API Endpoints
+
+```
+GET  /auto-trader?action=status    → current session state
+POST /auto-trader { action: "run" }    → execute one trading cycle
+POST /auto-trader { action: "reset" }  → reset session to defaults
+POST /auto-trader { action: "stop" }   → stop session (manual)
+```
+
+Scheduled: runs automatically every 3 minutes via Netlify cron.
+
+---
+
+## Signal Documentation (Inherited)
+
+The following docs describe the EdgeCalc signal modules consumed by the auto-trader:
+
+| File | Signal | Math |
+|------|--------|------|
+| `02-ev-kelly.md` | EV + Kelly criterion | f* = (pb-q)/b |
+| `06-orderflow.md` | Order flow analysis | Kyle λ, VPIN, Hawkes |
+| `07-vol-harvest.md` | Volatility divergence | IV vs RV spread |
+| `08-apex-wallets.md` | Smart money tracking | Payout ratio, bot detect |
+| `09-cond-prob.md` | Conditional probability | Marginal polytope violations |
+| `10-signal-combiner.md` | Signal combination | Grinold-Kahn IR = IC × √N |
+| `11-arb-matrix.md` | Arbitrage detection | VWAP scanner, LLM dependency |
+| `12-realtime-websocket.md` | WebSocket architecture | Future: real-time feed |

@@ -1,0 +1,17 @@
+---
+import Base from "../../layouts/Base.astro";
+import CategoryDashboard from "../../components/CategoryDashboard.tsx";
+
+export function getStaticPaths() {
+  return [
+    { params: { category: "crypto" } },
+    { params: { category: "weather" } },
+    { params: { category: "hyperliquid" } },
+  ];
+}
+
+const { category } = Astro.params;
+---
+<Base>
+  <CategoryDashboard category={category} client:only="react" />
+</Base>

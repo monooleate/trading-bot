@@ -8,6 +8,12 @@
 
 import type { Context } from "@netlify/functions";
 import { getStore } from "@netlify/blobs";
+import {
+  analyseResolutionRisk,
+  applyResolutionAdjustment,
+  type MarketMeta,
+  type ResolutionRiskScore,
+} from "./_resolution-risk.js";
 
 const CORS = {
   "Access-Control-Allow-Origin":  "*",
@@ -33,16 +39,21 @@ const SIGNAL_ICS: Record<string, number> = {
 
 // ─── Market info type ─────────────────────────────────────────────────────────
 interface MarketInfo {
-  question:     string;
-  slug:         string;
-  conditionId:  string;
-  yesTokenId:   string;
-  noTokenId:    string;
-  yesPrice:     number;
-  noPrice:      number;
-  volume24h:    number;
-  endDate:      string;
-  url:          string;
+  question:         string;
+  slug:             string;
+  conditionId:      string;
+  yesTokenId:       string;
+  noTokenId:        string;
+  yesPrice:         number;
+  noPrice:          number;
+  volume24h:        number;
+  endDate:          string;
+  url:              string;
+  // Extra fields for resolution-risk analysis
+  rules:            string;
+  resolutionSource: string;
+  category:         string;
+  closed:           boolean;
 }
 
 // ─── Resolve market from slug or auto-pick top volume ─────────────────────────
@@ -104,21 +115,29 @@ async function resolveMarket(slug?: string): Promise<MarketInfo | null> {
         } catch {}
 
         const marketSlug = m.slug || "";
+        const tags = evt.tags || m.tags || [];
+        const catRaw = Array.isArray(tags) && tags[0]
+          ? ((typeof tags[0] === "object" ? tags[0].label : tags[0]) || "").toString()
+          : "";
         return {
-          question:    m.question || m.title || evt.title || "",
-          slug:        marketSlug,
-          conditionId: m.id || m.conditionId || "",
-          yesTokenId:  yesToken.token_id,
-          noTokenId:   noToken?.token_id || "",
-          yesPrice:    yp,
-          noPrice:     np,
-          volume24h:   parseFloat(m.volume24hr || m.volume || 0),
-          endDate:     m.endDate || "",
-          url:         eventSlug && marketSlug
+          question:         m.question || m.title || evt.title || "",
+          slug:             marketSlug,
+          conditionId:      m.id || m.conditionId || "",
+          yesTokenId:       yesToken.token_id,
+          noTokenId:        noToken?.token_id || "",
+          yesPrice:         yp,
+          noPrice:          np,
+          volume24h:        parseFloat(m.volume24hr || m.volume || 0),
+          endDate:          m.endDate || "",
+          url:              eventSlug && marketSlug
             ? `https://polymarket.com/event/${eventSlug}/${marketSlug}`
             : eventSlug
               ? `https://polymarket.com/event/${eventSlug}`
               : "",
+          rules:            m.description || evt.description || "",
+          resolutionSource: m.resolutionSource || "",
+          category:         catRaw,
+          closed:           !!m.closed,
         };
       }
     }
@@ -641,8 +660,23 @@ export default async function handler(req: Request, _ctx: Context) {
       return new Response(JSON.stringify({ ok: false, error: "Market not found" }), { status: 404, headers: CORS });
     }
 
-    // 2. Parallel signal fetch — all market-specific (8 signals)
-    const [vol, flow, apex, cond, fund, mom, contr, pairs] = await Promise.all([
+    // 2. Parallel signal fetch — 8 signals + resolution-risk
+    // Resolution-risk runs in parallel; never blocks the primary signals.
+    const skipRisk    = url.searchParams.get("skip_risk") === "1";
+    const riskMeta: MarketMeta = {
+      question:         market.question,
+      slug:             market.slug,
+      rules:            market.rules,
+      resolutionSource: market.resolutionSource,
+      endDate:          market.endDate,
+      category:         market.category,
+      closed:           market.closed,
+    };
+    const riskTask: Promise<ResolutionRiskScore | null> = skipRisk
+      ? Promise.resolve(null)
+      : analyseResolutionRisk(riskMeta).catch(() => null);
+
+    const [vol, flow, apex, cond, fund, mom, contr, pairs, risk] = await Promise.all([
       getVolSignal(market),
       getOrderflowSignal(market),
       getApexSignal(market),
@@ -651,6 +685,7 @@ export default async function handler(req: Request, _ctx: Context) {
       getMomentumSignal(market),
       getContrarianSignal(market),
       getPairsSpreadSignal(market),
+      riskTask,
     ]);
 
     const raw_signals: Record<string, number | null> = {
@@ -667,6 +702,19 @@ export default async function handler(req: Request, _ctx: Context) {
     const combo = combine(raw_signals);
     const rec   = recommend(combo.combined, combo.ir, combo.kelly_q);
     const active = Object.values(raw_signals).filter(v => v !== null).length;
+
+    // Resolution-risk adjustment (additive, never breaks legacy output)
+    let adjusted: ReturnType<typeof applyResolutionAdjustment> | null = null;
+    if (risk) {
+      adjusted = applyResolutionAdjustment(combo.combined, market.yesPrice, risk);
+      // If risk blocks the trade, downgrade recommendation — leave `rec` intact
+      // so legacy consumers still see what the raw signals said.
+      if (!adjusted.trade_recommended && rec.action?.startsWith("BUY")) {
+        (rec as any).original_action = rec.action;
+        rec.action = risk.category === "SKIP" ? "SKIP" : "WATCH";
+        rec.rationale = `${adjusted.trade_blocked_reason} | was ${(rec as any).original_action}`;
+      }
+    }
 
     const payload = JSON.stringify({
       ok:                   true,
@@ -708,6 +756,12 @@ export default async function handler(req: Request, _ctx: Context) {
       },
       recommendation: rec,
       active_signals: active,
+      // ─── Resolution-risk adjustment (additive) ───────────────────────────
+      resolution_risk:      risk || null,
+      adjusted_probability: adjusted?.adjusted_probability ?? null,
+      adjusted_edge_pct:    adjusted?.adjusted_edge_pct ?? null,
+      trade_recommended:    adjusted?.trade_recommended ?? null,
+      trade_blocked_reason: adjusted?.trade_blocked_reason || null,
     });
 
     try { if (store) await store.set(cKey, payload, { metadata: { ts: Date.now() } }); } catch {}
