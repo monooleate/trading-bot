@@ -24,11 +24,13 @@ export interface TemperatureBucket {
 
 // ─── Slug parsing ─────────────────────────────────────────
 
+// Patterns are matched as hyphen-delimited tokens so short aliases like "la"
+// don't accidentally hit "kua-la-lumpur".
 const CITY_PATTERNS: Record<string, string[]> = {
   shanghai: ["shanghai"],
   london: ["london"],
   "new-york": ["new-york", "nyc", "new-york-city"],
-  "los-angeles": ["los-angeles", "la-"],
+  "los-angeles": ["los-angeles", "la"],
   chicago: ["chicago"],
   "hong-kong": ["hong-kong"],
   seoul: ["seoul"],
@@ -38,9 +40,9 @@ const CITY_PATTERNS: Record<string, string[]> = {
 };
 
 function parseCityFromSlug(slug: string): string | null {
-  const s = slug.toLowerCase();
+  const s = `-${slug.toLowerCase()}-`;
   for (const [city, patterns] of Object.entries(CITY_PATTERNS)) {
-    if (patterns.some((p) => s.includes(p))) return city;
+    if (patterns.some((p) => s.includes(`-${p}-`))) return city;
   }
   return null;
 }
@@ -68,9 +70,23 @@ function parseDateFromSlug(slug: string): string | null {
 // ─── Parse temperature from outcome label ─────────────────
 
 function parseTempFromLabel(label: string): number | null {
-  // "18°C" → 18
-  // "65°F or higher" → convert to C
-  // "Between 15°C and 20°C" → midpoint 17.5
+  // Supported formats:
+  //   "18°C"                 → 18
+  //   "15°C or below"        → 15
+  //   "22°C or higher"       → 22
+  //   "46-47°F"              → midpoint 46.5, converted to °C
+  //   "Between 15°C and 20°C"→ midpoint 17.5
+
+  // Hyphen-range: "46-47°F" or "14-15°C" → midpoint, then unit convert
+  const rangeMatch = label.match(/(-?\d+(?:\.\d+)?)\s*-\s*(-?\d+(?:\.\d+)?)\s*°?\s*([CF])/i);
+  if (rangeMatch) {
+    const mid = (parseFloat(rangeMatch[1]) + parseFloat(rangeMatch[2])) / 2;
+    if (rangeMatch[3].toUpperCase() === "F") {
+      return Math.round(((mid - 32) * 5 / 9) * 10) / 10;
+    }
+    return mid;
+  }
+
   const celsiusMatch = label.match(/(-?\d+(?:\.\d+)?)\s*°?\s*C/i);
   if (celsiusMatch) return parseFloat(celsiusMatch[1]);
 
@@ -89,32 +105,43 @@ function parseTempFromLabel(label: string): number | null {
   return null;
 }
 
-// ─── Parse buckets from market outcomes ───────────────────
+// ─── Parse buckets from an event's sub-markets ────────────
+//
+// Polymarket weather events are negRisk groups: one event per (city, date),
+// with N binary sub-markets — one per temperature range. We treat each
+// sub-market's YES side as one bucket, with YES price = P(temp ∈ bucket).
 
-function parseBuckets(market: any): TemperatureBucket[] {
+function parseBucketsFromEvent(evt: any): TemperatureBucket[] {
   const buckets: TemperatureBucket[] = [];
 
-  // Gamma API returns tokens array or outcomePrices
-  const tokens = market.tokens || [];
-  let prices: number[] = [];
-  try {
-    const op = typeof market.outcomePrices === "string"
-      ? JSON.parse(market.outcomePrices)
-      : market.outcomePrices;
-    if (Array.isArray(op)) prices = op.map((p: any) => parseFloat(p));
-  } catch {}
+  for (const m of evt.markets || []) {
+    if (m.closed === true) continue;
+    if (m.endDate && new Date(m.endDate).getTime() < Date.now()) continue;
 
-  if (tokens.length > 0) {
-    for (let i = 0; i < tokens.length; i++) {
-      const t = tokens[i];
-      const label = t.outcome || `Outcome ${i}`;
-      buckets.push({
-        label,
-        tokenId: t.token_id || "",
-        currentPrice: prices[i] ?? 0.5,
-        tempC: parseTempFromLabel(label),
-      });
-    }
+    const label = m.groupItemTitle || "";
+    if (!label) continue;
+
+    let clobIds: string[] = [];
+    try {
+      clobIds = typeof m.clobTokenIds === "string"
+        ? JSON.parse(m.clobTokenIds)
+        : m.clobTokenIds || [];
+    } catch {}
+
+    let prices: number[] = [];
+    try {
+      const op = typeof m.outcomePrices === "string"
+        ? JSON.parse(m.outcomePrices)
+        : m.outcomePrices;
+      if (Array.isArray(op)) prices = op.map((p: any) => parseFloat(p));
+    } catch {}
+
+    buckets.push({
+      label,
+      tokenId: clobIds[0] || "",           // YES token
+      currentPrice: prices[0] ?? 0.5,      // YES price
+      tempC: parseTempFromLabel(label),
+    });
   }
 
   return buckets;
@@ -123,7 +150,9 @@ function parseBuckets(market: any): TemperatureBucket[] {
 // ─── Main finder ──────────────────────────────────────────
 
 export async function findWeatherMarkets(): Promise<WeatherMarket[]> {
-  const url = `${GAMMA_API}/events?tag=weather&limit=50&order=volume24hr&ascending=false&active=true`;
+  // Gamma's `tag=weather` filter is broken (returns unrelated markets), so
+  // pull a wide active slice and filter by question text / slug ourselves.
+  const url = `${GAMMA_API}/events?limit=500&active=true&closed=false&order=volume24hr&ascending=false`;
   const res = await fetch(url, {
     headers: { Accept: "application/json", "User-Agent": "EdgeCalc-Weather/1.0" },
     signal: AbortSignal.timeout(8000),
@@ -138,50 +167,52 @@ export async function findWeatherMarkets(): Promise<WeatherMarket[]> {
   const results: WeatherMarket[] = [];
 
   for (const evt of events) {
-    for (const m of evt.markets || []) {
-      const question = m.question || m.title || evt.title || "";
-      const slug = m.slug || "";
+    const title = evt.title || "";
+    const slug  = evt.slug  || "";
 
-      // Must be temperature-related
-      const q = question.toLowerCase();
-      if (!q.includes("temp") && !q.includes("highest") && !q.includes("hottest") && !q.includes("warmest") && !q.includes("coldest") && !q.includes("°")) {
-        continue;
-      }
+    // Must be a daily-max temperature event. Our forecast engine models the
+    // daily high, so "lowest/coldest" markets would be semantically backwards.
+    const t = title.toLowerCase();
+    if (t.includes("lowest") || t.includes("coldest")) continue;
+    const isTempEvent =
+      t.includes("highest temperature") ||
+      t.includes("hottest") ||
+      t.includes("warmest") ||
+      (t.includes("temperature") && t.includes("°"));
+    if (!isTempEvent) continue;
 
-      // Skip closed/expired
-      if (m.closed === true) continue;
-      if (m.endDate && new Date(m.endDate).getTime() < Date.now()) continue;
+    // Parse city + date (event-level)
+    const city = parseCityFromSlug(slug) || parseCityFromSlug(t.replace(/\s+/g, "-"));
+    if (!city) continue;
 
-      // Parse city and date
-      const city = parseCityFromSlug(slug) || parseCityFromSlug(question.toLowerCase().replace(/\s+/g, "-"));
-      if (!city) continue;
+    const station = getStation(city);
+    if (!station) continue;
 
-      // Must have a known station
-      const station = getStation(city);
-      if (!station) continue;
+    const date = parseDateFromSlug(slug) || parseDateFromSlug(t.replace(/\s+/g, "-"));
+    if (!date) continue;
 
-      const date = parseDateFromSlug(slug) || parseDateFromSlug(question.toLowerCase().replace(/\s+/g, "-"));
-      if (!date) continue;
+    // Aggregate sub-markets into buckets
+    const outcomes = parseBucketsFromEvent(evt);
+    if (outcomes.length === 0) continue;
 
-      // Parse buckets
-      const outcomes = parseBuckets(m);
-      if (outcomes.length === 0) continue;
+    // Event end date = max of sub-market endDates (fallback to evt.endDate)
+    const endDate = evt.endDate || evt.markets?.[0]?.endDate || "";
+    if (endDate && new Date(endDate).getTime() < Date.now()) continue;
 
-      const vol = parseFloat(m.volume24hr || m.volume || "0");
+    const vol = parseFloat(evt.volume24hr || evt.volume || "0");
 
-      results.push({
-        slug,
-        conditionId: m.conditionId || "",
-        title: question,
-        city,
-        date,
-        clobTokenIds: outcomes.map((o) => o.tokenId),
-        outcomes,
-        volume24h: vol,
-        endDate: m.endDate || "",
-        active: true,
-      });
-    }
+    results.push({
+      slug,
+      conditionId: evt.markets?.[0]?.conditionId || "",  // not used for negRisk exec
+      title,
+      city,
+      date,
+      clobTokenIds: outcomes.map((o) => o.tokenId),
+      outcomes,
+      volume24h: vol,
+      endDate,
+      active: true,
+    });
   }
 
   results.sort((a, b) => b.volume24h - a.volume24h);

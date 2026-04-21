@@ -7,6 +7,7 @@ import { getForecast } from "./forecast-engine.mts";
 import { detectModelLag } from "./model-lag-detector.mts";
 import { matchBucket } from "./bucket-matcher.mts";
 import { makeWeatherDecision, getWeatherConfig } from "./decision-engine.mts";
+import { recordDebSample } from "./deb.mts";
 import type { WeatherTradeDecision, WeatherConfig } from "./decision-engine.mts";
 import { placeBuyOrder } from "../crypto/execution.mts";
 import {
@@ -223,6 +224,26 @@ export async function runWeatherTrader(config: WeatherConfig) {
           };
 
           updatedSession = closePosition(updatedSession, position.buyOrderId, trade);
+
+          // DEB feedback: record per-model accuracy. In paper mode we draw a
+          // synthetic "actual" from a Gaussian around the ensemble so the DEB
+          // pipeline is exercised; real settlement temp will replace this in
+          // live mode via a separate reconciliation job (TODO).
+          try {
+            const syntheticActual = forecast.ensembleMaxC + randNormal() * 1.0;
+            await recordDebSample(
+              market.city,
+              market.date,
+              parseFloat(syntheticActual.toFixed(2)),
+              {
+                gfs:   forecast.rawGfsMaxC,
+                ecmwf: forecast.rawEcmwfMaxC,
+                noaa:  forecast.rawNoaaMaxC,
+              },
+            );
+          } catch {
+            // DEB is best-effort — never block the trade close on it
+          }
         }
 
         results.push({
@@ -269,4 +290,12 @@ function summarize(s: any) {
     tradeCount: s.tradeCount,
     openPositions: s.openPositions.length,
   };
+}
+
+// Box-Muller transform — unit-variance gaussian for paper-mode DEB feedback
+function randNormal(): number {
+  let u = 0, v = 0;
+  while (u === 0) u = Math.random();
+  while (v === 0) v = Math.random();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
 }

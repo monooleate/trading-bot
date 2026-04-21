@@ -2,6 +2,16 @@
 // Polymarket uses official airport METAR data for settlement,
 // NOT city weather app values. The city_offset corrects for the
 // systematic difference between station and city center temps.
+//
+// Verified against alteregoeth-ai/weatherbot settlement-station mapping:
+//   NYC     → KLGA (LaGuardia)      — NOT KNYC, NOT KJFK
+//   Chicago → KORD (O'Hare)
+//   Miami   → KMIA (Miami Intl)
+//   Dallas  → KDAL (Love Field)     — NOT KDFW (Dallas/Fort Worth)
+//   Seattle → KSEA (Sea-Tac)
+//   Atlanta → KATL (Hartsfield)
+//   London  → EGLC (London City)    — NOT EGLL (Heathrow)
+//   Tokyo   → RJTT (Haneda)         — NOT RJAA (Narita)
 
 export interface StationConfig {
   icao: string;
@@ -27,11 +37,13 @@ export const SETTLEMENT_STATIONS: Record<string, StationConfig> = {
     },
   },
   london: {
-    icao: "EGLL",
-    lat: 51.4775,
-    lon: -0.4614,
+    // EGLC = London City Airport (inner-east London, on the Thames).
+    // Polymarket settles on EGLC, not EGLL (Heathrow) — average spread ~1-2°C.
+    icao: "EGLC",
+    lat: 51.5053,
+    lon: 0.0553,
     tz: "Europe/London",
-    city_offset: -0.5,
+    city_offset: -0.2,
     peakHoursUTC: {
       summer: [13, 14, 15],
       winter: [12, 13],
@@ -40,11 +52,14 @@ export const SETTLEMENT_STATIONS: Record<string, StationConfig> = {
     },
   },
   "new-york": {
-    icao: "KNYC",
-    lat: 40.7789,
-    lon: -73.9692,
+    // KLGA = LaGuardia. Polymarket settles on LGA, not KNYC (Central Park)
+    // and not KJFK. LGA is in Queens near the harbour, slightly cooler than
+    // Manhattan midday.
+    icao: "KLGA",
+    lat: 40.7772,
+    lon: -73.8726,
     tz: "America/New_York",
-    city_offset: 0.0,
+    city_offset: 0.2,
     peakHoursUTC: {
       summer: [19, 20, 21],
       winter: [18, 19, 20],
@@ -141,6 +156,37 @@ export const SETTLEMENT_STATIONS: Record<string, StationConfig> = {
       winter: [19, 20],
       autumn: [19, 20],
       spring: [19, 20, 21],
+    },
+  },
+  dallas: {
+    // KDAL = Dallas Love Field. Polymarket settles on KDAL, NOT KDFW
+    // (Dallas/Fort Worth International). KDAL is inside the city, minimal
+    // urban-vs-airport differential.
+    icao: "KDAL",
+    lat: 32.8471,
+    lon: -96.8518,
+    tz: "America/Chicago",
+    city_offset: 0.3,
+    peakHoursUTC: {
+      summer: [20, 21, 22],
+      winter: [20, 21],
+      autumn: [20, 21],
+      spring: [20, 21, 22],
+    },
+  },
+  tokyo: {
+    // RJTT = Haneda. Polymarket settles on RJTT, NOT RJAA (Narita).
+    // RJTT is on Tokyo Bay inside the urban area; close to city center temps.
+    icao: "RJTT",
+    lat: 35.5494,
+    lon: 139.7798,
+    tz: "Asia/Tokyo",
+    city_offset: -0.5,
+    peakHoursUTC: {
+      summer: [5, 6, 7],
+      winter: [4, 5],
+      autumn: [4, 5, 6],
+      spring: [5, 6, 7],
     },
   },
 };

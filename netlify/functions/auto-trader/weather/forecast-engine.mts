@@ -1,6 +1,12 @@
 import type { StationConfig } from "./station-config.mts";
 import { getSeason } from "./station-config.mts";
 import { correctForecast } from "./metar-simulator.mts";
+import {
+  fetchEnsemble,
+  ensembleEnabled,
+  type EnsembleResult,
+} from "./ensemble-forecast.mts";
+import { getDebWeights, type DebWeights } from "./deb.mts";
 
 const TIMEOUT = 8000;
 
@@ -18,6 +24,12 @@ export interface ForecastResult {
   confidence: number;          // 0–1
   modelUsed: string;
   fetchedAt: string;
+  // ─ Additive fields (all optional for backwards compat) ──────────────────
+  // 31-member GFS ensemble distribution, only populated when USE_ENSEMBLE=true
+  // and the Open-Meteo ensemble API responded successfully.
+  ensembleDetail?: EnsembleResult | null;
+  // Model weights used for this forecast (either fixed defaults or DEB-adjusted).
+  modelWeightsUsed?: DebWeights;
 }
 
 // ─── Open-Meteo fetch ─────────────────────────────────────
@@ -112,17 +124,23 @@ function computeEnsemble(
   ecmwf: number | null,
   noaa: number | null,
   cloudCoverPct: number,
+  debWeights: DebWeights,
 ): { ensemble: number; confidence: number; modelUsed: string } {
   const models: { name: string; value: number; weight: number }[] = [];
 
-  // Weight depends on cloud cover:
-  // Sunny day: GFS/NOAA 60%, ECMWF 40%
-  // Cloudy/rainy: ECMWF 70%, GFS/NOAA 30%
+  // Base weight comes from DEB (Dynamic Error Balancing).
+  // If DEB is bootstrapping (< threshold trades), getDebWeights() returns
+  // the original fixed defaults, so this code path is unchanged for new
+  // installs.
+  // Cloud cover still modulates relative model weights slightly, since
+  // ECMWF is historically stronger in cloudy/humid regimes.
   const isCloudy = cloudCoverPct > 60;
+  const cloudBoostEcmwf = isCloudy ? 1.3 : 1.0;
+  const cloudBoostGfs   = isCloudy ? 0.8 : 1.0;
 
-  if (gfs !== null) models.push({ name: "GFS", value: gfs, weight: isCloudy ? 0.3 : 0.6 });
-  if (ecmwf !== null) models.push({ name: "ECMWF", value: ecmwf, weight: isCloudy ? 0.7 : 0.4 });
-  if (noaa !== null) models.push({ name: "NOAA", value: noaa, weight: isCloudy ? 0.3 : 0.5 });
+  if (gfs   !== null) models.push({ name: "GFS",   value: gfs,   weight: debWeights.gfs   * cloudBoostGfs  });
+  if (ecmwf !== null) models.push({ name: "ECMWF", value: ecmwf, weight: debWeights.ecmwf * cloudBoostEcmwf });
+  if (noaa  !== null) models.push({ name: "NOAA",  value: noaa,  weight: debWeights.noaa });
 
   if (models.length === 0) {
     return { ensemble: 20, confidence: 0, modelUsed: "none" };
@@ -156,26 +174,43 @@ export async function getForecast(
   station: StationConfig,
   targetDate: string, // YYYY-MM-DD
 ): Promise<ForecastResult> {
-  // Parallel fetch all models
-  const [gfsResult, ecmwfResult, noaaResult] = await Promise.all([
+  // Load DEB weights (per-city if available). Falls back to fixed defaults
+  // when the city has < MIN_TRADES_FOR_DEB closed trades.
+  const debWeights = await getDebWeights(city);
+
+  // Parallel fetch: GFS + ECMWF + NOAA always; ensemble only if enabled.
+  const [gfsResult, ecmwfResult, noaaResult, ensembleResult] = await Promise.all([
     fetchOpenMeteo(station, "gfs_seamless"),
     fetchOpenMeteo(station, "ecmwf_ifs025"),
     fetchNOAA(station),
+    ensembleEnabled() ? fetchEnsemble(station, targetDate) : Promise.resolve(null),
   ]);
 
-  const gfsMax = gfsResult?.maxTemp ?? null;
-  const ecmwfMax = ecmwfResult?.maxTemp ?? null;
+  const gfsMax     = gfsResult?.maxTemp ?? null;
+  const ecmwfMax   = ecmwfResult?.maxTemp ?? null;
   const cloudCover = gfsResult?.cloudCover ?? ecmwfResult?.cloudCover ?? 50;
 
-  const { ensemble, confidence, modelUsed } = computeEnsemble(
-    gfsMax,
-    ecmwfMax,
-    noaaResult,
-    cloudCover,
-  );
+  // Base ensemble (original GFS+ECMWF+NOAA path) — always computed so we
+  // have a fallback and can log raw per-model outputs.
+  const base = computeEnsemble(gfsMax, ecmwfMax, noaaResult, cloudCover, debWeights);
+
+  let ensembleMaxC = base.ensemble;
+  let confidence   = base.confidence;
+  let modelUsed    = base.modelUsed;
+
+  // If the 31-member GFS ensemble is available, prefer its distribution
+  // (higher signal-to-noise than the fixed 2- or 3-model blend).
+  if (ensembleResult && ensembleResult.memberCount >= 5) {
+    ensembleMaxC = ensembleResult.dailyMaxMean;
+    // Unanimity proxy: tighter stddev → higher confidence
+    // stddev <= 0.5°C → 0.95 ; stddev >= 3°C → 0.30
+    const sd = ensembleResult.dailyMaxStdDev;
+    confidence = Math.max(0.30, Math.min(0.95, 1.0 - sd / 4.0));
+    modelUsed = `GFS-ENS31(${ensembleResult.memberCount})+${base.modelUsed}`;
+  }
 
   // Apply station offset + METAR rounding
-  const predictedMax = correctForecast(ensemble, station.city_offset);
+  const predictedMax = correctForecast(ensembleMaxC, station.city_offset);
 
   return {
     city,
@@ -184,10 +219,12 @@ export async function getForecast(
     rawGfsMaxC: gfsMax,
     rawEcmwfMaxC: ecmwfMax,
     rawNoaaMaxC: noaaResult,
-    ensembleMaxC: ensemble,
+    ensembleMaxC: parseFloat(ensembleMaxC.toFixed(2)),
     cloudCoverPct: Math.round(cloudCover),
     confidence,
     modelUsed,
     fetchedAt: new Date().toISOString(),
+    ensembleDetail: ensembleResult,
+    modelWeightsUsed: debWeights,
   };
 }
