@@ -58,6 +58,22 @@ function parseTokenIds(m: GammaMarket): [string, string] | null {
   return null;
 }
 
+// Detect short-market duration from the question text (e.g. "BTC up in 5
+// minutes"). Returns null when the question gives no duration hint, in which
+// case the entry-window/hold-to-end filters are skipped for that market.
+function parseDurationMs(question: string): number | null {
+  const q = question.toLowerCase();
+  const re = /(\d+)\s*(second|sec|s|minute|min|m|hour|hr|h)\b/;
+  const match = q.match(re);
+  if (!match) return null;
+  const n = parseInt(match[1], 10);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  const unit = match[2];
+  if (unit.startsWith("s")) return n * 1000;
+  if (unit.startsWith("h")) return n * 60 * 60 * 1000;
+  return n * 60 * 1000; // minutes
+}
+
 function parseYesPrice(m: GammaMarket): number {
   try {
     const op =
@@ -110,6 +126,13 @@ export async function findBtcMarkets(
       const yesPrice = parseYesPrice(m);
       const vol24h = parseFloat(m.volume24hr || m.volume || "0");
 
+      const durationMs = parseDurationMs(question);
+      const endTs = m.endDate ? new Date(m.endDate).getTime() : NaN;
+      const openedAtEstimate =
+        durationMs && Number.isFinite(endTs)
+          ? new Date(endTs - durationMs).toISOString()
+          : undefined;
+
       results.push({
         slug: m.slug || "",
         conditionId: m.conditionId || "",
@@ -121,6 +144,8 @@ export async function findBtcMarkets(
         volume24h: vol24h,
         endDate: m.endDate || "",
         active: true,
+        durationMs: durationMs ?? undefined,
+        openedAtEstimate,
       });
     }
   }

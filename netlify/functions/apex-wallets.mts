@@ -242,6 +242,93 @@ function detectBot(trades: any[]): BotScore {
 }
 
 
+// ─── LP profil + Subgroup klasszifikáció (P2.4) ──────────────────────
+// Hubble Research 2025 LP-bot tipológia alapján három alcsoport:
+//   A — Reward Farmers      → FADE target (eladunk velük szembe)
+//   B — Naive Mid-Quoters    → FADE target
+//   C — Smart MMs           → COPY target (követjük az irányukat)
+// A poly_data lokális Python script futtatásával validálandó (C3); itt
+// a publikus Data API alapján adunk egy első közelítést.
+
+interface LPProfile {
+  maker_ratio:                 number;  // maker fills / total fills
+  trades_per_day:              number;
+  two_sided_ratio:             number;  // markets with BUY+SELL / unique markets
+  top_market_concentration:    number;  // share of trades in top-5 markets
+  active_days:                 number;
+}
+
+function buildLPProfile(trades: any[]): LPProfile {
+  if (trades.length === 0) {
+    return { maker_ratio: 0, trades_per_day: 0, two_sided_ratio: 0, top_market_concentration: 0, active_days: 0 };
+  }
+  // maker / taker — Polymarket trades expose a `liquidity` field
+  // ("MAKER" | "TAKER"). When absent we conservatively treat it as taker
+  // (so the maker_ratio cannot be inflated for unknowns).
+  const makerCount = trades.filter((t: any) => {
+    const lq = (t.liquidity || t.role || "").toString().toUpperCase();
+    return lq === "MAKER";
+  }).length;
+  const maker_ratio = parseFloat((makerCount / trades.length).toFixed(3));
+
+  // Active days
+  const dayKeys = new Set<string>();
+  for (const t of trades) {
+    const ts = new Date(t.timestamp || 0).getTime();
+    if (ts > 0) dayKeys.add(new Date(ts).toISOString().slice(0, 10));
+  }
+  const active_days = Math.max(1, dayKeys.size);
+  const trades_per_day = parseFloat((trades.length / active_days).toFixed(2));
+
+  // Two-sided ratio: markets where the wallet had both BUY and SELL fills
+  const sidesByMarket: Record<string, Set<string>> = {};
+  for (const t of trades) {
+    const mkt = t.market || t.conditionId || "unknown";
+    const side = (t.side || "").toUpperCase();
+    if (!sidesByMarket[mkt]) sidesByMarket[mkt] = new Set();
+    if (side === "BUY" || side === "SELL") sidesByMarket[mkt].add(side);
+  }
+  const uniqueMarkets = Object.keys(sidesByMarket).length;
+  const twoSided = Object.values(sidesByMarket).filter(s => s.size >= 2).length;
+  const two_sided_ratio = uniqueMarkets > 0 ? parseFloat((twoSided / uniqueMarkets).toFixed(3)) : 0;
+
+  // Concentration: share of trades in top-5 markets
+  const counts: Record<string, number> = {};
+  for (const t of trades) {
+    const mkt = t.market || t.conditionId || "unknown";
+    counts[mkt] = (counts[mkt] || 0) + 1;
+  }
+  const sortedCounts = Object.values(counts).sort((a, b) => b - a);
+  const top5Sum = sortedCounts.slice(0, 5).reduce((s, v) => s + v, 0);
+  const top_market_concentration = parseFloat((top5Sum / trades.length).toFixed(3));
+
+  return { maker_ratio, trades_per_day, two_sided_ratio, top_market_concentration, active_days };
+}
+
+export type LPSubgroup = "A" | "B" | "C" | null;
+
+export function classifySubgroup(p: LPProfile, totalTrades: number): {
+  subgroup: LPSubgroup;
+  action: "FADE" | "COPY" | null;
+  reason: string;
+} {
+  if (totalTrades < 2000 || p.active_days < 30) return { subgroup: null, action: null, reason: "Sample too small (< 2000 trades or < 30 active days)" };
+  if (p.maker_ratio < 0.40)                    return { subgroup: null, action: null, reason: "Maker ratio < 40% — not LP-like" };
+
+  // Reward Farmers: extreme high-frequency two-sided quoting concentrated in
+  // a handful of (probably reward-eligible) markets.
+  if (p.trades_per_day > 80 && p.two_sided_ratio > 0.85 && p.top_market_concentration > 0.80) {
+    return { subgroup: "A", action: "FADE", reason: "Reward Farmer: HF two-sided, top-5 market concentration > 80%" };
+  }
+  if (p.trades_per_day > 80 && p.two_sided_ratio > 0.85) {
+    return { subgroup: "B", action: "FADE", reason: "Naive Mid-Quoter: HF two-sided across more markets" };
+  }
+  if (p.maker_ratio > 0.40 && p.maker_ratio < 0.85 && p.trades_per_day < 80) {
+    return { subgroup: "C", action: "COPY", reason: "Smart MM candidate: moderate maker ratio, lower frequency" };
+  }
+  return { subgroup: null, action: null, reason: "Does not match A/B/C heuristics" };
+}
+
 // ─── Wallet profil számítás ───────────────────────────────────────────────────
 function buildProfile(address: string, trades: any[], activity: any[]) {
   // Total PnL (redemptions + trade PnL)
@@ -327,6 +414,10 @@ function buildProfile(address: string, trades: any[], activity: any[]) {
   // Bot detekció
   const botScore = detectBot(trades);
 
+  // LP profil + Subgroup klasszifikáció (P2.4)
+  const lpProfile = buildLPProfile(trades);
+  const lpSubgroup = classifySubgroup(lpProfile, trades.length);
+
   // Apex csak ha nem bot
   const isApexFinal = isApex && botScore.classification !== "BOT" && botScore.classification !== "LIKELY_BOT";
 
@@ -350,6 +441,8 @@ function buildProfile(address: string, trades: any[], activity: any[]) {
     latest_trades:  latestTrades,
     time_activity:  timeActivity,
     bot_score:      botScore,
+    lp_profile:     lpProfile,
+    lp_subgroup:    lpSubgroup,
     payout_ratio:   payout_ratio,
     avg_win:        parseFloat(avg_win.toFixed(4)),
     avg_loss:       parseFloat(avg_loss.toFixed(4)),

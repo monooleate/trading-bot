@@ -340,6 +340,45 @@ function BotScoreCard({ bs }: { bs: any }) {
   );
 }
 
+// ─── LP SUBGROUP CARD (P2.4) ────────────────────────────────────────
+function LPSubgroupCard({ lp, sg }: { lp: any; sg: any }) {
+  const subgroup = sg?.subgroup as "A" | "B" | "C" | null;
+  const action   = sg?.action;
+  const reason   = sg?.reason || "";
+  const cls = subgroup === "A" ? "red" : subgroup === "B" ? "yellow" : subgroup === "C" ? "green" : "blue";
+  const label = subgroup
+    ? `${subgroup} — ${action} target`
+    : "Nem LP minta";
+  return (
+    <div className="aw-card">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+        <div className="aw-ct" style={{ margin: 0 }}>LP Subgroup</div>
+        <span className={`aw-tag ${cls}`}>{label}</span>
+      </div>
+      <div className="aw-row"><span className="lbl">Maker ratio</span>
+        <span className={`val ${(lp?.maker_ratio||0) > 0.4 ? "ec-warn" : "ec-pos"}`}>{((lp?.maker_ratio||0)*100).toFixed(1)}%</span>
+      </div>
+      <div className="aw-row"><span className="lbl">Trades / day</span>
+        <span className={`val ${(lp?.trades_per_day||0) > 80 ? "ec-warn" : "ec-pos"}`}>{(lp?.trades_per_day||0).toFixed(1)}</span>
+      </div>
+      <div className="aw-row"><span className="lbl">Two-sided market arány</span>
+        <span className={`val ${(lp?.two_sided_ratio||0) > 0.85 ? "ec-warn" : "ec-pos"}`}>{((lp?.two_sided_ratio||0)*100).toFixed(0)}%</span>
+      </div>
+      <div className="aw-row"><span className="lbl">Top-5 piac koncentráció</span>
+        <span className={`val ${(lp?.top_market_concentration||0) > 0.8 ? "ec-warn" : "ec-pos"}`}>{((lp?.top_market_concentration||0)*100).toFixed(0)}%</span>
+      </div>
+      <div className="aw-row"><span className="lbl">Aktív napok</span>
+        <span className="val ec-neu">{lp?.active_days || 0}</span>
+      </div>
+      <div style={{ marginTop: 10, fontFamily: "var(--mono)", fontSize: 10, color: "var(--muted)", lineHeight: 1.6 }}>
+        → {reason}<br />
+        {subgroup === "C" && <span style={{ color: "var(--accent)" }}>→ COPY: kövessék az irányukat a signal-combiner-ben</span>}
+        {(subgroup === "A" || subgroup === "B") && <span style={{ color: "var(--danger)" }}>→ FADE: ellenpozíció a signal-combiner-ben</span>}
+      </div>
+    </div>
+  );
+}
+
 // ─── TIME HEATMAP COMPONENT ───────────────────────────────────────────────────
 const SESSION_META: Record<string, { label: string; color: string; utc: string }> = {
   low_liquidity: { label: '4AM ET – Low Liq',  color: 'var(--accent)',  utc: 'UTC 07-10' },
@@ -699,6 +738,7 @@ function ProfileTab({ bankroll }: { bankroll: number }) {
       {p && <PayoutCard p={p} />}
       {p?.time_activity && <TimeHeatmap ta={p.time_activity} />}
       {p?.bot_score && <BotScoreCard bs={p.bot_score} />}
+      {p?.lp_subgroup?.subgroup && <LPSubgroupCard lp={p.lp_profile} sg={p.lp_subgroup} />}
 
       <div className="aw-info">
         <strong>Fontos:</strong> Polymarket proxy wallet address kell (nem az EOA/MetaMask address).<br />

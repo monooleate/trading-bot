@@ -4,6 +4,24 @@ Ez a fájl Claude Code számára készült. Minden fejlesztési session elején 
 
 ---
 
+## ⚠️ KÖTELEZŐ SESSION-ZÁRÓ SZABÁLY
+
+**Minden session végén frissíteni kell a dokumentációt.** Ez nem opcionális.
+
+Mielőtt a sessiont lezárod (utolsó válasz a usernek), végezd el az alábbi ellenőrző listát:
+
+1. **CLAUDE.md `AKTUÁLIS ÁLLAPOT` szekció** – ha bármi élő rendszerállapot változott (működő/hibás tabok, ismert bugok, deploy státusz), frissítsd a dátummal együtt (`AKTUÁLIS ÁLLAPOT (YYYY-MM-DD)`).
+2. **`internal-docs/` érintett fájlok** – ha egy tab/function/algoritmus logikája változott, frissítsd a hozzá tartozó markdown fájlt (pl. `06-orderflow.md`, `08-apex-wallets.md`).
+3. **`internal-docs/changelog/`** – minden nem-triviális változásnál hozz létre vagy egészíts ki egy `CHANGELOG-YYYY-MM-DD.md` fájlt: mit változtattál, miért, melyik fájl(ok)ban.
+4. **Új tab vagy function** – kötelezően új `internal-docs/NN-name.md` fájl + bejegyzés a `README.md`-ben + a CLAUDE.md tab-táblázat bővítése.
+5. **TODO / Hiányos implementációk** – ha új technikai debt keletkezett vagy egy meglévő megoldódott, frissítsd az `Ismert limitációk és TODO-k` szekciót.
+
+**Ha nem volt érdemi változás** (csak kérdés/olvasás történt), akkor sem kell üres commit – de mondd ki explicit a session végén: *"Nincs dokumentáció-frissítés szükséges, mert csak X történt."*
+
+**Ha a felhasználó megszakít** (pl. új feladatra vált) a session zárása előtt: a következő érdemi commit előtt mindenképpen pótolni kell az elmaradt doc-frissítést.
+
+---
+
 ## Mi ez a projekt?
 
 **EdgeCalc** egy kvantitatív Polymarket trading dashboard.  
@@ -331,7 +349,25 @@ netlify deploy --prod --dir=dist
 
 ---
 
-## AKTUÁLIS ÁLLAPOT (2026-04-08) – Claude Code folytatáshoz
+## AKTUÁLIS ÁLLAPOT (2026-05-08) – Claude Code folytatáshoz
+
+### Mai session változások (2026-05-08)
+- **A.1 Kelly egységesítés:** új `src/lib/math.ts` `kellyBinary()` (¼-Kelly + 8% hard cap), Dashboard.tsx 3 call site-ja átállítva, `MAX_KELLY_FRACTION` env default 0.20→0.08.
+- **A.2 Polymarket Auto-Claim:** új `netlify/functions/polymarket-redeem.mts` (auth-protected, intent-only mintázat) + `RedeemSection` a TradingPanel Polymarket sub-paneljében.
+- **A.3 Korai Exit (BTC 5m/15m):** TP/SL clamp + entry-window filter (60-180s), hold-to-end (<60s). `MarketInfo.openedAtEstimate` mező + `getBtcExitConfig()` env-ekkel + új `checkExitConditions()` pure függvény.
+- **A.4 Order Book Imbalance:** Binance top-10 depth ratio mint konvergencia szignál a decision-engine-ben. Új `obImbalance` mező az `AggregatedSignal`-ben.
+- **A.5 LP Subgroup A/B/C:** apex-wallets bővítve `lp_profile` (maker_ratio, two_sided, top-5 concentration) + `classifySubgroup` (FADE A/B, COPY C). Új `LPSubgroupCard` az ApexWalletsPanel-ben.
+- **A.6 Pair-Cost Arb scanner:** új `pair-cost-arb.mts` + Tab 11 D chip — VWAP-validált YES+NO redeem arb.
+- **SETTINGS rendszer:** új `trader-settings.mts` (auth-protected, Blobs runtime override store, range-clamp validáció) + új `SettingsPanel.tsx` komponens („⚙ Beállítások" 13. tab) saját login overlay-jel. `getEffectiveTraderConfig()` async wrapper merge-eli env+Blobs.
+- **B (külön MD):** `internal-docs/migration/hetzner-migration-plan.md` 7-fázisos action plan a következő sessionnek (HL+funding-arb+P2.2+P3.3 Hetzner-re költözés).
+
+### Hova nyúlj legközelebb
+- Settings tabon paraméter állítás → 3 perc múlva a következő cron tick már az új értékekkel fut (env override redeploy nélkül)
+- Trading panel → Polymarket → új „Auto-Claim" section: wallet 0x… cím beírása + Ellenőriz → claimable USDC
+- Tab 11 D — Pair-Cost Arb: GET hívás `/.netlify/functions/pair-cost-arb?minProfit=0.03&notional=50` → table
+- Tab 8 (Apex) → profil betöltés → új LP Subgroup card jelenik meg ha 2000+ trade és 30+ active day a wallet-en
+
+### Mi marad a régi AKTUÁLIS ÁLLAPOT-ból (2026-04-08)
 
 ### Mi működik élőben
 - Tab 06: Vol harvest fut, BTC szűrő javítva (deploy után él)

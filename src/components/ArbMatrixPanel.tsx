@@ -431,6 +431,92 @@ function PolytopeTab() {
   );
 }
 
+// ─── PAIR-COST ARB TAB (C4) ─────────────────────────────────────────
+function PairCostTab() {
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const [minProfit, setMinProfit] = useState("3");
+  const [notional, setNotional] = useState("50");
+
+  const scan = useCallback(async () => {
+    setLoading(true);
+    try {
+      const url = `${FN}/pair-cost-arb?minProfit=${parseFloat(minProfit)/100}&notional=${notional}`;
+      const r = await fetch(url);
+      const j = await r.json();
+      if (j.ok) setData(j);
+    } catch {} finally { setLoading(false); }
+  }, [minProfit, notional]);
+
+  const cands = data?.candidates || [];
+
+  return (
+    <div>
+      <div className="am-info" style={{ marginBottom: 14 }}>
+        <strong>Riskless YES+NO redeem:</strong> minden binary piacon, ahol a top YES ask + NO ask &lt; $1.00,
+        a két oldal együttes vétele után <code>redeemPositions</code> garantáltan $1.00-t fizet sharenként.
+        A scanner a megadott <code>notional</code>-on VWAP-ot számol, így a depth-en túli slippage kiszűrhető.
+      </div>
+
+      <div style={{ display: "flex", gap: 8, alignItems: "flex-end", marginBottom: 14 }}>
+        <div>
+          <div className="am-lbl">Min profit %</div>
+          <input className="am-input" value={minProfit} onChange={e => setMinProfit(e.target.value)} style={{ width: 80 }} />
+        </div>
+        <div>
+          <div className="am-lbl">Test notional ($)</div>
+          <input className="am-input" value={notional} onChange={e => setNotional(e.target.value)} style={{ width: 100 }} />
+        </div>
+        <button className="am-btn primary" onClick={scan} disabled={loading}>{loading ? "..." : "🔍 Scan"}</button>
+      </div>
+
+      {data && (
+        <div className="am-card">
+          <div className="am-ct">{cands.length} arb candidate</div>
+          {cands.length === 0 ? (
+            <div style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--muted)" }}>
+              Nincs jelenleg pair-cost arb a megadott küszöbök fölött.
+            </div>
+          ) : (
+            <table className="am-tbl">
+              <thead>
+                <tr>
+                  <th>Piac</th>
+                  <th>YES ask</th>
+                  <th>NO ask</th>
+                  <th>Combined</th>
+                  <th>Profit (top)</th>
+                  <th>Profit (VWAP @${data.params?.testNotional})</th>
+                  <th>Vol 24h</th>
+                </tr>
+              </thead>
+              <tbody>
+                {cands.map((c: any, i: number) => (
+                  <tr key={i}>
+                    <td><div className="am-mq" title={c.title}>{c.title}</div></td>
+                    <td>{(c.yesAsk * 100).toFixed(1)}¢</td>
+                    <td>{(c.noAsk * 100).toFixed(1)}¢</td>
+                    <td>{(c.combined * 100).toFixed(1)}¢</td>
+                    <td className="ec-pos" style={{ fontWeight: 700 }}>{(c.profitPct * 100).toFixed(2)}%</td>
+                    <td className={c.profitPctVwap !== null && c.profitPctVwap > 0 ? "ec-pos" : "ec-warn"}>
+                      {c.profitPctVwap !== null ? (c.profitPctVwap * 100).toFixed(2) + "%" : "thin"}
+                    </td>
+                    <td style={{ color: "var(--muted)" }}>${(c.volume24h / 1000).toFixed(0)}k</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          <div style={{ marginTop: 12, fontFamily: "var(--mono)", fontSize: 10, color: "var(--muted)", lineHeight: 1.7 }}>
+            ⚠ Execution: a két oldalt atomikusan kell venni (YES+NO együtt), majd resolution után az auto-claim.
+            Slippage és gas: kb. 1-3¢ buffer ajánlott.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── ROOT ─────────────────────────────────────────────────────────────────────
 export default function ArbMatrixPanel({ bankroll }: { bankroll: number }) {
   const [tab, setTab] = useState("vwap");
@@ -445,7 +531,7 @@ export default function ArbMatrixPanel({ bankroll }: { bankroll: number }) {
               Arbitrage Matrix
             </div>
             <div style={{ fontFamily:"var(--mono)",fontSize:11,color:"var(--muted)" }}>
-              VWAP Arb • LLM Dependency Detector • Marginal Polytope
+              VWAP Arb • LLM Dependency Detector • Marginal Polytope • Pair-Cost
             </div>
           </div>
         </div>
@@ -455,6 +541,7 @@ export default function ArbMatrixPanel({ bankroll }: { bankroll: number }) {
             ["vwap",     "A. VWAP Arb Scanner"],
             ["llm",      "B. LLM Dependency"],
             ["polytope", "C. Polytope Checker"],
+            ["paircost", "D. Pair-Cost Arb"],
           ].map(([id, lbl]) => (
             <div key={id} className={`am-chip ${tab === id ? "active" : ""}`}
               onClick={() => setTab(id)}>{lbl}</div>
@@ -464,6 +551,7 @@ export default function ArbMatrixPanel({ bankroll }: { bankroll: number }) {
         {tab === "vwap"     && <VWAPTab     bankroll={bankroll} />}
         {tab === "llm"      && <LLMDepTab   />}
         {tab === "polytope" && <PolytopeTab />}
+        {tab === "paircost" && <PairCostTab />}
       </div>
     </>
   );

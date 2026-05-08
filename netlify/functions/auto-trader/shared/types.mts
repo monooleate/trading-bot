@@ -15,6 +15,10 @@ export interface MarketInfo {
   volume24h: number;
   endDate: string;
   active: boolean;
+  // Optional duration metadata for short-market exit/entry filters (P1.2).
+  // Populated by btc-market-finder for BTC 5m/15m markets.
+  durationMs?: number;            // total market lifetime
+  openedAtEstimate?: string;      // ISO of estimated market open (endDate - durationMs)
 }
 
 // ─── Signal types ─────────────────────────────────────────
@@ -33,6 +37,13 @@ export interface AggregatedSignal {
   signalBreakdown: SignalBreakdown;
   activeSignals: number;          // count of non-null signals
   timestamp: string;
+  // P1.3: optional Binance order-book imbalance confirmation. UP/DOWN
+  // is set only when the bid/ask depth ratio crosses the configured
+  // thresholds; NEUTRAL or null mean the imbalance gate is open.
+  obImbalance?: {
+    ratio: number;                // bidDepth / askDepth (top-10)
+    direction: "UP" | "DOWN" | "NEUTRAL";
+  } | null;
 }
 
 // ─── Decision types ───────────────────────────────────────

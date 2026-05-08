@@ -1,6 +1,52 @@
 import { placeSellOrder, getBestBid, checkOrderStatus } from "./execution.mts";
 import { log } from "../shared/logger.mts";
+import { getBtcExitConfig } from "../shared/config.mts";
 import type { MarketInfo, Position, ClosedTrade, OrderRecord } from "../shared/types.mts";
+
+// ─── P1.2 — Exit decision for short-market positions ─────────
+// Pure function (no I/O): given the current YES price and the market's
+// estimated open/end timestamps, returns whether the position should be
+// closed and at what price. Designed to be called once per cron tick on
+// every open BTC short-market position before evaluating new entries.
+
+export type ExitReason = "TP_HIT" | "SL_HIT" | "RESOLUTION_IMMINENT" | null;
+
+export interface ExitDecision {
+  shouldExit: boolean;
+  reason: ExitReason;
+  exitPrice: number;
+  holdToEnd: boolean;
+}
+
+export function checkExitConditions(
+  position: Position,
+  market: MarketInfo,
+  currentYesPrice: number,
+  now: number = Date.now(),
+  override?: ReturnType<typeof getBtcExitConfig>,
+): ExitDecision {
+  const cfg = override ?? getBtcExitConfig();
+
+  // Convert YES-side price into the position-side price (NO = 1 - YES).
+  const positionPrice =
+    position.direction === "YES" ? currentYesPrice : 1 - currentYesPrice;
+
+  // Hold-to-end: too close to resolution to safely exit.
+  if (market.endDate) {
+    const msToEnd = new Date(market.endDate).getTime() - now;
+    if (msToEnd <= cfg.holdToEndCutoffMs) {
+      return { shouldExit: false, reason: "RESOLUTION_IMMINENT", exitPrice: positionPrice, holdToEnd: true };
+    }
+  }
+
+  if (positionPrice >= cfg.tpTarget) {
+    return { shouldExit: true, reason: "TP_HIT", exitPrice: positionPrice, holdToEnd: false };
+  }
+  if (positionPrice <= cfg.slTarget) {
+    return { shouldExit: true, reason: "SL_HIT", exitPrice: positionPrice, holdToEnd: false };
+  }
+  return { shouldExit: false, reason: null, exitPrice: positionPrice, holdToEnd: false };
+}
 
 const MAX_BUY_RETRIES = 3;
 const SELL_RETRY_DELAY_MS = 100;

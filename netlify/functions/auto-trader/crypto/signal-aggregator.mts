@@ -3,6 +3,54 @@ import type { AggregatedSignal, SignalBreakdown } from "../shared/types.mts";
 
 const TIMEOUT = 8000;
 
+// ─── P1.3: Binance order-book imbalance helper ──────────────────────
+// Pulls top-10 bid/ask depth and compares cumulative size. Used by the
+// decision-engine as a convergence filter alongside the combined signal.
+//
+// Cached in-memory per process for 30s — Netlify Function cold starts
+// reset this, so worst case we hit the public REST endpoint once per
+// trader cron tick (every 3 min).
+
+interface ObCache {
+  ts: number;
+  ratio: number;
+}
+const OB_CACHE = new Map<string, ObCache>();
+const OB_TTL_MS = 30_000;
+
+export async function fetchOrderBookImbalance(symbol: string = "BTCUSDT"): Promise<number | null> {
+  const cached = OB_CACHE.get(symbol);
+  if (cached && Date.now() - cached.ts < OB_TTL_MS) return cached.ratio;
+  try {
+    const url = `https://api.binance.com/api/v3/depth?symbol=${symbol}&limit=20`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT) });
+    if (!res.ok) return null;
+    const j: any = await res.json();
+    const bids = (j.bids || []).slice(0, 10);
+    const asks = (j.asks || []).slice(0, 10);
+    if (!bids.length || !asks.length) return null;
+    const bidDepth = bids.reduce((s: number, [, q]: [string, string]) => s + parseFloat(q), 0);
+    const askDepth = asks.reduce((s: number, [, q]: [string, string]) => s + parseFloat(q), 0);
+    if (askDepth <= 0) return null;
+    const ratio = bidDepth / askDepth;
+    OB_CACHE.set(symbol, { ts: Date.now(), ratio });
+    return ratio;
+  } catch {
+    return null;
+  }
+}
+
+export function classifyImbalance(
+  ratio: number | null,
+  upThreshold: number,
+  downThreshold: number,
+): "UP" | "DOWN" | "NEUTRAL" {
+  if (ratio === null || !Number.isFinite(ratio)) return "NEUTRAL";
+  if (ratio >= upThreshold) return "UP";
+  if (ratio <= downThreshold) return "DOWN";
+  return "NEUTRAL";
+}
+
 /**
  * Fetch all EdgeCalc signals for a given market slug in parallel.
  * Uses the existing Netlify Function endpoints (signal-combiner).
@@ -10,15 +58,19 @@ const TIMEOUT = 8000;
  */
 export async function aggregateSignals(
   slug: string,
+  obThresholds?: { up: number; down: number },
 ): Promise<AggregatedSignal> {
+  const obRatioPromise = fetchOrderBookImbalance("BTCUSDT");
+
   // Primary: use signal-combiner which already aggregates everything
+  let result: AggregatedSignal | null = null;
   try {
     const url = `${FN}/signal-combiner?slug=${encodeURIComponent(slug)}`;
     const res = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT) });
     const data = await res.json();
 
     if (data.ok) {
-      return {
+      result = {
         finalProb: data.combined_probability ?? 0.5,
         kellyFraction: data.kelly?.quarter ?? 0,
         signalBreakdown: extractBreakdown(data.raw_signals),
@@ -30,8 +82,17 @@ export async function aggregateSignals(
     console.error("[signal-aggregator] combiner failed, falling back:", err);
   }
 
-  // Fallback: fetch individual signals in parallel
-  return fetchIndividualSignals(slug);
+  if (!result) result = await fetchIndividualSignals(slug);
+
+  // P1.3: enrich with order-book imbalance
+  const ratio = await obRatioPromise;
+  const up = obThresholds?.up ?? 1.8;
+  const down = obThresholds?.down ?? 0.55;
+  result.obImbalance =
+    ratio === null
+      ? null
+      : { ratio: parseFloat(ratio.toFixed(3)), direction: classifyImbalance(ratio, up, down) };
+  return result;
 }
 
 function extractBreakdown(rawSignals: any): SignalBreakdown {

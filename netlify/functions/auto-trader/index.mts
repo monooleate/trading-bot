@@ -6,7 +6,7 @@
 // Sprint 1: only crypto category is active.
 
 import type { Context } from "@netlify/functions";
-import { CORS, getTraderConfig } from "./shared/config.mts";
+import { CORS, getTraderConfig, getBtcExitConfig, getEffectiveTraderConfig, getEffectiveBtcExitConfig } from "./shared/config.mts";
 import { log, getLogBuffer } from "./shared/logger.mts";
 import { alertTradeOpen, alertTradeClosed, alertSessionStop, alertError } from "./shared/telegram.mts";
 import { findBtcMarkets } from "./crypto/btc-market-finder.mts";
@@ -127,7 +127,19 @@ export default async function handler(req: Request, _ctx: Context) {
 
 // ─── Crypto trader main loop ──────────────────────────────
 
-async function runCryptoTrader(config: ReturnType<typeof getTraderConfig>) {
+async function runCryptoTrader(initialConfig: ReturnType<typeof getTraderConfig>) {
+  // Pull live overrides from the trader-settings store so paper-mode
+  // tuning takes effect on the next cron tick without a redeploy.
+  const config  = await getEffectiveTraderConfig();
+  const btcExit = await getEffectiveBtcExitConfig();
+  // P1.3 OB-imbalance thresholds (override-able via /trader-settings)
+  let obUp = 1.8, obDown = 0.55;
+  try {
+    const mod: any = await import("../trader-settings.mts");
+    const ov = await mod.loadRuntimeOverrides();
+    if (typeof ov.obImbalanceUpRatio   === "number") obUp   = ov.obImbalanceUpRatio;
+    if (typeof ov.obImbalanceDownRatio === "number") obDown = ov.obImbalanceDownRatio;
+  } catch {}
   const session = await loadSession(config.paperMode, DEFAULT_BANKROLL);
 
   // Check if session is stopped
@@ -171,7 +183,7 @@ async function runCryptoTrader(config: ReturnType<typeof getTraderConfig>) {
 
     try {
       // 3. Aggregate signals
-      const signal = await aggregateSignals(market.slug);
+      const signal = await aggregateSignals(market.slug, { up: obUp, down: obDown });
 
       log("SIGNAL", config.paperMode, {
         market: market.slug,
@@ -189,6 +201,7 @@ async function runCryptoTrader(config: ReturnType<typeof getTraderConfig>) {
         updatedSession.bankrollCurrent,
         updatedSession.sessionLoss,
         config,
+        btcExit,
       );
 
       if (!decision.shouldTrade) {
@@ -247,7 +260,7 @@ async function runCryptoTrader(config: ReturnType<typeof getTraderConfig>) {
       // 8. In paper mode, immediately simulate sell at resolved price
       if (config.paperMode) {
         // Simulate: market resolves at final_prob (simplified paper logic)
-        const exitPrice = simulatePaperExit(signal.finalProb, market.currentPrice, decision.direction);
+        const exitPrice = simulatePaperExit(signal.finalProb, market.currentPrice, decision.direction, btcExit);
 
         const trade = await handleSellLifecycle(
           position,
@@ -381,16 +394,24 @@ function simulatePaperExit(
   finalProb: number,
   marketPrice: number,
   direction: "YES" | "NO",
+  cfg?: ReturnType<typeof getBtcExitConfig>,
 ): number {
   // Paper mode simulation: price moves halfway toward our predicted probability
   // This is conservative — real markets may move more or less
+  let positionExit: number;
   if (direction === "YES") {
-    return Math.min(0.99, marketPrice + (finalProb - marketPrice) * 0.5);
+    positionExit = Math.min(0.99, marketPrice + (finalProb - marketPrice) * 0.5);
   } else {
     const noPrice = 1 - marketPrice;
     const noPredicted = 1 - finalProb;
-    return Math.min(0.99, noPrice + (noPredicted - noPrice) * 0.5);
+    positionExit = Math.min(0.99, noPrice + (noPredicted - noPrice) * 0.5);
   }
+  // P1.2: clamp the simulated exit to [SL, TP] so paper trades realise the
+  // same early-exit profile as live trades, not the unrealistic full-edge fill.
+  const c = cfg ?? getBtcExitConfig();
+  if (positionExit >= c.tpTarget) return c.tpTarget;
+  if (positionExit <= c.slTarget) return c.slTarget;
+  return positionExit;
 }
 
 function jsonResponse(data: any, status = 200) {

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { fetchMarkets, fetchFundingRates, loadSettings, saveSettings, getOrCreateUID } from "../lib/api";
+import { calcEV as sharedCalcEV, calcKelly as sharedCalcKelly, kellyBinary } from "../lib/math";
 import TradingPanel from "./TradingPanel";
 import OrderFlowPanel from "./OrderFlowPanel";
 import VolDivergencePanel from "./VolDivergencePanel";
@@ -8,6 +9,7 @@ import CondProbPanel from "./CondProbPanel";
 import SignalCombinerPanel from "./SignalCombinerPanel";
 import ArbMatrixPanel from "./ArbMatrixPanel";
 import TraderStatus from "./trader/TraderStatus";
+import SettingsPanel from "./SettingsPanel";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 interface Market {
@@ -62,12 +64,8 @@ interface MCResult {
 }
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
-const calcEV  = (tp: number, mp: number) => tp * (1 - mp) - (1 - tp) * mp;
-const calcKelly = (tp: number, mp: number): number => {
-  if (mp <= 0 || mp >= 1) return 0;
-  const b = 1 / mp - 1;
-  return Math.max(0, (tp * b - (1 - tp)) / b);
-};
+const calcEV = sharedCalcEV;
+const calcKelly = sharedCalcKelly;
 const clamp   = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 const rand    = (a: number, b: number) => a + Math.random() * (b - a);
 const randNorm = (mu = 0, sigma = 1) => {
@@ -330,7 +328,9 @@ function ScannerTab({ bankroll }: { bankroll: number }) {
 
         {sel && (() => {
           const mp = sel.yes_price, tp = up / 100, edge = tp - mp;
-          const ev = calcEV(tp, mp), kF = calcKelly(tp, mp), pos = bankroll * kF * 0.25;
+          const ev = calcEV(tp, mp);
+          const k  = kellyBinary(tp, mp, bankroll);
+          const kF = k.fStar, pos = k.size;
           const dir = edge > 0 ? "YES" : "NO", ok = Math.abs(edge) > 0.04 && kF > 0.02;
           return (
             <div className="ec-card">
@@ -376,7 +376,8 @@ function EVTab({ bankroll }: { bankroll: number }) {
   const [kelly, setKelly] = useState(0.25);
   const mpF = mp / 100, tpF = tp / 100;
   const edge = tpF - mpF, ev = calcEV(tpF, mpF);
-  const kF = calcKelly(tpF, mpF), kA = kF * kelly, pos = bankroll * kA;
+  const k = kellyBinary(tpF, mpF, bankroll, { fraction: kelly });
+  const kF = k.fStar, kA = kF * kelly, pos = k.size;
   const dir = edge > 0 ? "YES" : edge < 0 ? "NO" : "—";
   const ok = Math.abs(edge) > 0.04 && kF > 0.02;
 
@@ -524,7 +525,9 @@ function SwarmTab({ bankroll }: { bankroll: number }) {
 
   useEffect(() => () => { if (intRef.current) clearInterval(intRef.current); }, []);
 
-  const edge = cons - mp, ev = calcEV(cons, mp), kF = calcKelly(cons, mp), pos = bankroll * kF * 0.25;
+  const edge = cons - mp, ev = calcEV(cons, mp);
+  const swarmK = kellyBinary(cons, mp, bankroll);
+  const kF = swarmK.fStar, pos = swarmK.size;
   const dir = edge > 0.01 ? "YES" : edge < -0.01 ? "NO" : "WAIT";
   const ok = Math.abs(edge) > 0.04 && kF > 0.02;
 
@@ -696,7 +699,7 @@ function SwarmTab({ bankroll }: { bankroll: number }) {
 export default function Dashboard() {
   const [tab, setTab]         = useState<string>("swarm");
   const [bankroll, setBankroll] = useState(200);
-  const TABS = [["scanner","01 // Scanner"],["ev","02 // EV Kalk."],["funding","03 // Funding Arb"],["swarm","04 // Swarm"],["trading","05 // Trading"],["orderflow","06 // Order Flow"],["vol","07 // Vol Harvest"],["apex","08 // Apex Wallets"],["condprob","09 // Cond. Prob"],["signals","10 // Signals"],["arbmatrix","11 // Arb Matrix"],["autotrader","12 // Auto-Trader"]] as const;
+  const TABS = [["scanner","01 // Scanner"],["ev","02 // EV Kalk."],["funding","03 // Funding Arb"],["swarm","04 // Swarm"],["trading","05 // Trading"],["orderflow","06 // Order Flow"],["vol","07 // Vol Harvest"],["apex","08 // Apex Wallets"],["condprob","09 // Cond. Prob"],["signals","10 // Signals"],["arbmatrix","11 // Arb Matrix"],["autotrader","12 // Auto-Trader"],["settings","⚙ Beállítások"]] as const;
 
   return (
     <>
@@ -727,6 +730,7 @@ export default function Dashboard() {
           {tab === "signals"   && <SignalCombinerPanel bankroll={bankroll} />}
           {tab === "arbmatrix" && <ArbMatrixPanel bankroll={bankroll} />}
           {tab === "autotrader" && <TraderStatus />}
+          {tab === "settings"  && <SettingsPanel />}
         </div>
       </div>
     </>

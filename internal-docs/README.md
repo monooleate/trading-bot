@@ -166,17 +166,59 @@ Scheduled: runs automatically every 3 minutes via Netlify cron.
 
 ---
 
-## Signal Documentation (Inherited)
+## Folder Structure
 
-The following docs describe the EdgeCalc signal modules consumed by the auto-trader:
+```
+internal-docs/
+├── README.md               ← this file
+├── app/                    ← architecture, deploy, feature patches, prompts
+├── math/                   ← signal math + academic reference
+└── changelog/              ← session-by-session history
+```
+
+## app/ — application-level docs
+
+| File | Topic |
+|------|-------|
+| `app/architecture.md` | **Full current-state snapshot** (start here for any new session) |
+| `app/roadmap.md` | Sprint status + TODO priorities |
+| `app/DEPLOY.md` | Netlify deploy workflow |
+| `app/hyperliquid.md` | Hyperliquid perp engine details |
+| `app/weather-patch.md` | Weather module patch details |
+| `app/edgecalc-autotrader-prompt.md` | Original auto-trader design prompt |
+| `app/edgecalc-hyperliquid-prompt.md` | HL adaptation prompt |
+| `app/edgecalc-funding-arb-patch.md` | Funding arb patch prompt |
+| `app/edgecalc-weather-patch.md` | Weather patch prompt |
+| `app/edgecalc-resolution-risk-prompt.md` | Resolution risk scorer prompt |
+
+## math/ — signal math and academic reference
 
 | File | Signal | Math |
 |------|--------|------|
-| `02-ev-kelly.md` | EV + Kelly criterion | f* = (pb-q)/b |
-| `06-orderflow.md` | Order flow analysis | Kyle λ, VPIN, Hawkes |
-| `07-vol-harvest.md` | Volatility divergence | IV vs RV spread |
-| `08-apex-wallets.md` | Smart money tracking | Payout ratio, bot detect |
-| `09-cond-prob.md` | Conditional probability | Marginal polytope violations |
-| `10-signal-combiner.md` | Signal combination | Grinold-Kahn IR = IC × √N |
-| `11-arb-matrix.md` | Arbitrage detection | VWAP scanner, LLM dependency |
-| `12-realtime-websocket.md` | WebSocket architecture | Future: real-time feed |
+| `math/02-ev-kelly.md` | EV + Kelly criterion | f* = (pb-q)/b |
+| `math/06-orderflow.md` | Order flow analysis | Kyle λ, VPIN, Hawkes |
+| `math/07-vol-harvest.md` | Volatility divergence | IV vs RV spread |
+| `math/08-apex-wallets.md` | Smart money tracking | Payout ratio, bot detect |
+| `math/09-cond-prob.md` | Conditional probability | Marginal polytope violations |
+| `math/10-signal-combiner.md` | Signal combination | Grinold-Kahn IR = IC × √N |
+| `math/11-arb-matrix.md` | Arbitrage detection | VWAP scanner, LLM dependency |
+| `math/12-realtime-websocket.md` | WebSocket architecture | Future: real-time feed |
+| `math/151-Trading-Strategies.pdf` | Academic reference (Kakushadze) | 151 strategies anthology |
+
+## changelog/ — change history
+
+| File | Scope |
+|------|-------|
+| `changelog/CHANGELOG.md` | Main changelog |
+| `changelog/CHANGELOG-2026-04-21.md` | 2026-04-21 session (4 sprints: resolution-risk → HL → funding-arb → weather) |
+| `changelog/CHANGELOG-2026-05-08.md` | 2026-05-08 session (master-plan A.1–A.6, runtime settings UI, Hetzner migration plan) |
+
+## migration/ — Hetzner VPS migration
+
+| File | Scope |
+|------|-------|
+| `migration/hetzner-migration-plan.md` | **Action plan a következő sessionnek** (7 fázis, EdgeCalc-specifikus) |
+| `migration/migration-plan.md` | Strangler-fig 9 fázisos absztrakt terv |
+| `migration/infrastructure.md` | VPS spec (Postgres, Redis, Caddy, Bun, PM2) |
+| `migration/risk-coordinator.md` | Per-venue watchdog + globális kill switch design |
+| `migration/new-strategies-roadmap_1.md` | 37 stratégia rangsorolva, top 11 a Hetzner utánra |

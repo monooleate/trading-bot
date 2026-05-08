@@ -299,6 +299,107 @@ function ExchangePanel({ exchange }: { exchange: Exchange }) {
   );
 }
 
+// ─── POLYMARKET REDEEM (P1.4 — auto-claim) ──────────────────────────
+function RedeemSection() {
+  const [wallet, setWallet] = useState(() =>
+    typeof window !== "undefined" ? localStorage.getItem("ec_pm_wallet") || "" : "",
+  );
+  const [info, setInfo] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const [intent, setIntent] = useState<string>("");
+  const [err, setErr] = useState("");
+
+  const persistWallet = (w: string) => {
+    setWallet(w);
+    if (typeof window !== "undefined") localStorage.setItem("ec_pm_wallet", w);
+  };
+
+  const load = async () => {
+    if (!/^0x[a-fA-F0-9]{40}$/.test(wallet)) {
+      setErr("Érvénytelen wallet cím (0x… 40 hex)");
+      return;
+    }
+    setErr(""); setLoading(true); setIntent("");
+    try {
+      const r = await fetch(`${FN}/polymarket-redeem?wallet=${encodeURIComponent(wallet)}`, {
+        credentials: "include",
+      });
+      const j = await r.json();
+      if (j.ok) setInfo(j);
+      else setErr(j.error || "Hiba lekérésnél");
+    } catch (e: any) { setErr(e.message); }
+    finally { setLoading(false); }
+  };
+
+  const generateIntent = async () => {
+    if (!info?.redeemable?.length) return;
+    const conditionIds = info.redeemable.map((r: any) => r.conditionId).filter(Boolean);
+    setErr("");
+    try {
+      const r = await fetch(`${FN}/polymarket-redeem`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ wallet, conditionIds }),
+      });
+      const j = await r.json();
+      if (j.ok) setIntent(JSON.stringify(j.intent));
+      else setErr(j.error || "Hiba intent generáláskor");
+    } catch (e: any) { setErr(e.message); }
+  };
+
+  return (
+    <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 4, padding: 18, marginTop: 14 }}>
+      <div className="tp-section">Auto-Claim — nyertes pozíciók beváltása</div>
+      <div className="tp-info" style={{ marginBottom: 12 }}>
+        Polymarket nyertes pozíciók nem jönnek automatikusan az egyenlegbe. Itt ellenőrizheted, hány USDC-t lehet még begyűjteni, és intent-et generálsz a lokális Python redeem scripthez (private key sosem lép szerverre).
+      </div>
+      <div className="tp-field" style={{ marginBottom: 10 }}>
+        <label>Proxy / funder cím (0x…)</label>
+        <input type="text" value={wallet} onChange={e => persistWallet(e.target.value.trim())} placeholder="0x…" />
+      </div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+        <button className="tp-btn-sm" onClick={load} disabled={loading || !wallet}>{loading ? "..." : "🔍 Ellenőriz"}</button>
+        {info && info.redeemable?.length > 0 && (
+          <button className="tp-btn-sm" onClick={generateIntent}>📋 Intent generálás</button>
+        )}
+      </div>
+      {err && <div style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--danger)", padding: "6px 10px", background: "#200000", borderRadius: 2 }}>✗ {err}</div>}
+      {info && (
+        <div style={{ marginTop: 8 }}>
+          <div style={{ fontFamily: "var(--mono)", fontSize: 22, fontWeight: 700, color: "var(--accent)" }}>
+            ${info.totalClaimableUSDC?.toFixed(2) ?? "0.00"}
+          </div>
+          <div style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--muted)", textTransform: "uppercase", marginBottom: 10 }}>
+            Begyűjthető — {info.redeemable?.length ?? 0} pozíció
+          </div>
+          {info.redeemable?.length > 0 ? (
+            <table className="tp-tbl">
+              <thead><tr><th>Kérdés</th><th>Outcome</th><th>Shares</th><th>Claim</th></tr></thead>
+              <tbody>
+                {info.redeemable.map((r: any, i: number) => (
+                  <tr key={i}>
+                    <td><div className="tp-pm-q">{r.title || r.slug}</div></td>
+                    <td>{r.outcome}</td>
+                    <td style={{ fontFamily: "var(--mono)", fontSize: 11 }}>{(r.shares || 0).toFixed(2)}</td>
+                    <td className="ec-pos" style={{ fontWeight: 700 }}>${(r.claimableUSDC || 0).toFixed(2)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <div style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--muted)" }}>Nincs jelenleg redeemelhető pozíció.</div>
+          )}
+        </div>
+      )}
+      {intent && (
+        <div style={{ marginTop: 12, padding: 10, background: "var(--surface2)", borderRadius: 2, fontFamily: "var(--mono)", fontSize: 10, color: "var(--accent2)", lineHeight: 1.8, wordBreak: "break-all", border: "1px solid var(--border)" }}>
+          python polymarket_trade.py --redeem-intent '{intent}'
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── POLYMARKET PANEL ─────────────────────────────────────────────────────────
 function PolymarketPanel() {
   const [markets,  setMarkets]  = useState<PMMarket[]>([]);
@@ -391,6 +492,8 @@ function PolymarketPanel() {
           </div>
         )}
       </div>
+
+      <RedeemSection />
     </div>
   );
 }

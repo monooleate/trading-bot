@@ -1,4 +1,7 @@
 import type { TradeDecision, TraderConfig, AggregatedSignal, MarketInfo } from "../shared/types.mts";
+import { getBtcExitConfig } from "../shared/config.mts";
+
+type BtcExitCfg = ReturnType<typeof getBtcExitConfig>;
 
 // ─── Cooldown tracker (in-memory, resets on function restart) ──
 
@@ -22,6 +25,7 @@ export function makeDecision(
   bankrollUSDC: number,
   sessionLoss: number,
   config: TraderConfig,
+  btcExit?: BtcExitCfg,
 ): TradeDecision {
   const { finalProb, kellyFraction } = signal;
   const marketPrice = market.currentPrice;
@@ -56,10 +60,38 @@ export function makeDecision(
     return noResult(`Low OI: $${market.openInterest} < $${config.minOpenInterest}`);
   }
 
+  // 4b. Entry-window filter (P1.2): skip BTC short markets outside the
+  //     [open + start, open + end] window. Outside this band entry is either
+  //     pure retail noise (too early) or unable to exit before resolution.
+  if (market.openedAtEstimate) {
+    const exit = btcExit ?? getBtcExitConfig();
+    const ageMs = Date.now() - new Date(market.openedAtEstimate).getTime();
+    if (ageMs < exit.entryWindowStartMs) {
+      return noResult(`Outside entry window: ${ageMs}ms since open < ${exit.entryWindowStartMs}ms`);
+    }
+    if (ageMs > exit.entryWindowEndMs) {
+      return noResult(`Outside entry window: ${ageMs}ms since open > ${exit.entryWindowEndMs}ms`);
+    }
+  }
+
   // 5. Edge calculation (net of roundtrip fees)
   const grossEdge = Math.abs(finalProb - marketPrice);
   const netEdge = grossEdge - config.roundtripFeePct;
   const direction = finalProb > marketPrice ? "YES" : "NO";
+
+  // 5b. Order-book imbalance convergence filter (P1.3): require the
+  //     Binance imbalance signal to agree with our directional bet, and
+  //     skip when it diverges. NEUTRAL passes through (gate open).
+  if (signal.obImbalance && signal.obImbalance.direction !== "NEUTRAL") {
+    const obWantsYes = signal.obImbalance.direction === "UP";
+    const weWantYes  = direction === "YES";
+    if (obWantsYes !== weWantYes) {
+      return noResult(
+        `OB imbalance diverges: depth ratio ${signal.obImbalance.ratio} → ${signal.obImbalance.direction}, ` +
+        `combined signal → ${direction}`,
+      );
+    }
+  }
 
   if (netEdge < config.edgeThreshold) {
     return noResult(

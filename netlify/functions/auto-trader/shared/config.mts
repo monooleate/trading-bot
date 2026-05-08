@@ -26,12 +26,65 @@ export function getTraderConfig(): TraderConfig {
   return {
     paperMode: process.env.PAPER_MODE !== "false",
     edgeThreshold: parseFloat(process.env.EDGE_THRESHOLD_CRYPTO || "0.15"),
-    maxKellyFraction: parseFloat(process.env.MAX_KELLY_FRACTION || "0.20"),
+    maxKellyFraction: parseFloat(process.env.MAX_KELLY_FRACTION || "0.08"),
     cooldownSeconds: parseInt(process.env.COOLDOWN_SECONDS || "300", 10),
     sessionLossLimit: parseFloat(process.env.SESSION_LOSS_LIMIT || "20"),
     minOpenInterest: 500,
     roundtripFeePct: 0.036, // 1.8% entry + 1.8% exit
   };
+}
+
+// ─── BTC short-market exit/entry config (P1.2) ────────────
+// Used by auto-trader/crypto/order-lifecycle.mts and decision-engine.mts
+// to enforce TP/SL exits and the entry-window filter on BTC 5m/15m markets.
+
+export function getBtcExitConfig() {
+  return {
+    tpTarget:           parseFloat(process.env.BTC_TP_TARGET || "0.75"),
+    slTarget:           parseFloat(process.env.BTC_SL_TARGET || "0.35"),
+    entryWindowStartMs: parseInt(process.env.BTC_ENTRY_WINDOW_START_MS || "60000", 10),
+    entryWindowEndMs:   parseInt(process.env.BTC_ENTRY_WINDOW_END_MS   || "180000", 10),
+    holdToEndCutoffMs:  parseInt(process.env.BTC_HOLD_TO_END_CUTOFF_MS || "60000", 10),
+  };
+}
+
+// ─── Effective config = env defaults + Blobs runtime overrides ────────
+// Lazily imported from trader-settings to avoid a circular import chain at
+// module init. Falls back to env defaults on any read error so the trader
+// always has a sane config to run on.
+
+export async function getEffectiveTraderConfig(): Promise<TraderConfig> {
+  const env = getTraderConfig();
+  try {
+    const mod: any = await import("../../trader-settings.mts");
+    const ov = await mod.loadRuntimeOverrides();
+    return {
+      ...env,
+      edgeThreshold:    ov.edgeThreshold    ?? env.edgeThreshold,
+      maxKellyFraction: ov.maxKellyFraction ?? env.maxKellyFraction,
+      cooldownSeconds:  ov.cooldownSeconds  ?? env.cooldownSeconds,
+      sessionLossLimit: ov.sessionLossLimit ?? env.sessionLossLimit,
+    };
+  } catch {
+    return env;
+  }
+}
+
+export async function getEffectiveBtcExitConfig() {
+  const base = getBtcExitConfig();
+  try {
+    const mod: any = await import("../../trader-settings.mts");
+    const ov = await mod.loadRuntimeOverrides();
+    return {
+      tpTarget:           ov.btcTpTarget          ?? base.tpTarget,
+      slTarget:           ov.btcSlTarget          ?? base.slTarget,
+      entryWindowStartMs: ov.btcEntryWindowStartMs ?? base.entryWindowStartMs,
+      entryWindowEndMs:   ov.btcEntryWindowEndMs   ?? base.entryWindowEndMs,
+      holdToEndCutoffMs:  ov.btcHoldToEndCutoffMs  ?? base.holdToEndCutoffMs,
+    };
+  } catch {
+    return base;
+  }
 }
 
 // ─── Polymarket credentials from env ──────────────────────
