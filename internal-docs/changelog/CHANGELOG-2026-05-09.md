@@ -205,9 +205,17 @@ Wired in:
 
 Új Telegram helper: `alertCalibrationNoise(paper, message, tradeCount, maxAbsIC)`.
 
-#### 4 — UI Calibration Health Badge
+#### 4 — UI Calibration Health Badge (közös komponens)
 
-`EdgeTrackerPanel.tsx` új `CalibrationHealthBadge` komponens. Színkódok:
+Új közös komponens `src/components/shared/CalibrationHealthBadge.tsx`, amit **két helyen** is használ a UI:
+
+1. **Edge Tracker tab tetején** (`EdgeTrackerPanel.tsx`) — `variant="full"`, a már lekért `data.calibrationHealth`-et propként kapja, plusz `category`/`days` átkerül hogy refresh esetén ugyanazokkal a filterekkel kérjen.
+
+2. **Crypto Trader tab tetején** (`trader/CryptoTrader.tsx`) — `variant="compact"`, saját maga fetcheli a `/.netlify/functions/edge-tracker?mode=paper&category=crypto&days=30`-ot. A `refreshKey` prop minden Run/Reset/Stop akció után bumpolódik, így az új trade lezárása után frissül a verdict.
+
+Így a kereskedő nem kell tab-ot váltson, hogy lássa a paper signal-szett egészségét: már az autotrader oldalon megjelenik a verdict a session-statok fölött.
+
+Színkódok:
 
 | Status         | Háttér   | Border       | Kit jelez          |
 |----------------|----------|--------------|--------------------|
@@ -257,7 +265,9 @@ netlify/functions/auto-trader/shared/telegram.mts                alertCalibratio
 netlify/functions/edge-tracker/statistics.mts                    computeCalibrationHealth
 netlify/functions/edge-tracker.mts                               calibrationHealth a GET response-ban
 netlify/functions/trader-settings.mts                            SCHEMA + 3 új knob
-src/components/EdgeTrackerPanel.tsx                              CalibrationHealthBadge + style
+src/components/shared/CalibrationHealthBadge.tsx                 ÚJ közös komponens (full + compact variant)
+src/components/EdgeTrackerPanel.tsx                              használja a közös badge-et
+src/components/trader/CryptoTrader.tsx                           compact badge a session-statok fölött
 ```
 
 ### Ellenőrzés

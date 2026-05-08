@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect } from "react";
+import CalibrationHealthBadge from "../shared/CalibrationHealthBadge";
 
 const FN = "/.netlify/functions/auto-trader-api";
 
@@ -31,6 +32,9 @@ export default function CryptoTrader() {
   const [lastRun, setLastRun] = useState<RunResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Bumped after every state-changing action so the badge re-fetches fresh
+  // calibration data once a new trade closes.
+  const [healthRefresh, setHealthRefresh] = useState(0);
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -58,6 +62,7 @@ export default function CryptoTrader() {
       setLastRun(data);
       if (data.session) setSession(data.session);
       if (!data.ok) setError(data.error || "Unknown error");
+      setHealthRefresh((n) => n + 1);
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -78,6 +83,16 @@ export default function CryptoTrader() {
           </span>
         )}
       </div>
+
+      {/* Calibration health — paper signal verdict, fetched from edge-tracker.
+          Lives at the top so the operator sees noise/calibrated status before
+          deciding to Run / go live. Auto-refreshes after every action. */}
+      <CalibrationHealthBadge
+        category="crypto"
+        days="30"
+        variant="compact"
+        refreshKey={healthRefresh}
+      />
 
       {/* Session stats */}
       {session && (
