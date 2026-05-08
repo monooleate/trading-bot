@@ -180,6 +180,7 @@ internal-docs/
 
 | File | Topic |
 |------|-------|
+| `app/trading-status.md` | **What works without a server vs what needs Hetzner** (read first if you want to trade) |
 | `app/architecture.md` | **Full current-state snapshot** (start here for any new session) |
 | `app/roadmap.md` | Sprint status + TODO priorities |
 | `app/DEPLOY.md` | Netlify deploy workflow |
