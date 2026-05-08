@@ -7,8 +7,8 @@ the detailed design docs under `internal-docs/`.
 
 ## [0.6.0] – 2026-04-21 — Weather Module Patch
 
-Implements [edgecalc-weather-patch.md](edgecalc-weather-patch.md).
-Full details: [weather-patch.md](weather-patch.md).
+Implements [edgecalc-weather-patch.md](../app/edgecalc-weather-patch.md).
+Full details: [weather-patch.md](../app/weather-patch.md).
 
 ### Fix 1 — Settlement station corrections
 
@@ -82,7 +82,7 @@ Per-city rolling MAE window; weights inverse-proportional to recent error.
 
 ## [0.5.1] – 2026-04-21 — Funding Rate Arbitrage
 
-Implements [edgecalc-funding-arb-patch.md](edgecalc-funding-arb-patch.md).
+Implements [edgecalc-funding-arb-patch.md](../app/edgecalc-funding-arb-patch.md).
 Built on top of the directional Hyperliquid engine as a distinct execution
 layer. Full details: [hyperliquid.md](hyperliquid.md#funding-rate-arbitrage-second-layer).
 
@@ -143,8 +143,8 @@ FR_FEE_ROUNDTRIP_BINANCE=0.002
 
 ## [0.5.0] – 2026-04-21 — Hyperliquid Execution Engine
 
-Implements [edgecalc-hyperliquid-prompt.md](edgecalc-hyperliquid-prompt.md).
-Full details: [hyperliquid.md](hyperliquid.md).
+Implements [edgecalc-hyperliquid-prompt.md](../app/edgecalc-hyperliquid-prompt.md).
+Full details: [hyperliquid.md](../app/hyperliquid.md).
 
 Adapted from the prompt's Hetzner/PM2/WebSocket design to the existing
 Netlify serverless architecture — cron + Blobs + REST polling + lazy-loaded
@@ -208,7 +208,7 @@ HL_ROUNDTRIP_FEE_PCT=0.0007
 
 ## [0.4.0] – 2026-04-20 — Resolution Risk Scorer
 
-Implements [edgecalc-resolution-risk-prompt.md](edgecalc-resolution-risk-prompt.md).
+Implements [edgecalc-resolution-risk-prompt.md](../app/edgecalc-resolution-risk-prompt.md).
 Also present in the main [CHANGELOG.md](CHANGELOG.md).
 
 Implements the `resolution_risk` term from
