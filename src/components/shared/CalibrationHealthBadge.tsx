@@ -20,7 +20,7 @@ export interface CalibrationHealth {
 type Variant = "full" | "compact";
 
 interface Props {
-  category?: "crypto" | "weather" | "all";
+  category?: "crypto" | "weather" | "hyperliquid" | "funding-arb" | "all";
   days?: string;
   variant?: Variant;
   // Optional: pass already-fetched health to skip the network call. Useful

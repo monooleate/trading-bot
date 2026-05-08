@@ -95,8 +95,10 @@ const COLORS = {
 
 // ─── Main panel ─────────────────────────────────────────
 
+type EdgeCategory = "crypto" | "weather" | "hyperliquid" | "funding-arb" | "all";
+
 interface Props {
-  defaultCategory?: "crypto" | "weather" | "all";
+  defaultCategory?: EdgeCategory;
 }
 
 export default function EdgeTrackerPanel({ defaultCategory = "all" }: Props) {
@@ -158,7 +160,7 @@ export default function EdgeTrackerPanel({ defaultCategory = "all" }: Props) {
 
           {data.calibrationHealth && (
             <CalibrationHealthBadge
-              category={category as "crypto" | "weather" | "all"}
+              category={category as EdgeCategory}
               days={days}
               health={data.calibrationHealth}
               variant="full"
@@ -189,11 +191,16 @@ export default function EdgeTrackerPanel({ defaultCategory = "all" }: Props) {
 
 function FilterBar({ mode, setMode, category, setCategory, days, setDays, defaultCategory }: any) {
   const MODES = [["paper", "Paper"], ["live", "Live"], ["both", "Both"]];
-  const CATS = defaultCategory === "all"
-    ? [["all", "All"], ["crypto", "Crypto"], ["weather", "Weather"]]
-    : defaultCategory === "crypto"
-      ? [["crypto", "Crypto"], ["all", "All"]]
-      : [["weather", "Weather"], ["all", "All"]];
+  const CATS: [string, string][] = (() => {
+    switch (defaultCategory) {
+      case "all":         return [["all", "All"], ["crypto", "Crypto"], ["weather", "Weather"], ["hyperliquid", "HL Perp"], ["funding-arb", "Funding Arb"]];
+      case "crypto":      return [["crypto", "Crypto"], ["all", "All"]];
+      case "weather":     return [["weather", "Weather"], ["all", "All"]];
+      case "hyperliquid": return [["hyperliquid", "HL Perp"], ["all", "All"]];
+      case "funding-arb": return [["funding-arb", "Funding Arb"], ["all", "All"]];
+      default:            return [["all", "All"]];
+    }
+  })();
   const DAYS = [["7", "7d"], ["30", "30d"], ["90", "90d"], ["all", "All"]];
 
   return (

@@ -59,6 +59,13 @@ const CITY_PATTERNS: Record<string, string[]> = {
   lagos:         ["lagos"],
   "sao-paulo":   ["sao-paulo", "são-paulo"],
   austin:        ["austin"],
+  // 2026-05-09 coverage extension #2
+  guangzhou:     ["guangzhou"],
+  denver:        ["denver"],
+  warsaw:        ["warsaw", "warszawa"],
+  houston:       ["houston"],
+  toronto:       ["toronto"],
+  helsinki:      ["helsinki"],
 };
 
 function parseCityFromSlug(slug: string): string | null {

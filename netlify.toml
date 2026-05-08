@@ -26,6 +26,13 @@
 [functions."auto-trader-weather-cron"]
   schedule = "*/5 * * * *"
 
+# Multi-cron a Hyperliquid Perp és Funding Arb futtatásához.
+# A meglévő auto-trader cron csak a crypto category-t hívja
+# (default category="crypto" a dispatcherében), ezért a HL + FR
+# sessionök 18 napon át sosem futottak. Ez fan-out-ot csinál.
+[functions."auto-trader-multi-cron"]
+  schedule = "*/3 * * * *"
+
 [[headers]]
   for = "/*"
   [headers.values]

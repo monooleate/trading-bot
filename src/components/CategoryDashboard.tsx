@@ -26,6 +26,8 @@ const CATEGORY_TABS: Record<string, [string, string][]> = {
   hyperliquid: [
     ["autotrader",   "Perp Trader"],
     ["funding-arb",  "Funding Arb"],
+    ["edge-tracker-perp",  "Edge Tracker (Perp)"],
+    ["edge-tracker-arb",   "Edge Tracker (Arb)"],
     ["settings",     "⚙ Beállítások"],
   ],
   bybit: [
@@ -62,10 +64,12 @@ function renderWeatherTab(tab: string) {
 
 function renderHyperliquidTab(tab: string) {
   switch (tab) {
-    case "autotrader":   return <HyperliquidTrader />;
-    case "funding-arb":  return <FundingArbPanel />;
-    case "settings":     return <SettingsPanel category="hyperliquid" title="Hyperliquid paraméterek" subtitle="Perp + Funding Arb · paper-only Netlify-on" />;
-    default:             return <HyperliquidTrader />;
+    case "autotrader":         return <HyperliquidTrader />;
+    case "funding-arb":        return <FundingArbPanel />;
+    case "edge-tracker-perp":  return <EdgeTrackerPanel defaultCategory="hyperliquid" />;
+    case "edge-tracker-arb":   return <EdgeTrackerPanel defaultCategory="funding-arb" />;
+    case "settings":           return <SettingsPanel category="hyperliquid" title="Hyperliquid paraméterek" subtitle="Perp + Funding Arb · paper-only Netlify-on" />;
+    default:                   return <HyperliquidTrader />;
   }
 }
 

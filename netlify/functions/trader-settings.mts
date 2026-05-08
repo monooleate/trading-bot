@@ -34,40 +34,34 @@ interface FieldSpec {
   unit: string;
   category: Category;
   group: string;            // sub-section title inside the per-category page
+  help?: string;            // one-sentence explanation rendered as tooltip + inline hint
 }
 
 const SCHEMA: Record<string, FieldSpec> = {
-  edgeThreshold:        { default: 0.15,    min: 0.02,    max: 0.30,    label: "Edge threshold (net)",       step: 0.005, unit: "frac",  category: "crypto", group: "Risk & sizing" },
-  maxKellyFraction:     { default: 0.08,    min: 0.01,    max: 0.25,    label: "Max Kelly fraction",         step: 0.005, unit: "frac",  category: "crypto", group: "Risk & sizing" },
-  cooldownSeconds:      { default: 300,     min: 30,      max: 3600,    label: "Cooldown per market",        step: 30,    unit: "sec",   category: "crypto", group: "Risk & sizing" },
-  sessionLossLimit:     { default: 20,      min: 5,       max: 1000,    label: "Session loss limit",         step: 5,     unit: "USD",   category: "crypto", group: "Risk & sizing" },
-  btcTpTarget:          { default: 0.75,    min: 0.55,    max: 0.95,    label: "BTC short-market TP",        step: 0.01,  unit: "price", category: "crypto", group: "BTC short-market exit" },
-  btcSlTarget:          { default: 0.35,    min: 0.05,    max: 0.45,    label: "BTC short-market SL",        step: 0.01,  unit: "price", category: "crypto", group: "BTC short-market exit" },
-  btcEntryWindowStartMs:{ default: 60000,   min: 0,       max: 600000,  label: "Entry window start",         step: 5000,  unit: "ms",    category: "crypto", group: "BTC short-market exit" },
-  btcEntryWindowEndMs:  { default: 180000,  min: 30000,   max: 900000,  label: "Entry window end",           step: 5000,  unit: "ms",    category: "crypto", group: "BTC short-market exit" },
-  btcHoldToEndCutoffMs: { default: 60000,   min: 10000,   max: 300000,  label: "Hold-to-end cutoff",         step: 5000,  unit: "ms",    category: "crypto", group: "BTC short-market exit" },
-  obImbalanceUpRatio:   { default: 1.80,    min: 1.10,    max: 5.00,    label: "OB imbalance UP threshold",  step: 0.05,  unit: "ratio", category: "crypto", group: "OB imbalance" },
-  obImbalanceDownRatio: { default: 0.55,    min: 0.20,    max: 0.95,    label: "OB imbalance DOWN threshold",step: 0.05,  unit: "ratio", category: "crypto", group: "OB imbalance" },
-  // ─── Paper-mode resolver (v2 simulator) ──────────────────────
-  // How long after a market's endDate we wait for real Polymarket
-  // resolution data before falling back to the Brownian-bridge sim.
-  paperFallbackAfterMs: { default: 1800000, min: 60000,   max: 21600000,label: "Paper resolver fallback delay", step: 60000, unit: "ms",   category: "crypto", group: "Paper resolver" },
-  paperBrownianSigma:   { default: 0.45,    min: 0.10,    max: 1.50,    label: "Brownian σ per √min",        step: 0.05,  unit: "σ",     category: "crypto", group: "Paper resolver" },
-  // YES price-band cutoff for the BTC market finder. Markets with YES
-  // mid below this (or above 1-this) are skipped to avoid deep-OTM
-  // fill artefacts.
-  btcMinPriceBand:      { default: 0.10,    min: 0.02,    max: 0.30,    label: "Min YES price (deep-OTM cut)", step: 0.01, unit: "frac", category: "crypto", group: "Market finder" },
+  edgeThreshold:        { default: 0.15,    min: 0.02,    max: 0.30,    label: "Edge threshold (net)",       step: 0.005, unit: "frac",  category: "crypto", group: "Risk & sizing", help: "Csak akkor lép be az auto-trader, ha a kombinált predikció és piaci ár közti |edge| (a 3.6% roundtrip fee után) ≥ ez az érték. Magasabb = kevesebb, de jobb minőségű trade." },
+  maxKellyFraction:     { default: 0.08,    min: 0.01,    max: 0.25,    label: "Max Kelly fraction",         step: 0.005, unit: "frac",  category: "crypto", group: "Risk & sizing", help: "Egy trade max ekkora bankroll-aránya. A binary piacokon a master-plan 8% hard cap-et javasol; magasabbra állítani csak akkor érdemes ha az IC-d > 0.10." },
+  cooldownSeconds:      { default: 300,     min: 30,      max: 3600,    label: "Cooldown per market",        step: 30,    unit: "sec",   category: "crypto", group: "Risk & sizing", help: "Ugyanazon a piacon (slug) hány másodpercet kell várni két entry között. Megakadályozza a re-entry spam-et ha gyors a cron." },
+  sessionLossLimit:     { default: 20,      min: 5,       max: 1000,    label: "Session loss limit",         step: 5,     unit: "USD",   category: "crypto", group: "Risk & sizing", help: "Ha a session összesített VESZTESÉG-e (csak a vesztes trade-ek abszolút USD-je) eléri ezt → automatikus stop. Reset-tel indítható újra." },
+  btcTpTarget:          { default: 0.75,    min: 0.55,    max: 0.95,    label: "BTC short-market TP",        step: 0.01,  unit: "price", category: "crypto", group: "BTC short-market exit", help: "Take-profit ár: ha a pozíció oldali ár eléri ezt, lezárjuk. 0.75 = 75¢ — a master-plan 5m piacokon átlag $19 helyett $52 veszteséget ment meg." },
+  btcSlTarget:          { default: 0.35,    min: 0.05,    max: 0.45,    label: "BTC short-market SL",        step: 0.01,  unit: "price", category: "crypto", group: "BTC short-market exit", help: "Stop-loss ár: ha a pozíció oldali ár ez alá esik, lezárjuk. Élesben szigorúan SL nélkül NE menj — a 5m piacok gyorsan $0-ra eshetnek." },
+  btcEntryWindowStartMs:{ default: 60000,   min: 0,       max: 600000,  label: "Entry window start",         step: 5000,  unit: "ms",    category: "crypto", group: "BTC short-market exit", help: "A market megnyitása után mennyi ms-tól léphetünk be. <60s = retail zaj és pánik, ne lépj be." },
+  btcEntryWindowEndMs:  { default: 180000,  min: 30000,   max: 900000,  label: "Entry window end",           step: 5000,  unit: "ms",    category: "crypto", group: "BTC short-market exit", help: "Meddig léphetünk be a megnyitás után. >180s a 5m piacon = nem lesz idő exitálni TP/SL hit nélkül." },
+  btcHoldToEndCutoffMs: { default: 60000,   min: 10000,   max: 300000,  label: "Hold-to-end cutoff",         step: 5000,  unit: "ms",    category: "crypto", group: "BTC short-market exit", help: "Ha kevesebb mint ennyi ms van resolution-ig, NE zárjuk a pozíciót — hagyjuk lejárni (a Polymarket settles-en pörög le)." },
+  obImbalanceUpRatio:   { default: 1.80,    min: 1.10,    max: 5.00,    label: "OB imbalance UP threshold",  step: 0.05,  unit: "ratio", category: "crypto", group: "OB imbalance", help: "Binance top-10 bid/ask depth ratio. Felette → UP irány konfirmált. Magasabb = szigorúbb konvergencia, kevesebb trade." },
+  obImbalanceDownRatio: { default: 0.55,    min: 0.20,    max: 0.95,    label: "OB imbalance DOWN threshold",step: 0.05,  unit: "ratio", category: "crypto", group: "OB imbalance", help: "Bid/ask ratio alsó küszöb. Alatta → DOWN irány konfirmált. 0.55 = kb. inverze az UP threshold-nak (1/1.8)." },
+  paperFallbackAfterMs: { default: 1800000, min: 60000,   max: 21600000,label: "Paper resolver fallback delay", step: 60000, unit: "ms",   category: "crypto", group: "Paper resolver", help: "Mennyi időt várunk a tényleges Polymarket resolution-re a market endDate után, mielőtt a Brownian-bridge szimulátorra esünk vissza. Hosszabb = realisztikusabb paper PnL, de később zárul." },
+  paperBrownianSigma:   { default: 0.45,    min: 0.10,    max: 1.50,    label: "Brownian σ per √min",        step: 0.05,  unit: "σ",     category: "crypto", group: "Paper resolver", help: "A finalProb-tól FÜGGETLEN random-walk σ-ja. 0.45 / √min ~ a Polymarket BTC 5m piacok empirikus volatilitása. Magasabb = nagyobb pnl-szórás." },
+  btcMinPriceBand:      { default: 0.10,    min: 0.02,    max: 0.30,    label: "Min YES price (deep-OTM cut)", step: 0.01, unit: "frac", category: "crypto", group: "Market finder", help: "Az olyan piacokat skippeljük, ahol a YES ár 0.10 alatt vagy 0.90 felett van — ezeken a depth alig 1-2 share, nem realisztikus paper-ben filltetni. A 141 paper trade $0.01 entry probléma fő javítása." },
   // ─── Weather trader knobs ──────────────────────────────────────
-  weatherEdgeThreshold:   { default: 0.12, min: 0.02, max: 0.40, label: "Edge threshold (net)",          step: 0.005, unit: "frac", category: "weather", group: "Risk & sizing" },
-  weatherConfidenceMin:   { default: 0.65, min: 0.30, max: 0.95, label: "Min model confidence",          step: 0.01,  unit: "frac", category: "weather", group: "Risk & sizing" },
-  weatherExitBeforeMin:   { default: 45,   min: 10,   max: 240,  label: "Exit-before window",            step: 5,     unit: "min",  category: "weather", group: "Risk & sizing" },
-  weatherMaxPositionUSD:  { default: 25,   min: 5,    max: 500,  label: "Max position size",             step: 5,     unit: "USD",  category: "weather", group: "Risk & sizing" },
-  weatherMaxEdgeCap:      { default: 0.40, min: 0.10, max: 0.95, label: "Max-edge sanity cap",           step: 0.01,  unit: "frac", category: "weather", group: "Risk & sizing" },
-  weatherForecastDays:    { default: 0,    min: 0,    max: 7,    label: "forecast_days (0 = auto)",      step: 1,     unit: "days", category: "weather", group: "Forecast pipeline" },
-  // 0/1-encoded boolean toggles. The UI renders these as switches.
-  weatherApplyCityOffset: { default: 0,    min: 0,    max: 1,    label: "Apply city_offset to forecast", step: 1,     unit: "bool", category: "weather", group: "Forecast pipeline" },
-  weatherUseEnsemble:     { default: 0,    min: 0,    max: 1,    label: "Use 31-member GFS ensemble",    step: 1,     unit: "bool", category: "weather", group: "Forecast pipeline" },
-  weatherCronEnabled:     { default: 0,    min: 0,    max: 1,    label: "Enable scheduled cron runs",    step: 1,     unit: "bool", category: "weather", group: "Scheduling" },
+  weatherEdgeThreshold:   { default: 0.12, min: 0.02, max: 0.40, label: "Edge threshold (net)",          step: 0.005, unit: "frac", category: "weather", group: "Risk & sizing", help: "A weather predikció és a Polymarket-ár közti |edge| minimum, amitől entry-zünk. Alacsonyabb mint a crypto-é mert a hőmérséklet predikció pontosabb." },
+  weatherConfidenceMin:   { default: 0.65, min: 0.30, max: 0.95, label: "Min model confidence",          step: 0.01,  unit: "frac", category: "weather", group: "Risk & sizing", help: "A 31-tagú GFS ensemble vagy a single-run forecast confidence-e (mennyire egységes a tagok jóslata). Alatta skippeljük a piacot." },
+  weatherExitBeforeMin:   { default: 45,   min: 10,   max: 240,  label: "Exit-before window",            step: 5,     unit: "min",  category: "weather", group: "Risk & sizing", help: "Hány perccel a market lezárása előtt nem indítunk új pozíciót (slippage és exit nehezedik a végén)." },
+  weatherMaxPositionUSD:  { default: 25,   min: 5,    max: 500,  label: "Max position size",             step: 5,     unit: "USD",  category: "weather", group: "Risk & sizing", help: "Egy weather trade max USD értéke. Konzervatív ($25 default) mert a weather edge sokszor nagyobb mint a binary 8% Kelly cap engedne." },
+  weatherMaxEdgeCap:      { default: 0.40, min: 0.10, max: 0.95, label: "Max-edge sanity cap",           step: 0.01,  unit: "frac", category: "weather", group: "Risk & sizing", help: "Ha az edge számítás >40%-ot ad, akkor valószínűleg számolási hiba (pl. rossz station temp). Cap-elem hogy ne tegyünk irreális pozíciót." },
+  weatherForecastDays:    { default: 0,    min: 0,    max: 7,    label: "forecast_days (0 = auto)",      step: 1,     unit: "days", category: "weather", group: "Forecast pipeline", help: "Mennyi napra előre kérjük le a forecast-ot. 0 = auto (a piac endDate alapján számolva). Manual override csak teszteléshez." },
+  weatherApplyCityOffset: { default: 0,    min: 0,    max: 1,    label: "Apply city_offset to forecast", step: 1,     unit: "bool", category: "weather", group: "Forecast pipeline", help: "Bekapcsolva: a tényleges station vs. lakossági centroid közti hőmérséklet-eltolás (pl. KLGA → NYC) alkalmazza. Nemzetközi piacokon is fontos." },
+  weatherUseEnsemble:     { default: 0,    min: 0,    max: 1,    label: "Use 31-member GFS ensemble",    step: 1,     unit: "bool", category: "weather", group: "Forecast pipeline", help: "Bekapcsolva: 31 GFS ensemble tag → P(YES) = (hány tag jósol >= threshold) / 31. Kikapcsolva: csak a control run. Master-plan szerint +15-20% pontosság ensemble-lel." },
+  weatherCronEnabled:     { default: 0,    min: 0,    max: 1,    label: "Enable scheduled cron runs",    step: 1,     unit: "bool", category: "weather", group: "Scheduling", help: "A weather auto-trader-weather-cron 5 percenként fut, de csak akkor csinál bármit ha ez a toggle BE van kapcsolva. Default OFF — biztonsági ráhagyás." },
 };
 
 type Overrides = Partial<Record<keyof typeof SCHEMA, number>>;

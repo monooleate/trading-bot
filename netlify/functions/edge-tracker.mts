@@ -30,26 +30,101 @@ const CORS = {
   "Content-Type": "application/json",
 };
 
+// Each auto-trader category has its own Blobs store (so a stopped session
+// in one venue does not block another). The Edge Tracker reads from all
+// of them so closed trades surface uniformly in the per-venue UI.
+interface StoreSpec {
+  store: string;
+  paperKey: string;
+  liveKey: string;
+  category: string;            // tag the trade if it lacks ClosedTrade.category
+}
+
+const STORE_SPECS: StoreSpec[] = [
+  { store: "auto-trader-state",          paperKey: "auto-trader-session",                 liveKey: "auto-trader-session-live",                 category: "crypto" },
+  { store: "auto-trader-state",          paperKey: "auto-trader-session-weather",         liveKey: "auto-trader-session-live-weather",         category: "weather" },
+  { store: "hyperliquid-session-v1",     paperKey: "session_paper",                       liveKey: "session_live",                             category: "hyperliquid" },
+  { store: "hyperliquid-arb-session-v1", paperKey: "arb_paper",                           liveKey: "arb_live",                                 category: "funding-arb" },
+];
+
+// Legacy STORE_NAME / PAPER_KEYS / LIVE_KEYS kept here for code that still
+// imports them; new logic should use STORE_SPECS.
 const STORE_NAME = "auto-trader-state";
 const PAPER_KEYS = ["auto-trader-session", "auto-trader-session-weather"];
 const LIVE_KEYS = ["auto-trader-session-live", "auto-trader-session-live-weather"];
 
 // ─── Helpers ──────────────────────────────────────────────
 
-async function loadTrades(keys: string[]): Promise<ClosedTrade[]> {
-  const all: ClosedTrade[] = [];
-  try {
-    const store = getStore(STORE_NAME);
-    for (const key of keys) {
-      try {
-        const raw = await store.get(key);
-        if (!raw) continue;
-        const session: SessionState = JSON.parse(raw);
-        if (session.closedTrades) all.push(...session.closedTrades);
-      } catch {}
+interface SessionLike {
+  closedTrades?: ClosedTrade[];
+  positions?: any[];          // funding-arb shape uses positions[] with closedAt
+}
+
+function tradesFromSession(s: SessionLike, fallbackCategory: string): ClosedTrade[] {
+  const out: ClosedTrade[] = [];
+  // Standard SessionState shape
+  if (Array.isArray(s.closedTrades)) {
+    for (const t of s.closedTrades) {
+      out.push({ ...t, category: t.category ?? (fallbackCategory as any) });
     }
-  } catch {}
-  return all;
+  }
+  // Funding-arb session shape: positions[] with optional closedAt + realizedPnL
+  if (Array.isArray(s.positions)) {
+    for (const p of s.positions as any[]) {
+      if (!p?.closedAt) continue;
+      out.push({
+        market:               p.coin || p.symbol || "funding-arb",
+        direction:            (p.hlSide || "SHORT") === "SHORT" ? "NO" : "YES",
+        entryPrice:           p.hlAvgPrice ?? 0,
+        exitPrice:            p.hlExitPrice ?? p.hlAvgPrice ?? 0,
+        shares:               p.hlSize ?? 0,
+        pnl:                  p.realizedPnl ?? p.realizedPnL ?? 0,
+        pnlPct:               0,
+        openedAt:             p.openedAt || new Date().toISOString(),
+        closedAt:             p.closedAt,
+        category:             "funding-arb" as any,
+        predictedProb:        p.expectedApy,
+        marketPriceAtEntry:   p.entrySpread,
+        edgeAtEntry:          p.expectedApy ?? 0,
+      });
+    }
+  }
+  return out;
+}
+
+async function loadTradesFromStore(storeName: string, key: string, fallbackCategory: string): Promise<ClosedTrade[]> {
+  try {
+    const store = getStore(storeName);
+    const raw = await store.get(key);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw as string);
+    return tradesFromSession(parsed, fallbackCategory);
+  } catch { return []; }
+}
+
+async function loadAllPaperTrades(): Promise<ClosedTrade[]> {
+  const lists = await Promise.all(
+    STORE_SPECS.map((s) => loadTradesFromStore(s.store, s.paperKey, s.category)),
+  );
+  return lists.flat();
+}
+
+async function loadAllLiveTrades(): Promise<ClosedTrade[]> {
+  const lists = await Promise.all(
+    STORE_SPECS.map((s) => loadTradesFromStore(s.store, s.liveKey, s.category)),
+  );
+  return lists.flat();
+}
+
+// Legacy helper retained so older imports compile; routes via STORE_SPECS.
+async function loadTrades(keys: string[]): Promise<ClosedTrade[]> {
+  const matches = STORE_SPECS.filter((s) => keys.includes(s.paperKey) || keys.includes(s.liveKey));
+  const lists: ClosedTrade[][] = [];
+  for (const s of matches) {
+    if (keys.includes(s.paperKey)) lists.push(await loadTradesFromStore(s.store, s.paperKey, s.category));
+    if (keys.includes(s.liveKey))  lists.push(await loadTradesFromStore(s.store, s.liveKey,  s.category));
+  }
+  return lists.flat();
 }
 
 function filterByCategory(trades: ClosedTrade[], category: string): ClosedTrade[] {
@@ -85,12 +160,10 @@ export default async function handler(req: Request, _ctx: Context) {
 
     if (!forceMock) {
       if (mode === "paper" || mode === "both") {
-        const paper = await loadTrades(PAPER_KEYS);
-        trades = trades.concat(paper);
+        trades = trades.concat(await loadAllPaperTrades());
       }
       if (mode === "live" || mode === "both") {
-        const live = await loadTrades(LIVE_KEYS);
-        trades = trades.concat(live);
+        trades = trades.concat(await loadAllLiveTrades());
       }
     }
 

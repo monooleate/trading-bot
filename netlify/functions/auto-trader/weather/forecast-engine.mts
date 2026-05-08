@@ -102,8 +102,11 @@ async function fetchNOAA(
   station: StationConfig,
   targetDate: string,            // YYYY-MM-DD in station.tz
 ): Promise<number | null> {
-  // NOAA only works for US stations
-  const usTimezones = ["America/New_York", "America/Chicago", "America/Los_Angeles"];
+  // NOAA only works for US stations (Canada uses Environment Canada, not NOAA).
+  const usTimezones = [
+    "America/New_York", "America/Chicago", "America/Los_Angeles",
+    "America/Denver",   "America/Phoenix",
+  ];
   if (!usTimezones.includes(station.tz)) return null;
 
   try {

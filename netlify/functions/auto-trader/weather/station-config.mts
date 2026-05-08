@@ -236,6 +236,38 @@ export const SETTLEMENT_STATIONS: Record<string, StationConfig> = {
     tz: "America/Chicago", city_offset: 0.0,
     peakHoursUTC: { summer: [20, 21, 22], winter: [20, 21], autumn: [20, 21], spring: [20, 21, 22] },
   },
+  // ─── 2026-05-09 coverage extension #2 — additional cities Polymarket
+  // actively lists. Coordinates are the official airport METAR station.
+  guangzhou: {
+    icao: "ZGGG", lat: 23.3924, lon: 113.2988,
+    tz: "Asia/Shanghai", city_offset: 0.0,
+    peakHoursUTC: { summer: [6, 7, 8], winter: [6, 7], autumn: [6, 7], spring: [6, 7, 8] },
+  },
+  denver: {
+    icao: "KDEN", lat: 39.8617, lon: -104.6731,
+    tz: "America/Denver", city_offset: 0.0,
+    peakHoursUTC: { summer: [21, 22, 23], winter: [20, 21], autumn: [21, 22], spring: [21, 22, 23] },
+  },
+  warsaw: {
+    icao: "EPWA", lat: 52.1657, lon: 20.9671,
+    tz: "Europe/Warsaw", city_offset: 0.0,
+    peakHoursUTC: { summer: [13, 14, 15], winter: [12, 13], autumn: [12, 13, 14], spring: [13, 14] },
+  },
+  houston: {
+    icao: "KIAH", lat: 29.9844, lon: -95.3414,
+    tz: "America/Chicago", city_offset: 0.0,
+    peakHoursUTC: { summer: [20, 21, 22], winter: [20, 21], autumn: [20, 21], spring: [20, 21, 22] },
+  },
+  toronto: {
+    icao: "CYYZ", lat: 43.6777, lon: -79.6248,
+    tz: "America/Toronto", city_offset: 0.0,
+    peakHoursUTC: { summer: [19, 20, 21], winter: [18, 19], autumn: [18, 19, 20], spring: [19, 20] },
+  },
+  helsinki: {
+    icao: "EFHK", lat: 60.3172, lon: 24.9633,
+    tz: "Europe/Helsinki", city_offset: 0.0,
+    peakHoursUTC: { summer: [12, 13, 14], winter: [11, 12], autumn: [11, 12, 13], spring: [12, 13] },
+  },
 };
 
 // ─── Helpers ──────────────────────────────────────────────

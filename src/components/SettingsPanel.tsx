@@ -20,6 +20,7 @@ interface FieldSpec {
   unit: string;
   category?: string;
   group?: string;
+  help?: string;
 }
 
 interface ServerResponse {
@@ -233,11 +234,12 @@ export default function SettingsPanel({ category, title, subtitle }: SettingsPan
                 const isBool = spec.unit === "bool";
                 return (
                   <div key={k} className={`set-field ${dirty ? "dirty" : ""} ${isOverride ? "override" : ""}`}>
-                    <div className="set-field-label">
+                    <div className="set-field-label" title={spec.help}>
                       {spec.label}
                       {isOverride && <span className="set-tag">override</span>}
                       {dirty && <span className="set-tag set-tag-dirty">változás</span>}
                     </div>
+                    {spec.help && <div className="set-field-help">{spec.help}</div>}
                     {isBool ? (
                       <div className="set-field-row">
                         <button
@@ -344,6 +346,7 @@ const css = `
 .set-num { background:var(--bg); border:1px solid var(--border); color:var(--text); font-family:var(--mono); font-size:12px; padding:4px 6px; border-radius:2px; width:80px; }
 .set-formatted { font-family:var(--mono); font-size:12px; color:var(--accent); min-width:60px; text-align:right; font-weight:700; }
 .set-range-hint { font-family:var(--mono); font-size:9px; color:var(--muted); margin-top:5px; text-transform:uppercase; letter-spacing:.04em; }
+.set-field-help { font-family:var(--sans); font-size:11px; color:var(--muted); line-height:1.5; margin:4px 0 8px; padding:6px 8px; background:rgba(53,200,241,0.06); border-left:2px solid var(--accent2); border-radius:2px; }
 .set-msg { font-family:var(--mono); font-size:11px; padding:7px 10px; border-radius:2px; margin-bottom:12px; }
 .set-msg-ok { background:#0a2010; color:var(--accent); border-left:3px solid var(--accent); }
 .set-msg-err { background:#200000; color:var(--danger); border-left:3px solid var(--danger); }
