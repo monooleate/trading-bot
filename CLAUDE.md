@@ -351,7 +351,60 @@ netlify deploy --prod --dir=dist
 
 ## AKTUÁLIS ÁLLAPOT (2026-05-09) – Claude Code folytatáshoz
 
-### Mai session változások (2026-05-09) – Weather trader 6 bugfix + Settings tab + live status
+### Második session (2026-05-09) – Crypto paper trader v2 sim + calibration alarm
+
+A `paper-pnl-analysis.md` által leírt 4 strukturális hibát kódfedezetbe vontam:
+
+- **`simulatePaperExit` halfway-toward-prediction kivéve.** Új modul:
+  `auto-trader/crypto/paper-resolver.mts`. Két finalProb-független útvonal:
+  - **Real Polymarket resolution (gold standard):** paper position nyitva
+    marad amíg a market le nem zárul, utána a Gamma API `outcomePrices`
+    `[1,0]`/`[0,1]` alapján zár. Innentől az IC valós piaci kimeneteleken
+    mér.
+  - **Brownian-bridge fallback:** ha 30+ perc után sincs resolution,
+    logit-tér Brownian híd `Bernoulli(marketPriceAtEntry)` terminallal
+    (efficient-market null), TP/SL crossing check a path mentén. Tunable
+    σ (`paperBrownianSigma`).
+
+- **`btc-market-finder` deep-OTM filter.** `MIN_PRICE_BAND = 0.10`: yes < 0.10 vagy > 0.90 → skip. Ez kizárja a $0.01 fill artefaktokat.
+
+- **Calibration alarm.** Új `computeCalibrationHealth(trades, 30)` az
+  `edge-tracker/statistics.mts`-ben. 30+ trade után, ha minden signal
+  |IC| < 0.02:
+  - Paper: Telegram alarm egyszer/session (`calibrationAlertSentAt` flag).
+  - Live: session auto-stop + Telegram.
+  - UI: új `CalibrationHealthBadge` a Tab 12 Edge Tracker tetején (zöld
+    `good` ≥ 0.05 / narancs `weak` ≥ 0.02 / piros `noise` < 0.02 / szürke
+    `insufficient` < 30 trade).
+
+- **Session simVersion auto-reset.** `PAPER_SIM_VERSION = 2`. A
+  `loadSession()` ha `simVersion < 2`-t lát, archiválja a régi
+  `closedTrades`-t (`auto-trader-session-archive-paper-v1` Blobs key) és
+  tiszta sessiont ad vissza. Az élőben futó 143 régi (halfway-sim) trade
+  deploy után az első cron tickkor automatikusan archiválódik — explicit
+  reset hívás nem kell.
+
+- **Új tunable knobok** a `trader-settings.mts` SCHEMA-ban:
+  - `paperFallbackAfterMs` (1.8M ms = 30 min default)
+  - `paperBrownianSigma` (0.45 σ/√min default)
+  - `btcMinPriceBand` (0.10 default)
+
+Részletes leírás: `internal-docs/changelog/CHANGELOG-2026-05-09.md`
+"Crypto paper trader: realisztikussá tett szimulátor (v2)" szekciója.
+
+### Hova nyúlj legközelebb (crypto paper)
+
+- **Tab 12 Edge Tracker (`/trade/crypto/`)** → tetején Calibration Health
+  badge színe azonnal megmondja a paper signal-szett egészségét.
+- **30+ trade után** ha a badge piros (`noise`): a Telegram alarm már
+  elment, és a config: live váltás tilos. Iterálj a signal-combiner
+  IC weights-en, vagy a signal-aggregator-on.
+- **50+ trade és zöld badge után** lehet élesedést fontolóra venni
+  (továbbra is csak $10–20 USDC kezdő tét).
+- **Settings tab (Tab 13) → Paper resolver group:** `paperBrownianSigma`,
+  `paperFallbackAfterMs`, `btcMinPriceBand` finomhangolása.
+
+### Első session (2026-05-09) – Weather trader 6 bugfix + Settings tab + live status
 
 **Bugok kivizsgálása:** élő `mj-trading.netlify.app/trade/weather/` scan
 megmutatta, hogy a Hong Kong May 9 piacon a modell 24.4°C-t jósolt 85.5%-os

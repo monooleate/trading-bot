@@ -222,6 +222,46 @@ hallgatja, és napi pg_dump archiválás külön gépre.
 
 ---
 
+## A trader UI gombjai (Run / Reset / Stop / Refresh)
+
+Minden /trade/<x>/ trader-oldalon ugyanaz a 4 gomb működik:
+
+| Gomb | Mit csinál | Backend action | Auth kell? |
+|---|---|---|---|
+| **Run Scan** | Egy darab cron-tickel azonos futás: market discovery → signal aggregálás → decision → buy → (paper-ben sell). Magától a 3 perces cron is hívja, ezért nem kötelező soha kattintani — csak akkor használd, ha azonnali futást akarsz látni. | `POST /auto-trader { action: "run" }` | Nem (cron is hívja) |
+| **Reset** | Új session indítása: bankroll vissza a default-ra ($150 crypto, env-default a többi kategóriánál), `closedTrades` lista törlődik, `openPositions` üres, `stopped=false`, `tradeCount=0`. **A paper trade history is törlődik a session state-ből** — viszont az Edge Tracker külön Blobs storage-ban (mock + history) megmarad, mert az aggregált analitikára szolgál. Ha **csak a session-t akarod resetelni** és látni akarod hogy a megújult code path-tal mennyi trade keletkezik 0-ról, ez a megfelelő gomb. | `POST /auto-trader { action: "reset" }` | Igen |
+| **Stop** | A futó session-t leállítja (`stopped=true`, `stoppedReason="Manual stop"`), de a state-et nem törli. A nyitott pozíciókat sem zárja le. A következő cron tick `Session stopped` üzenettel skip-eli a futást. Reset után újra indítható, vagy ha van `Resume` gomb (Hyperliquid + Funding-arb), akkor azzal lehet újraindítani. | `POST /auto-trader { action: "stop" }` | Igen |
+| **Refresh** | **NEM** változtat semmin — csak újra lekéri a backend `/auto-trader?action=status` válaszát és frissíti a UI-t. Hasznos amikor a háttérben futott egy cron tick és látni akarod az új session metrikákat (új closed trade, frissített PnL). Magától a UI nem polleli a státuszt, ezért kell a manuális frissítés. | `GET /auto-trader?action=status` | Nem |
+
+A Funding Arb panelen plus van **Resume** gomb (csak ha stop-olt session): `POST /auto-trader { action: "resume", layer: "arb" }` — visszaállítja `stopped=false`-ra a state-et, a következő cron tick újra indul.
+
+### Auth a gombokra
+
+A backend a `reset / stop / resume` action-ökre `checkAuth(req)` guardot futtat:
+- Bejelentkezett: a JWT cookie-val átengedi
+- Nem bejelentkezett: 401 unauthorized
+- A frontend AuthGate komponens emiatt a gombokat read-only mode-ban szürke / clickelhetetlen állapotban mutatja, és egy login overlay-t jelenít meg fent
+
+A `run` action **nem auth-protected**, mert a Netlify cron belső scheduled invocation-ként hívja meg, cookie nélkül. Ha ezt blokkolnánk, a bot egyszerűen nem futna. Mivel a `run` idempotens (csak az aktuális signal-eket fut le, nem mutál config-ot, nem oldja fel a stop-ot), külső user általi triggerelés sem okoz kárt — legrosszabb esetben egy duplikált scan-t.
+
+A `status` action publikus, hogy a HomePage és a per-venue oldalak read-only nézete bárki számára látható legyen.
+
+## Hogyan resetelhető a paper trade history
+
+Két szint van:
+
+1. **Session reset (Reset gomb)** → az adott auto-trader session bankroll, PnL, openPositions, closedTrades visszaáll alapra. **Ez legtöbbször elég**, mert a Tab 12 / Edge Tracker az `auto-trader-state` Blobs store-ból olvas, és a reset utáni állapot már az új methodológiával fut.
+
+2. **Edge Tracker mock + log reset** → az Edge Tracker külön kérheti a `mock-trades.mts`-ből a régi mintaadatokat. Ezt csak a kód módosításával lehet törölni (most nincs gomb rá). A jelenlegi élő deploy esetében a `?mode=paper` válasz az auto-trader-state closedTrades-ből aggregálja, ezért a Reset gomb után az Edge Tracker is azonnal üres lesz.
+
+**Javaslat a következő paper futáshoz** (ahogy a `paper-pnl-analysis.md` ajánlja):
+
+1. /trade/crypto/ → Reset (auth után) → bankroll vissza $150
+2. Várj 1-2 órát, hagyd a cront futni
+3. Edge Tracker tabon nézd meg az új trade-eket — most már a mai filterekkel (entry window, OB imbalance konvergencia, $0.10–0.90 price band, TP/SL clamp)
+4. Ha az IC > 0 valamelyik signal-en + a calibration ~45° átlón van → a methodológia stabilizálódik
+5. Csak ezután érdemes élesíteni `PAPER_MODE=false`-szal
+
 ## Gyakori kérdések
 
 ### "Indítanom kell az auto-tradert kézzel?"

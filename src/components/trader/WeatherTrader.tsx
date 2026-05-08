@@ -93,6 +93,7 @@ export default function WeatherTrader() {
     try {
       const res = await fetch(FN, {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action, category: "weather" }),
       });
