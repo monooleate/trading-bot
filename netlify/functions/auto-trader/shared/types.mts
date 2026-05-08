@@ -1,6 +1,6 @@
 // ─── Category types ───────────────────────────────────────
 
-export type Category = "crypto" | "sports" | "politics" | "macro";
+export type Category = "crypto" | "weather" | "sports" | "politics" | "macro";
 
 // ─── Market types ─────────────────────────────────────────
 
@@ -94,6 +94,25 @@ export interface Position {
   predictedProb?: number;
   signalBreakdown?: SignalBreakdown | null;
   category?: Category;
+  // Weather-only reconciliation context. Populated by the weather trader at
+  // open and consumed by the weather reconciler cron, which queries actual
+  // METAR observations and settles the position with real PnL (instead of
+  // the old synthetic Bernoulli draw against the model's own win prob).
+  weatherMeta?: WeatherPositionMeta;
+}
+
+export interface WeatherPositionMeta {
+  city:         string;          // e.g. "hong-kong"
+  date:         string;          // YYYY-MM-DD in station tz
+  stationIcao:  string;          // e.g. "VHHH" — METAR query target
+  bucketLabel:  string;          // e.g. "21°C", "27°C or higher"
+  bucketTempC:  number;          // bucket center temperature in °C
+  predictedMaxC: number;         // our forecast (after corrections)
+  rawGfsMaxC:   number | null;
+  rawEcmwfMaxC: number | null;
+  rawNoaaMaxC:  number | null;
+  ensembleMaxC: number;
+  reconcileAfter: string;        // ISO — earliest moment to attempt settlement
 }
 
 // ─── Session types ────────────────────────────────────────

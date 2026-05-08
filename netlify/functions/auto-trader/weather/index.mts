@@ -8,18 +8,14 @@ import { getForecast } from "./forecast-engine.mts";
 import { detectModelLag } from "./model-lag-detector.mts";
 import { matchBucket } from "./bucket-matcher.mts";
 import { makeWeatherDecision, getWeatherConfig } from "./decision-engine.mts";
-import { recordDebSample } from "./deb.mts";
 import type { WeatherTradeDecision, WeatherConfig } from "./decision-engine.mts";
 import { placeBuyOrder } from "../crypto/execution.mts";
 import {
   loadSession,
   saveSession,
   addOpenPosition,
-  closePosition,
-  resetSession,
-  stopSession,
 } from "../crypto/session-manager.mts";
-import type { MarketInfo, Position, ClosedTrade } from "../shared/types.mts";
+import type { MarketInfo, Position } from "../shared/types.mts";
 
 const DEFAULT_BANKROLL = 100;
 
@@ -272,6 +268,15 @@ async function runWeatherTraderInner(config: WeatherConfig) {
       );
 
       if (buyOrder.status === "FILLED" || (config.paperMode && buyOrder.status === "FILLED")) {
+        // Reconcile a target buffer past endDate. Polymarket's settlement
+        // window plus a 1h safety margin so the daily-max METAR observation
+        // is in.
+        const reconcileAfter = new Date(
+          new Date(market.endDate).getTime() + 60 * 60_000,
+        ).toISOString();
+
+        const station = getStation(market.city)!;
+
         const position: Position = {
           market: market.slug,
           tokenId: decision.tokenId,
@@ -281,58 +286,30 @@ async function runWeatherTraderInner(config: WeatherConfig) {
           costBasis: decision.positionSizeUSDC,
           openedAt: new Date().toISOString(),
           buyOrderId: buyOrder.orderId,
+          conditionId: market.conditionId,
+          endDate: market.endDate,
+          marketPriceAtEntry: decision.marketPrice,
+          predictedProb: match.probability,
+          category: "weather",
+          weatherMeta: {
+            city:           market.city,
+            date:           market.date,
+            stationIcao:    station.icao,
+            bucketLabel:    decision.bucketLabel,
+            bucketTempC:    match.bucket.tempC ?? 0,
+            predictedMaxC:  forecast.predictedMaxC,
+            rawGfsMaxC:     forecast.rawGfsMaxC,
+            rawEcmwfMaxC:   forecast.rawEcmwfMaxC,
+            rawNoaaMaxC:    forecast.rawNoaaMaxC,
+            ensembleMaxC:   forecast.ensembleMaxC,
+            reconcileAfter,
+          },
         };
         updatedSession = addOpenPosition(updatedSession, position);
 
-        // Paper mode: simulate close based on predicted probability
-        if (config.paperMode) {
-          // match.probability is our model's P(WIN) for this bucket
-          const winProb = Math.max(0, Math.min(1, match.probability));
-          const isWin = Math.random() < winProb;
-          const exitPrice = isWin ? 1.0 : 0.0;
-          const proceeds = position.shares * exitPrice;
-          const pnl = proceeds - position.costBasis;
-
-          const trade: ClosedTrade = {
-            market: market.slug,
-            direction: decision.direction,
-            entryPrice,
-            exitPrice,
-            shares: position.shares,
-            pnl,
-            pnlPct: (pnl / position.costBasis) * 100,
-            openedAt: position.openedAt,
-            closedAt: new Date().toISOString(),
-            // Edge Tracker metadata
-            category: "weather",
-            predictedProb: winProb,
-            marketPriceAtEntry: decision.marketPrice,
-            edgeAtEntry: decision.edge,
-            signalBreakdown: null,  // weather uses different signals
-          };
-
-          updatedSession = closePosition(updatedSession, position.buyOrderId, trade);
-
-          // DEB feedback: record per-model accuracy. In paper mode we draw a
-          // synthetic "actual" from a Gaussian around the ensemble so the DEB
-          // pipeline is exercised; real settlement temp will replace this in
-          // live mode via a separate reconciliation job (TODO).
-          try {
-            const syntheticActual = forecast.ensembleMaxC + randNormal() * 1.0;
-            await recordDebSample(
-              market.city,
-              market.date,
-              parseFloat(syntheticActual.toFixed(2)),
-              {
-                gfs:   forecast.rawGfsMaxC,
-                ecmwf: forecast.rawEcmwfMaxC,
-                noaa:  forecast.rawNoaaMaxC,
-              },
-            );
-          } catch {
-            // DEB is best-effort — never block the trade close on it
-          }
-        }
+        // No more synthetic Bernoulli close. The position stays open until
+        // the weather reconciler cron picks it up after `reconcileAfter` and
+        // settles it with the actual METAR temperature.
 
         results.push({
           market: market.slug,
@@ -345,6 +322,8 @@ async function runWeatherTraderInner(config: WeatherConfig) {
           predictedTemp: decision.predictedTemp,
           edge: decision.edge,
           confidence: decision.confidence,
+          reconcileAfter,
+          status: "pending_settlement",
         });
       } else {
         results.push({ market: market.slug, action: "failed", reason: "Buy order not filled" });
@@ -388,10 +367,3 @@ function summarize(s: any) {
   };
 }
 
-// Box-Muller transform — unit-variance gaussian for paper-mode DEB feedback
-function randNormal(): number {
-  let u = 0, v = 0;
-  while (u === 0) u = Math.random();
-  while (v === 0) v = Math.random();
-  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
-}

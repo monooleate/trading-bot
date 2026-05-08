@@ -24,8 +24,8 @@ import {
 } from "./decision-engine.mts";
 import {
   placeHlEntry,
-  simulatePaperPnl,
 } from "./order-manager.mts";
+import { resolveOpenHlPaperPositions } from "./paper-resolver.mts";
 import {
   loadHlSession,
   saveHlSession,
@@ -46,6 +46,11 @@ import type {
 // Coins we'll scan per run — small to respect signal-combiner cache / API limits
 const SCAN_COINS: HlCoin[] = ["BTC", "ETH", "SOL"];
 
+// Paper positions are auto-closed once their hold time exceeds this, even
+// if neither TP nor SL crossed. Default 4h matches the typical signal
+// horizon; overridable via Settings later.
+const DEFAULT_MAX_PAPER_HOLD_MS = 4 * 60 * 60 * 1000;
+
 export async function runHyperliquidTrader(configOverride?: HlTraderConfig): Promise<any> {
   const config  = configOverride ?? getHlConfig();
   let   session = await loadHlSession(config.paperMode);
@@ -58,7 +63,33 @@ export async function runHyperliquidTrader(configOverride?: HlTraderConfig): Pro
     return { ok: true, action: "skipped", reason: `Paused until ${session.pausedUntil}`, session: summarize(session) };
   }
 
-  const results: any[] = [];
+  // ── Resolve any open paper positions FIRST. This replaces the old
+  // synthetic-close-in-the-same-run pattern with real HL markPrice driven
+  // TP/SL crossings. Any position that didn't cross stays open across cron
+  // ticks — so an ETH LONG opened at 12:00 with a 1% TP genuinely needs
+  // ETH to move 1% (the same way) before it counts as a winner.
+  const resolutions: any[] = [];
+  if (config.paperMode && session.openPositions.length > 0) {
+    const r = await resolveOpenHlPaperPositions(session, {
+      feeRoundtrip:   config.roundtripFeePct,
+      maxPaperHoldMs: DEFAULT_MAX_PAPER_HOLD_MS,
+    });
+    session = r.session;
+    for (const res of r.resolutions) {
+      resolutions.push({ coin: res.coin, action: "resolved", reason: res.reason, exit: res.exitPrice, pnl: res.pnlUSDC });
+    }
+    // Apply post-close session checks once after the batch resolution.
+    if (r.resolutions.length > 0) {
+      if (session.consecutiveLosses >= config.consecutiveLossLimit) {
+        session = applyConsecutiveLossPause(session, config.consecutiveLossPauseHours);
+      }
+      if (session.sessionLoss >= config.sessionLossLimit) {
+        session = stopHlSession(session, "Session loss limit reached");
+      }
+    }
+  }
+
+  const results: any[] = resolutions;
 
   for (const coin of SCAN_COINS) {
     try {
@@ -151,65 +182,22 @@ export async function runHyperliquidTrader(configOverride?: HlTraderConfig): Pro
         size: entry.position.sizeCoins,
       });
 
-      // 7. Paper-mode: close synthetically within this run
-      if (config.paperMode) {
-        const sim = simulatePaperPnl({
-          position:     entry.position,
-          currentPrice: hlPrice,
-          feeRoundtrip: config.roundtripFeePct,
-        });
-        const closedTrade: HlClosedTrade = {
-          coin,
-          direction:     signal.direction,
-          entryPrice:    entry.position.entryPrice,
-          exitPrice:     sim.exitPrice,
-          sizeCoins:     entry.position.sizeCoins,
-          pnlUSDC:       sim.pnlUSDC,
-          pnlPct:        sim.pnlPct,
-          openedAt:      entry.position.openedAt,
-          closedAt:      new Date().toISOString(),
-          closeReason:   sim.closeReason,
-          edgeAtEntry:   decision.edge,
-          predictedProb: signal.finalProb,
-          signalBreakdown: signal.signalBreakdown,
-        };
-        session = closePosition(session, entry.position.entryOrderId, closedTrade);
-
-        log("TRADE_CLOSED", config.paperMode, {
-          venue: "hyperliquid",
-          coin,
-          pnl: sim.pnlUSDC,
-          reason: sim.closeReason,
-        });
-
-        // Consecutive-loss pause
-        if (session.consecutiveLosses >= config.consecutiveLossLimit) {
-          session = applyConsecutiveLossPause(session, config.consecutiveLossPauseHours);
-        }
-
-        // Session-loss stop
-        if (session.sessionLoss >= config.sessionLossLimit) {
-          session = stopHlSession(session, "Session loss limit reached");
-        }
-
-        results.push({
-          coin,
-          action:    "traded",
-          direction: signal.direction,
-          entry:     entry.position.entryPrice,
-          exit:      sim.exitPrice,
-          pnl:       sim.pnlUSDC,
-          reason:    sim.closeReason,
-        });
-      } else {
-        results.push({
-          coin,
-          action:    "position_opened",
-          direction: signal.direction,
-          entry:     entry.position.entryPrice,
-          size:      entry.position.sizeCoins,
-        });
-      }
+      // 7. Position is now open. In paper mode it stays open across cron
+      // ticks until the live HL markPrice crosses TP or SL — see
+      // resolveOpenHlPaperPositions called at the top of this function.
+      // The previous synthetic same-tick close is gone because it was a
+      // function of the price-direction sign relative to entry, which made
+      // every signal look profitable when markPrice happened to drift
+      // favorably (paper bias documented in paper-pnl-analysis.md).
+      results.push({
+        coin,
+        action:    "position_opened",
+        direction: signal.direction,
+        entry:     entry.position.entryPrice,
+        tp:        entry.position.tpPrice,
+        sl:        entry.position.slPrice,
+        size:      entry.position.sizeCoins,
+      });
     } catch (err: any) {
       log("ERROR", config.paperMode, { venue: "hyperliquid", coin, error: err.message });
       await alertError(`[hyperliquid] ${coin}: ${err.message}`);

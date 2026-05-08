@@ -285,8 +285,40 @@ npx tsc --noEmit -p tsconfig.json   # 0 új error az érintett fájlokban
 4. A Tab 12 Edge Tracker tetején a Calibration Health badge színe azonnal megmutatja: zöld = signal-ek valódi prediktív erővel, piros = noise → live váltás tilos.
 5. A Settings tabon (Tab 13) finomhangolható: `paperBrownianSigma`, `paperFallbackAfterMs`, `btcMinPriceBand`.
 
+### Crypto Trader UI parity-pass weather-rel (2026-05-09 második passz)
+
+A felhasználó kérte hogy a crypto trader oldal mutassa ugyanazokat az infókat mint
+a weather: élő status pillek + a scan során vizsgált piacok + miért tradel /
+miért skippel a model. Ezért:
+
+- **Új `auto-trader/crypto/run-state.mts` modul** — ugyanaz a Blobs-alapú
+  RunState shape mint a weather-é (`startedAt`, `lastRunAt`, `source`,
+  `lastResult`). `markRunStart` / `markRunFinish` / `getCryptoRunStatus`.
+- **`runCryptoTrader(initialConfig, source)`** — fogad `manual` / `cron` source paramétert. A handler `?source=cron` query alapján állítja be (auto-trader-multi-cron passzolja). Belül:
+  - `markRunStart(source)` a futás elején
+  - `finish(payload)` helper: minden return ágon át megy, a payload-ot eltárolja `markRunFinish`-en keresztül és visszaküldi mint HTTP response
+  - Minden `results.push()` `marketContext`-tel (slug + title + marketPrice + predictedProb + edge + netEdge + direction + kelly/kellyUsed + activeSignals + signalBreakdown + obImbalance + endDate)
+  - `droppedMarkets` field — a top 3 alatti BTC piacok listája hogy a UI „nem evaluated this tick" infót adhasson
+  - `config` field — `traderConfigSummary()`: edge threshold, max-kelly, TP/SL, entry-band, fees stb.
+- **`getStatus(category="crypto")`** kiegészítve `runStatus` + `cronEnabled: true` mezővel (a crypto cron `*/3` mindig fut).
+- **`CryptoTrader.tsx` rewrite** — Weather-szerű:
+  - Header status cluster: `Scanning… (manual/cron)` / `Idle` pulse pill, `cron ON · 3 min` pill, `last (manual): 2m ago` pill (1s-enként frissül lokálisan, 5s-enként pollol szervert)
+  - `cfgline`: aktív edge/kelly/TP/SL/band/fees egy sorban
+  - Per-market `ScanResultRow` komponens: market title, mp / model% / edge / direction / kelly / 5/5 signals / OB↑↓ pill-ek + 5 signal-arrow (FR↑ VPIN↓ VOL↑ APEX· CP↓), action chip (skip/position_opened/error/failed), reason / size / pnl
+  - Dropped markets `<details>` section (top 3 alatti piacok)
+- A `CalibrationHealthBadge` továbbra is ott van compact variantban a status alatt.
+
+### Érintett fájlok (UI parity)
+
+```
+netlify/functions/auto-trader/crypto/run-state.mts                ÚJ Blobs-alapú RunState store
+netlify/functions/auto-trader/index.mts                          source param, finish() helper, marketContext, droppedMarkets, traderConfigSummary, runStatus crypto status válaszban
+src/components/trader/CryptoTrader.tsx                           rewrite: status cluster, ScanResultRow, dropped section, polling
+```
+
 ### Mi marad TODO
 
 - **Per-tick TP/SL polling paper módban**: jelenleg a paper position holding-to-end vagy Brownian-fallback útján zár. Élesben a `order-lifecycle` poll-olja a YES árat és TP/SL-en zár. A paper-be is lehetne CLOB midprice polling 30s-onként, hogy a TP/SL profile éles és paper között 1:1 legyen. Most még nem szükséges (real-resolution az igazi mérce).
+- **`auto-trader-multi-cron` `?source=cron` passzolása** — ha még nem teszi, hozzáadni hogy a runStatus.source pontosan tükrözze a cron-eredetű futásokat is.
 - **IC kalibráció:** ha 50+ valós paper trade után a IC értékek tényleg ≥0.05-re jönnek fel, akkor a `signal-combiner` IC weightingjét újrahangolni az új mérési értékekre.
 - **Edge-decay alarm:** ha az IC eleinte jó volt majd 0-ra esett, az is alarm-érték (signal degradálódik). Most még nincs benne.

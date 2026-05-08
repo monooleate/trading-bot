@@ -35,6 +35,24 @@ interface RunStatus {
   lastResult: any | null;
 }
 
+interface PendingPosition {
+  market: string;
+  city: string;
+  date: string;
+  bucket: string;
+  direction: "YES" | "NO";
+  size: number;
+  predictedMaxC: number;
+  reconcileAfter: string;
+  isReady: boolean;
+}
+
+interface PendingResponse {
+  count: number;
+  nextReconcileAt: string | null;
+  positions: PendingPosition[];
+}
+
 interface StatusResponse {
   ok: boolean;
   category: string;
@@ -42,6 +60,7 @@ interface StatusResponse {
   recentLogs: any[];
   runStatus?: RunStatus;
   cronEnabled?: boolean;
+  pending?: PendingResponse;
 }
 
 function formatAge(sec: number | null): string {
@@ -50,6 +69,15 @@ function formatAge(sec: number | null): string {
   if (sec < 3600)  return `${Math.floor(sec / 60)}m ago`;
   if (sec < 86400) return `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m ago`;
   return `${Math.floor(sec / 86400)}d ago`;
+}
+
+function formatDuration(ms: number): string {
+  if (ms <= 0) return "ready";
+  const sec = Math.floor(ms / 1000);
+  if (sec < 60) return `in ${sec}s`;
+  if (sec < 3600) return `in ${Math.floor(sec / 60)}m`;
+  if (sec < 86400) return `in ${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m`;
+  return `in ${Math.floor(sec / 86400)}d ${Math.floor((sec % 86400) / 3600)}h`;
 }
 
 export default function WeatherTrader() {
@@ -152,6 +180,10 @@ export default function WeatherTrader() {
         <button className="wt-btn wt-btn-primary" onClick={doRun} disabled={isRunning}>
           {isRunning ? "Scanning..." : "Scan Weather Markets"}
         </button>
+        <button className="wt-btn wt-btn-info" onClick={() => doAction("reconcile")} disabled={isRunning}
+                title="Force a settlement pass on pending paper positions">
+          ⟳ Reconcile pending
+        </button>
         <button className="wt-btn" onClick={() => doAction("reset")} disabled={isRunning}>
           Reset
         </button>
@@ -159,6 +191,35 @@ export default function WeatherTrader() {
           Stop
         </button>
       </div>
+
+      {status?.pending && status.pending.count > 0 && (
+        <div className="wt-pending">
+          <div className="wt-pending-title">
+            {status.pending.count} pending paper position{status.pending.count > 1 ? "s" : ""} — awaiting Polymarket settlement
+          </div>
+          <div className="wt-pending-list">
+            {status.pending.positions.map((p, i) => {
+              const msUntil = new Date(p.reconcileAfter).getTime() - Date.now();
+              return (
+                <div key={i} className={`wt-pending-row ${p.isReady ? "ready" : ""}`}>
+                  <span className="wt-pending-city">{p.city}</span>
+                  <span className="wt-pending-date">{p.date}</span>
+                  <span className="wt-pending-bucket">{p.bucket}</span>
+                  <span className={`wt-pending-dir wt-pending-dir-${p.direction}`}>{p.direction}</span>
+                  <span className="wt-pending-pred">pred {p.predictedMaxC}°C</span>
+                  <span className="wt-pending-size">${p.size.toFixed(2)}</span>
+                  <span className="wt-pending-when">
+                    {p.isReady ? "✓ ready to settle" : formatDuration(msUntil)}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+          <div className="wt-pending-foot">
+            Source priority: <strong>Polymarket Gamma</strong> (authoritative) → METAR fallback after 6h
+          </div>
+        </div>
+      )}
 
       {error && <div className="wt-error">{error}</div>}
 
@@ -267,6 +328,7 @@ export default function WeatherTrader() {
         }
         .wt-btn:disabled { opacity: 0.4; cursor: not-allowed; }
         .wt-btn-primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+        .wt-btn-info { background: transparent; color: var(--accent2); border-color: var(--accent2); }
         .wt-btn-danger { background: transparent; color: var(--danger); border-color: var(--danger); }
         .wt-error {
           background: rgba(241,53,53,0.1); border: 1px solid var(--danger);
@@ -325,6 +387,39 @@ export default function WeatherTrader() {
         .wt-dropped-expired { color: var(--muted); }
         .wt-dropped-title { flex: 1; color: var(--text); }
         .wt-dropped-vol { color: var(--muted); }
+        .wt-pending {
+          background: var(--surface); border: 1px solid var(--accent2);
+          border-radius: 8px; padding: 1rem; margin-bottom: 1rem;
+        }
+        .wt-pending-title {
+          font-family: var(--mono); font-size: 0.75rem; color: var(--accent2);
+          text-transform: uppercase; letter-spacing: .05em; margin-bottom: 0.75rem;
+        }
+        .wt-pending-list { display: flex; flex-direction: column; gap: 6px; }
+        .wt-pending-row {
+          display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+          font-family: var(--mono); font-size: 0.7rem;
+          padding: 0.5rem; background: var(--surface2); border-radius: 4px;
+          border-left: 3px solid var(--accent2);
+        }
+        .wt-pending-row.ready { border-left-color: var(--accent); }
+        .wt-pending-city { font-weight: 600; color: var(--text); text-transform: capitalize; min-width: 90px; }
+        .wt-pending-date { color: var(--muted); font-size: 0.6rem; }
+        .wt-pending-bucket { background: var(--bg); padding: 1px 6px; border-radius: 3px; color: var(--text); }
+        .wt-pending-dir { padding: 1px 6px; border-radius: 3px; font-size: 0.6rem; font-weight: 700; }
+        .wt-pending-dir-YES { background: var(--accent); color: var(--bg); }
+        .wt-pending-dir-NO  { background: var(--danger); color: #fff; }
+        .wt-pending-pred { color: var(--accent2); }
+        .wt-pending-size { color: var(--muted); font-weight: 600; margin-left: auto; }
+        .wt-pending-when {
+          font-family: var(--mono); font-size: 0.65rem; color: var(--warn);
+          background: var(--bg); padding: 2px 6px; border-radius: 3px;
+        }
+        .wt-pending-row.ready .wt-pending-when { color: var(--accent); }
+        .wt-pending-foot {
+          margin-top: 0.75rem; font-family: var(--mono); font-size: 0.6rem;
+          color: var(--muted); text-transform: uppercase; letter-spacing: .04em;
+        }
       `}</style>
     </div>
   );

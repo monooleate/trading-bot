@@ -28,6 +28,7 @@ import { makeDecision, setCooldown } from "./crypto/decision-engine.mts";
 import { placeBuyOrder } from "./crypto/execution.mts";
 import { handleBuyLifecycle } from "./crypto/order-lifecycle.mts";
 import { resolvePendingPaperPositions } from "./crypto/paper-resolver.mts";
+import { markRunStart, markRunFinish, getCryptoRunStatus } from "./crypto/run-state.mts";
 import {
   loadSession,
   saveSession,
@@ -39,6 +40,7 @@ import { computeCalibrationHealth } from "../edge-tracker/statistics.mts";
 import type { SessionState, MarketInfo, SignalBreakdown, Position } from "./shared/types.mts";
 import { runWeatherTrader, getWeatherRunStatus } from "./weather/index.mts";
 import { getWeatherConfig, getEffectiveWeatherConfig } from "./weather/decision-engine.mts";
+import { runWeatherReconciler, getPendingPositions } from "./weather/reconciler.mts";
 import {
   runHyperliquidTrader,
   getHlStatus,
@@ -128,13 +130,30 @@ export default async function handler(req: Request, _ctx: Context) {
           const wConfig = await getEffectiveWeatherConfig();
           return jsonResponse(await runWeatherTrader(wConfig, "manual"));
         }
-        return await runCryptoTrader(config);
+        // The crypto trader records run-state itself so cron and manual
+        // invocations both surface in the UI status pills. Source defaults
+        // to "manual" — the cron caller passes `?source=cron`.
+        {
+          const url = new URL(req.url);
+          const source: "manual" | "cron" =
+            (url.searchParams.get("source") === "cron" || (req as any)._source === "cron")
+              ? "cron"
+              : "manual";
+          return await runCryptoTrader(config, source);
+        }
       case "status":
         return await getStatus(config, cat);
       case "reset":
         return await handleReset(config, cat);
       case "stop":
         return await handleStop(config, cat);
+      case "reconcile":
+        // Weather-only manual reconcile — let the user force a settlement
+        // pass without waiting for the */15 cron tick.
+        if (cat === "weather") {
+          return jsonResponse(await runWeatherReconciler(config.paperMode));
+        }
+        return jsonResponse({ ok: false, error: "reconcile is weather-only" }, 400);
       default:
         return jsonResponse({ ok: false, error: `Unknown action: ${action}` }, 400);
     }
@@ -147,7 +166,15 @@ export default async function handler(req: Request, _ctx: Context) {
 
 // ─── Crypto trader main loop ──────────────────────────────
 
-async function runCryptoTrader(initialConfig: ReturnType<typeof getTraderConfig>) {
+async function runCryptoTrader(
+  initialConfig: ReturnType<typeof getTraderConfig>,
+  source: "manual" | "cron" = "manual",
+) {
+  // Mark "scanning" right away so the UI Idle→Scanning pill flips on the
+  // very next status poll. Wrapped in try so a Blobs hiccup never blocks
+  // the actual trade run.
+  await markRunStart(source).catch(() => {});
+
   // Pull live overrides from the trader-settings store so paper-mode
   // tuning takes effect on the next cron tick without a redeploy.
   const config  = await getEffectiveTraderConfig();
@@ -168,6 +195,15 @@ async function runCryptoTrader(initialConfig: ReturnType<typeof getTraderConfig>
     if (typeof ov.btcMinPriceBand       === "number") btcMinPriceBand      = ov.btcMinPriceBand;
   } catch {}
   let session = await loadSession(config.paperMode, DEFAULT_BANKROLL);
+
+  // Helper: persists the final result snapshot into the run-state store and
+  // returns the HTTP response. Every early return below funnels through this
+  // so the UI's "last run" pill always reflects what just happened.
+  const finish = async (payload: any, status = 200) => {
+    const enriched = { ...payload, source, finishedAt: new Date().toISOString() };
+    await markRunFinish(enriched).catch(() => {});
+    return jsonResponse(enriched, status);
+  };
 
   // Resolve any open paper positions whose markets have ended. Real
   // Polymarket resolution is preferred; the Brownian-bridge fallback is
@@ -209,7 +245,7 @@ async function runCryptoTrader(initialConfig: ReturnType<typeof getTraderConfig>
       session = stopSession(session, `Calibration noise: ${health.message}`);
       await alertSessionStop(false, health.message, session);
       await saveSession(session);
-      return jsonResponse({
+      return await finish({
         ok: true,
         action: "stopped",
         reason: "calibration_noise",
@@ -222,7 +258,7 @@ async function runCryptoTrader(initialConfig: ReturnType<typeof getTraderConfig>
   // Check if session is stopped
   if (session.stopped) {
     await saveSession(session);
-    return jsonResponse({
+    return await finish({
       ok: true,
       action: "skipped",
       reason: `Session stopped: ${session.stoppedReason}`,
@@ -233,16 +269,28 @@ async function runCryptoTrader(initialConfig: ReturnType<typeof getTraderConfig>
   // 1. Find active BTC markets (deep-OTM band filter applied)
   const markets = await findBtcMarkets(config.minOpenInterest, btcMinPriceBand);
   if (markets.length === 0) {
-    return jsonResponse({
+    return await finish({
       ok: true,
       action: "skipped",
       reason: "No active BTC Up/Down markets found",
       session: sessionSummary(session),
+      config: traderConfigSummary(config, btcExit, btcMinPriceBand),
     });
   }
 
   let updatedSession = session;
   const results: any[] = [];
+  // The scanner only acts on the top 3 markets per tick. Surface the rest
+  // so the UI can still show "what else is out there" — same idea as
+  // weather-trader's droppedEvents.
+  const droppedMarkets = markets.slice(3).map((m) => ({
+    slug: m.slug,
+    title: m.title,
+    currentPrice: m.currentPrice,
+    volume24h: m.volume24h,
+    endDate: m.endDate,
+    reason: "below_top_3",
+  }));
 
   // 2. Process each market
   for (const market of markets.slice(0, 3)) { // max 3 markets per run
@@ -255,7 +303,14 @@ async function runCryptoTrader(initialConfig: ReturnType<typeof getTraderConfig>
 
     // Skip if already have an open position in this market
     if (updatedSession.openPositions.some((p) => p.market === market.slug)) {
-      results.push({ market: market.slug, action: "skip", reason: "Already has open position" });
+      results.push({
+        market: market.slug,
+        title: market.title,
+        action: "skip",
+        reason: "Already has open position",
+        marketPrice: market.currentPrice,
+        endDate: market.endDate,
+      });
       continue;
     }
 
@@ -282,12 +337,30 @@ async function runCryptoTrader(initialConfig: ReturnType<typeof getTraderConfig>
         btcExit,
       );
 
+      // Common per-market context surfaced in the response so the UI can
+      // explain *why* the bot acted the way it did, regardless of branch.
+      const marketContext = {
+        market: market.slug,
+        title: market.title,
+        marketPrice: market.currentPrice,
+        predictedProb: signal.finalProb,
+        edge: Math.abs(signal.finalProb - market.currentPrice),
+        netEdge: decision.edge,
+        direction: decision.direction,
+        kelly: signal.kellyFraction,
+        kellyUsed: decision.kellyUsed,
+        activeSignals: signal.activeSignals,
+        signalBreakdown: signal.signalBreakdown,
+        obImbalance: signal.obImbalance ?? null,
+        endDate: market.endDate,
+      };
+
       if (!decision.shouldTrade) {
         log("DECISION_SKIP", config.paperMode, {
           market: market.slug,
           reason: decision.reason,
         });
-        results.push({ market: market.slug, action: "skip", reason: decision.reason });
+        results.push({ ...marketContext, action: "skip", reason: decision.reason });
         continue;
       }
 
@@ -312,7 +385,7 @@ async function runCryptoTrader(initialConfig: ReturnType<typeof getTraderConfig>
       const position = await handleBuyLifecycle(buyOrder, market, config.paperMode);
 
       if (!position) {
-        results.push({ market: market.slug, action: "failed", reason: "Buy order not filled" });
+        results.push({ ...marketContext, action: "failed", reason: "Buy order not filled" });
         continue;
       }
 
@@ -356,29 +429,30 @@ async function runCryptoTrader(initialConfig: ReturnType<typeof getTraderConfig>
       //    - live:  the existing sell-side lifecycle (TP/SL polling,
       //             emergency FOK, etc.)
       results.push({
-        market: market.slug,
+        ...marketContext,
         action: "position_opened",
-        direction: decision.direction,
         entry: decision.entryPrice,
         size: decision.positionSizeUSDC,
         paperMode: config.paperMode,
-        endDate: market.endDate,
       });
     } catch (err: any) {
       log("ERROR", config.paperMode, { market: market.slug, error: err.message });
-      results.push({ market: market.slug, action: "error", error: err.message });
+      results.push({ market: market.slug, title: market.title, action: "error", error: err.message });
     }
   }
 
   // Save session state
   await saveSession(updatedSession);
 
-  return jsonResponse({
+  return await finish({
     ok: true,
     action: "run",
     paperMode: config.paperMode,
     marketsScanned: markets.length,
+    marketsConsidered: Math.min(markets.length, 3),
     results,
+    droppedMarkets,
+    config: traderConfigSummary(config, btcExit, btcMinPriceBand),
     session: sessionSummary(updatedSession),
   });
 }
@@ -400,6 +474,13 @@ async function getStatus(config: ReturnType<typeof getTraderConfig>, category: s
     base.runStatus = await getWeatherRunStatus();
     const wcfg = await getEffectiveWeatherConfig();
     base.cronEnabled = wcfg.cronEnabled;
+    // Pending paper positions awaiting Polymarket settlement / METAR fallback.
+    base.pending = await getPendingPositions(config.paperMode);
+  } else if (category === "crypto") {
+    // Same status payload shape as weather: the UI's status cluster reads
+    // the same fields regardless of venue.
+    base.runStatus   = await getCryptoRunStatus();
+    base.cronEnabled = true; // crypto cron (auto-trader */3) is always on
   }
   return jsonResponse(base);
 }
@@ -433,6 +514,27 @@ async function handleStop(config: ReturnType<typeof getTraderConfig>, category: 
 }
 
 // ─── Helpers ──────────────────────────────────────────────
+
+function traderConfigSummary(
+  config: ReturnType<typeof getTraderConfig>,
+  btcExit: ReturnType<typeof getEffectiveBtcExitConfig> extends Promise<infer T> ? T : never,
+  btcMinPriceBand: number,
+) {
+  return {
+    edgeThreshold:    config.edgeThreshold,
+    maxKellyFraction: config.maxKellyFraction,
+    cooldownSeconds:  config.cooldownSeconds,
+    sessionLossLimit: config.sessionLossLimit,
+    minOpenInterest:  config.minOpenInterest,
+    roundtripFeePct:  config.roundtripFeePct,
+    paperMode:        config.paperMode,
+    btcTpTarget:      btcExit.tpTarget,
+    btcSlTarget:      btcExit.slTarget,
+    btcMinPriceBand,
+    btcEntryWindowStartMs: btcExit.entryWindowStartMs,
+    btcEntryWindowEndMs:   btcExit.entryWindowEndMs,
+  };
+}
 
 function sessionSummary(s: SessionState) {
   return {

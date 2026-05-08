@@ -26,6 +26,12 @@
 [functions."auto-trader-weather-cron"]
   schedule = "*/5 * * * *"
 
+# Weather paper-pozíció reconciler cron — 15 percenként ellenőrzi az
+# endDate-en túli nyitott paper pozíciókat. Polymarket Gamma settlement
+# elsődleges, METAR fallback 6h múlva. Always-on (nem gate-elt).
+[functions."auto-trader-weather-reconciler-cron"]
+  schedule = "*/15 * * * *"
+
 # Multi-cron a Hyperliquid Perp és Funding Arb futtatásához.
 # A meglévő auto-trader cron csak a crypto category-t hívja
 # (default category="crypto" a dispatcherében), ezért a HL + FR
