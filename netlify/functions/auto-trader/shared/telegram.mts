@@ -88,3 +88,21 @@ export function alertSessionStop(
 export function alertError(message: string): Promise<boolean> {
   return sendMessage(`⚠️ <b>ERROR</b>\n${message}`);
 }
+
+export function alertCalibrationNoise(
+  paper: boolean,
+  message: string,
+  tradeCount: number,
+  maxAbsIC: number,
+): Promise<boolean> {
+  const tag = paper ? "PAPER" : "LIVE";
+  const text =
+    `⚠️ <b>CALIBRATION ALARM [${tag}]</b>\n` +
+    `Trades: ${tradeCount}\n` +
+    `Max |IC|: ${(maxAbsIC * 100).toFixed(2)}%\n` +
+    `${message}\n` +
+    (paper
+      ? `(paper continues; tune signals or rerun with /auto-trader reset before going live)`
+      : `Live trading auto-suspended.`);
+  return sendMessage(text);
+}

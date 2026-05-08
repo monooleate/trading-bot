@@ -301,6 +301,62 @@ export function computeSignalIC(trades: ClosedTrade[]): SignalICResult[] {
   });
 }
 
+// ─── Calibration health (signal IC summary) ───────────────
+// Used by both the trader cron (to optionally suspend live trading and
+// fire a Telegram alert) and the Edge Tracker UI (to render a health
+// badge). All thresholds are deliberate and live here so paper-mode
+// evaluation matches what the alerting path uses.
+
+export interface CalibrationHealth {
+  status: "good" | "weak" | "noise" | "insufficient";
+  maxAbsIC: number;
+  topSignal: string | null;
+  tradeCount: number;
+  shouldSuspendLive: boolean;
+  message: string;
+}
+
+export function computeCalibrationHealth(
+  trades: ClosedTrade[],
+  minTrades: number = 30,
+): CalibrationHealth {
+  const ics = computeSignalIC(trades);
+  const tc = trades.length;
+  const sortedByAbs = [...ics].sort((a, b) => Math.abs(b.ic) - Math.abs(a.ic));
+  const top = sortedByAbs[0];
+  const maxAbs = top ? Math.abs(top.ic) : 0;
+
+  if (tc < minTrades) {
+    return {
+      status: "insufficient",
+      maxAbsIC: Math.round(maxAbs * 1000) / 1000,
+      topSignal: top?.signalName ?? null,
+      tradeCount: tc,
+      shouldSuspendLive: false,
+      message: `Need ${minTrades - tc} more trades before calibration is meaningful`,
+    };
+  }
+
+  let status: CalibrationHealth["status"];
+  if (maxAbs >= 0.05) status = "good";
+  else if (maxAbs >= 0.02) status = "weak";
+  else status = "noise";
+
+  return {
+    status,
+    maxAbsIC: Math.round(maxAbs * 1000) / 1000,
+    topSignal: top?.signalName ?? null,
+    tradeCount: tc,
+    shouldSuspendLive: status === "noise",
+    message:
+      status === "noise"
+        ? `All signals are noise (max |IC|=${(maxAbs * 100).toFixed(1)}% over ${tc} trades). Live trading should be suspended.`
+        : status === "weak"
+        ? `Top signal ${top?.signalName} has weak IC=${(maxAbs * 100).toFixed(1)}%. Marginal predictive value.`
+        : `Top signal ${top?.signalName} has IC=${(maxAbs * 100).toFixed(1)}% — meaningful predictive value.`,
+  };
+}
+
 // ─── Edge decay (weekly buckets) ──────────────────────────
 
 export interface EdgeDecayPoint {

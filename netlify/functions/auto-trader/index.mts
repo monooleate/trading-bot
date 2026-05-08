@@ -6,23 +6,37 @@
 // Sprint 1: only crypto category is active.
 
 import type { Context } from "@netlify/functions";
-import { CORS, getTraderConfig, getBtcExitConfig, getEffectiveTraderConfig, getEffectiveBtcExitConfig } from "./shared/config.mts";
+import { checkAuth } from "../_auth-guard.ts";
+import { CORS, getTraderConfig, getEffectiveTraderConfig, getEffectiveBtcExitConfig } from "./shared/config.mts";
+
+// State-changing actions require a valid JWT cookie. Read-only `status` is
+// public so the home page + per-venue dashboards can render without
+// forcing login on every visitor.
+//
+// `run` is intentionally NOT in this set: the Netlify cron triggers
+// `/auto-trader?action=run` every 3 min as an internal scheduled invocation
+// without a cookie. Blocking `run` would silently disable the bot. Any
+// abuse here is bounded — a `run` only fires the configured signal once
+// against the existing session; it cannot mutate config or unblock a
+// stopped session (those need `reset`/`resume`, which DO require auth).
+const PROTECTED_ACTIONS = new Set(["reset", "stop", "resume"]);
 import { log, getLogBuffer } from "./shared/logger.mts";
-import { alertTradeOpen, alertTradeClosed, alertSessionStop, alertError } from "./shared/telegram.mts";
+import { alertTradeOpen, alertTradeClosed, alertSessionStop, alertError, alertCalibrationNoise } from "./shared/telegram.mts";
 import { findBtcMarkets } from "./crypto/btc-market-finder.mts";
 import { aggregateSignals } from "./crypto/signal-aggregator.mts";
 import { makeDecision, setCooldown } from "./crypto/decision-engine.mts";
 import { placeBuyOrder } from "./crypto/execution.mts";
-import { handleBuyLifecycle, handleSellLifecycle } from "./crypto/order-lifecycle.mts";
+import { handleBuyLifecycle } from "./crypto/order-lifecycle.mts";
+import { resolvePendingPaperPositions } from "./crypto/paper-resolver.mts";
 import {
   loadSession,
   saveSession,
   addOpenPosition,
-  closePosition,
   stopSession,
   resetSession,
 } from "./crypto/session-manager.mts";
-import type { SessionState, MarketInfo, SignalBreakdown } from "./shared/types.mts";
+import { computeCalibrationHealth } from "../edge-tracker/statistics.mts";
+import type { SessionState, MarketInfo, SignalBreakdown, Position } from "./shared/types.mts";
 import { runWeatherTrader, getWeatherRunStatus } from "./weather/index.mts";
 import { getWeatherConfig, getEffectiveWeatherConfig } from "./weather/decision-engine.mts";
 import {
@@ -68,6 +82,12 @@ export default async function handler(req: Request, _ctx: Context) {
       action = url.searchParams.get("action") || "status";
       category = url.searchParams.get("category") || "crypto";
       layer = url.searchParams.get("layer") || "directional";
+    }
+
+    // Auth gate for state-changing actions (reset/stop/resume).
+    if (PROTECTED_ACTIONS.has(action)) {
+      const auth = await checkAuth(req);
+      if (!auth.ok) return auth.error;
     }
 
     const config = getTraderConfig();
@@ -132,18 +152,76 @@ async function runCryptoTrader(initialConfig: ReturnType<typeof getTraderConfig>
   // tuning takes effect on the next cron tick without a redeploy.
   const config  = await getEffectiveTraderConfig();
   const btcExit = await getEffectiveBtcExitConfig();
-  // P1.3 OB-imbalance thresholds (override-able via /trader-settings)
+  // P1.3 OB-imbalance thresholds + paper-resolver / market-finder knobs
+  // (all override-able via /trader-settings without a redeploy)
   let obUp = 1.8, obDown = 0.55;
+  let paperFallbackAfterMs = 30 * 60 * 1000;
+  let paperBrownianSigma   = 0.45;
+  let btcMinPriceBand      = 0.10;
   try {
     const mod: any = await import("../trader-settings.mts");
     const ov = await mod.loadRuntimeOverrides();
-    if (typeof ov.obImbalanceUpRatio   === "number") obUp   = ov.obImbalanceUpRatio;
-    if (typeof ov.obImbalanceDownRatio === "number") obDown = ov.obImbalanceDownRatio;
+    if (typeof ov.obImbalanceUpRatio    === "number") obUp                 = ov.obImbalanceUpRatio;
+    if (typeof ov.obImbalanceDownRatio  === "number") obDown               = ov.obImbalanceDownRatio;
+    if (typeof ov.paperFallbackAfterMs  === "number") paperFallbackAfterMs = ov.paperFallbackAfterMs;
+    if (typeof ov.paperBrownianSigma    === "number") paperBrownianSigma   = ov.paperBrownianSigma;
+    if (typeof ov.btcMinPriceBand       === "number") btcMinPriceBand      = ov.btcMinPriceBand;
   } catch {}
-  const session = await loadSession(config.paperMode, DEFAULT_BANKROLL);
+  let session = await loadSession(config.paperMode, DEFAULT_BANKROLL);
+
+  // Resolve any open paper positions whose markets have ended. Real
+  // Polymarket resolution is preferred; the Brownian-bridge fallback is
+  // only used after `paperFallbackAfterMs` ms past endDate and is itself
+  // independent of `finalProb`, so the IC computation remains meaningful.
+  if (config.paperMode && session.openPositions.length > 0) {
+    const r = await resolvePendingPaperPositions(session, {
+      tpTarget:        btcExit.tpTarget,
+      slTarget:        btcExit.slTarget,
+      fallbackAfterMs: paperFallbackAfterMs,
+      brownianSigma:   paperBrownianSigma,
+    });
+    session = r.session;
+    if (r.resolutions.length > 0) {
+      // Best-effort Telegram for closed paper trades — re-use the existing helper.
+      for (const res of r.resolutions) {
+        const last = session.closedTrades[session.closedTrades.length - 1];
+        if (last && last.market === res.market) {
+          await alertTradeClosed(true, last, session.sessionPnL, session.openPositions.length);
+        }
+      }
+    }
+  }
+
+  // Calibration-noise alarm: when paper has accumulated ≥30 trades and every
+  // signal still has |IC|<0.02, surface a Telegram alert (once per session)
+  // and force-stop live sessions. Paper continues so the user can iterate.
+  const health = computeCalibrationHealth(session.closedTrades, 30);
+  if (health.shouldSuspendLive && !session.calibrationAlertSentAt) {
+    log("CALIBRATION_ALARM", config.paperMode, {
+      maxAbsIC: health.maxAbsIC,
+      topSignal: health.topSignal,
+      tradeCount: health.tradeCount,
+      message: health.message,
+    });
+    await alertCalibrationNoise(config.paperMode, health.message, health.tradeCount, health.maxAbsIC);
+    session = { ...session, calibrationAlertSentAt: new Date().toISOString() };
+    if (!config.paperMode) {
+      session = stopSession(session, `Calibration noise: ${health.message}`);
+      await alertSessionStop(false, health.message, session);
+      await saveSession(session);
+      return jsonResponse({
+        ok: true,
+        action: "stopped",
+        reason: "calibration_noise",
+        calibrationHealth: health,
+        session: sessionSummary(session),
+      });
+    }
+  }
 
   // Check if session is stopped
   if (session.stopped) {
+    await saveSession(session);
     return jsonResponse({
       ok: true,
       action: "skipped",
@@ -152,8 +230,8 @@ async function runCryptoTrader(initialConfig: ReturnType<typeof getTraderConfig>
     });
   }
 
-  // 1. Find active BTC markets
-  const markets = await findBtcMarkets(config.minOpenInterest);
+  // 1. Find active BTC markets (deep-OTM band filter applied)
+  const markets = await findBtcMarkets(config.minOpenInterest, btcMinPriceBand);
   if (markets.length === 0) {
     return jsonResponse({
       ok: true,
@@ -238,8 +316,21 @@ async function runCryptoTrader(initialConfig: ReturnType<typeof getTraderConfig>
         continue;
       }
 
+      // Attach paper-resolver metadata so the next cron tick can close this
+      // position using real Polymarket resolution data (or, after a stale
+      // window, the finalProb-independent Brownian-bridge fallback).
+      const paperPosition: Position = {
+        ...position,
+        conditionId:        market.conditionId,
+        endDate:            market.endDate,
+        marketPriceAtEntry: market.currentPrice,
+        predictedProb:      signal.finalProb,
+        signalBreakdown:    signal.signalBreakdown,
+        category:           "crypto",
+      };
+
       // 7. Update session with open position
-      updatedSession = addOpenPosition(updatedSession, position);
+      updatedSession = addOpenPosition(updatedSession, paperPosition);
       setCooldown(market.slug);
 
       // Format signal arrows for telegram
@@ -257,52 +348,22 @@ async function runCryptoTrader(initialConfig: ReturnType<typeof getTraderConfig>
         signalArrows,
       );
 
-      // 8. In paper mode, immediately simulate sell at resolved price
-      if (config.paperMode) {
-        // Simulate: market resolves at final_prob (simplified paper logic)
-        const exitPrice = simulatePaperExit(signal.finalProb, market.currentPrice, decision.direction, btcExit);
-
-        const trade = await handleSellLifecycle(
-          position,
-          market,
-          exitPrice,
-          config.paperMode,
-        );
-
-        // Enrich trade with Edge Tracker metadata
-        trade.category = "crypto";
-        trade.predictedProb = signal.finalProb;
-        trade.marketPriceAtEntry = market.currentPrice;
-        trade.edgeAtEntry = decision.edge;
-        trade.signalBreakdown = signal.signalBreakdown;
-
-        updatedSession = closePosition(updatedSession, position.buyOrderId, trade);
-
-        await alertTradeClosed(
-          config.paperMode,
-          trade,
-          updatedSession.sessionPnL,
-          updatedSession.openPositions.length,
-        );
-
-        results.push({
-          market: market.slug,
-          action: "traded",
-          direction: decision.direction,
-          entry: decision.entryPrice,
-          exit: exitPrice,
-          pnl: trade.pnl,
-          edge: decision.edge,
-        });
-      } else {
-        results.push({
-          market: market.slug,
-          action: "position_opened",
-          direction: decision.direction,
-          entry: decision.entryPrice,
-          size: decision.positionSizeUSDC,
-        });
-      }
+      // 8. Position is now open. In both paper and live modes the exit is
+      //    handled by a separate path that observes real market dynamics:
+      //    - paper: resolvePendingPaperPositions (real Polymarket resolution
+      //             or a Brownian-bridge fallback, neither of which uses
+      //             finalProb — so signal IC stays meaningful)
+      //    - live:  the existing sell-side lifecycle (TP/SL polling,
+      //             emergency FOK, etc.)
+      results.push({
+        market: market.slug,
+        action: "position_opened",
+        direction: decision.direction,
+        entry: decision.entryPrice,
+        size: decision.positionSizeUSDC,
+        paperMode: config.paperMode,
+        endDate: market.endDate,
+      });
     } catch (err: any) {
       log("ERROR", config.paperMode, { market: market.slug, error: err.message });
       results.push({ market: market.slug, action: "error", error: err.message });
@@ -326,13 +387,21 @@ async function runCryptoTrader(initialConfig: ReturnType<typeof getTraderConfig>
 
 async function getStatus(config: ReturnType<typeof getTraderConfig>, category: string = "crypto") {
   const session = await loadSession(config.paperMode, DEFAULT_BANKROLL, category);
-  return jsonResponse({
+  const base: any = {
     ok: true,
     action: "status",
     category,
     session: sessionSummary(session),
     recentLogs: getLogBuffer().slice(-20),
-  });
+  };
+  // Surface weather-specific live status: lastRun timestamp, currently-
+  // scanning flag, and the most recent run summary. Powers the UI badge.
+  if (category === "weather") {
+    base.runStatus = await getWeatherRunStatus();
+    const wcfg = await getEffectiveWeatherConfig();
+    base.cronEnabled = wcfg.cronEnabled;
+  }
+  return jsonResponse(base);
 }
 
 // ─── Reset session ────────────────────────────────────────
@@ -389,30 +458,6 @@ function formatSignalArrows(breakdown: SignalBreakdown): string {
   if (breakdown.apex_consensus !== null) arrows.push(`APEX${breakdown.apex_consensus > 0.5 ? "↑" : "↓"}`);
   if (breakdown.cond_prob !== null) arrows.push(`CP${breakdown.cond_prob > 0.5 ? "↑" : "↓"}`);
   return arrows.join(" ") || "–";
-}
-
-function simulatePaperExit(
-  finalProb: number,
-  marketPrice: number,
-  direction: "YES" | "NO",
-  cfg?: ReturnType<typeof getBtcExitConfig>,
-): number {
-  // Paper mode simulation: price moves halfway toward our predicted probability
-  // This is conservative — real markets may move more or less
-  let positionExit: number;
-  if (direction === "YES") {
-    positionExit = Math.min(0.99, marketPrice + (finalProb - marketPrice) * 0.5);
-  } else {
-    const noPrice = 1 - marketPrice;
-    const noPredicted = 1 - finalProb;
-    positionExit = Math.min(0.99, noPrice + (noPredicted - noPrice) * 0.5);
-  }
-  // P1.2: clamp the simulated exit to [SL, TP] so paper trades realise the
-  // same early-exit profile as live trades, not the unrealistic full-edge fill.
-  const c = cfg ?? getBtcExitConfig();
-  if (positionExit >= c.tpTarget) return c.tpTarget;
-  if (positionExit <= c.slTarget) return c.slTarget;
-  return positionExit;
 }
 
 function jsonResponse(data: any, status = 200) {

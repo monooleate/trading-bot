@@ -5,8 +5,25 @@ import type { SessionState, Position, ClosedTrade } from "../shared/types.mts";
 const STORE_KEY = "auto-trader-session";
 const LIVE_STORE_KEY = "auto-trader-session-live";
 
+// Bump this every time the paper simulator semantics change. Sessions
+// loaded with an older simVersion are auto-archived and reset so the
+// stats tab analyses one consistent methodology.
+//
+// History:
+//   v1: halfway-toward-prediction sim (before 2026-05-09). Produced the
+//       143-trade / 98.6% WR artefact described in paper-pnl-analysis.md.
+//   v2: real Polymarket resolution + finalProb-independent Brownian-bridge
+//       fallback. First active in this session.
+export const PAPER_SIM_VERSION = 2;
+const ARCHIVE_KEY_PREFIX = "auto-trader-session-archive";
+
 function sessionKey(paperMode: boolean, category?: string): string {
   const base = paperMode ? STORE_KEY : LIVE_STORE_KEY;
+  return category && category !== "crypto" ? `${base}-${category}` : base;
+}
+
+function archiveKey(paperMode: boolean, category: string | undefined, version: number): string {
+  const base = `${ARCHIVE_KEY_PREFIX}-${paperMode ? "paper" : "live"}-v${version}`;
   return category && category !== "crypto" ? `${base}-${category}` : base;
 }
 
@@ -23,6 +40,8 @@ function defaultSession(bankroll: number, paperMode: boolean): SessionState {
     paperMode,
     stopped: false,
     stoppedReason: null,
+    simVersion: PAPER_SIM_VERSION,
+    calibrationAlertSentAt: null,
   };
 }
 
@@ -38,8 +57,35 @@ export async function loadSession(
     const raw = await store.get(sessionKey(paperMode, category));
     if (raw) {
       const parsed: SessionState = JSON.parse(raw);
-      // Ensure paperMode matches
-      if (parsed.paperMode === paperMode) return parsed;
+      // Ensure paperMode matches the requested mode.
+      if (parsed.paperMode !== paperMode) {
+        return defaultSession(defaultBankroll, paperMode);
+      }
+      // Auto-reset paper sessions written by an older simulator. The old
+      // closedTrades are archived (not deleted) for forensic analysis but
+      // are NOT loaded into the live session, so edge-tracker shows only
+      // post-upgrade trades.
+      const v = parsed.simVersion ?? 1;
+      if (paperMode && v < PAPER_SIM_VERSION) {
+        try {
+          await store.set(
+            archiveKey(paperMode, category, v),
+            JSON.stringify({ archivedAt: new Date().toISOString(), session: parsed }),
+          );
+        } catch {}
+        log("SESSION_START", paperMode, {
+          reason: "auto_reset_simversion",
+          fromVersion: v,
+          toVersion: PAPER_SIM_VERSION,
+          archivedTradeCount: parsed.closedTrades?.length ?? 0,
+        });
+        return defaultSession(defaultBankroll, paperMode);
+      }
+      // Backfill simVersion for sessions written before the field existed.
+      if (parsed.simVersion === undefined) {
+        return { ...parsed, simVersion: PAPER_SIM_VERSION };
+      }
+      return parsed;
     }
   } catch {}
 
@@ -103,6 +149,6 @@ export function stopSession(session: SessionState, reason: string): SessionState
 
 export function resetSession(bankroll: number, paperMode: boolean): SessionState {
   const session = defaultSession(bankroll, paperMode);
-  log("SESSION_START", paperMode, { bankroll });
+  log("SESSION_START", paperMode, { bankroll, simVersion: PAPER_SIM_VERSION });
   return session;
 }

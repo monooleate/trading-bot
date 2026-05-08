@@ -349,9 +349,61 @@ netlify deploy --prod --dir=dist
 
 ---
 
-## AKTUÁLIS ÁLLAPOT (2026-05-08) – Claude Code folytatáshoz
+## AKTUÁLIS ÁLLAPOT (2026-05-09) – Claude Code folytatáshoz
 
-### Mai session változások (2026-05-08)
+### Mai session változások (2026-05-09) – Weather trader 6 bugfix + Settings tab + live status
+
+**Bugok kivizsgálása:** élő `mj-trading.netlify.app/trade/weather/` scan
+megmutatta, hogy a Hong Kong May 9 piacon a modell 24.4°C-t jósolt 85.5%-os
+`26°C` konszenzussal álló piac ellen, eredmény: 70%-os hamis edge. Részletes
+elemzés: `internal-docs/changelog/CHANGELOG-2026-05-09.md`.
+
+**Javított hibák:**
+- **A**: `city_offset` mis-application — Open-Meteo airport koordinátán adja
+  vissza a forecast-ot, már station-relatív. A `correctForecast` mégis hozzáadta
+  az offsetet → ~1°C-os szisztematikus alulbecslés. Új `applyCityOffset` opció,
+  default `false`. HK predikció: 23.9°C → 25°C.
+- **B**: `forecast_days=2` global max → target dátum prefix szűrő.
+- **C**: `dallas` + `tokyo` hozzáadva a `CITY_PATTERNS`-hez.
+- **D**: 8 új város a station listában: madrid, paris, milan, munich, ankara,
+  lagos, sao-paulo, austin (mind a Polymarket Gamma által aktívan szállított).
+  Dropoltak diagnosztika a UI-on: `findWeatherMarketsDetailed()` + `DroppedEvent`.
+- **E**: `maxEdgeCap` (default 0.40) — ha a gross edge nagyobb, no-trade
+  "likely model error" reason-nel. Smoke teszt: HK -60% edge mostantól blokkolva.
+- **F**: paper-mode self-validation dokumentálva (változatlan, TODO live METAR
+  reconciliation).
+
+**Új tunable Settings paraméterek (`netlify/functions/trader-settings.mts`):**
+9 weather-kategóriás field — `weatherEdgeThreshold`, `weatherConfidenceMin`,
+`weatherExitBeforeMin`, `weatherMaxPositionUSD`, `weatherMaxEdgeCap`,
+`weatherForecastDays`, plus 3 boolean toggle: `weatherApplyCityOffset`,
+`weatherUseEnsemble`, `weatherCronEnabled`. `getEffectiveWeatherConfig()`
+mergel env defaults + Blobs runtime overrides.
+
+**UI változások:**
+- `/trade/weather/` oldalon új **⚙ Beállítások** tab a generikus
+  `SettingsPanel`-lel (kategória-szűrt, bool toggle UI).
+- `WeatherTrader.tsx` status cluster: 🟢 **Scanning... (manual/cron)** pulse,
+  **cron ON · 5 min** vagy **cron OFF**, **last (manual/cron): X ago**.
+  Pollol szervert 5s-enként, lokálisan 1s-enként frissül.
+- A futás eredménye mostantól megjeleníti a kihagyott eseményeket (collapsible).
+
+**Új scheduled function:** `auto-trader-weather-cron.mts` (`*/5 * * * *`).
+Csak akkor csinál bármit, ha a Settings tabon a `weatherCronEnabled` toggle ON.
+
+**Új state:** `weather-runtime` Blobs store — `startedAt` (90s stale guard),
+`lastRunAt`, `lastResult`, `source`. Az `auto-trader-api?action=status&category=weather`
+visszaadja `runStatus` mezőben.
+
+### Hova nyúlj legközelebb (weather)
+- **Settings tab** → weather knobs állítása. `weatherCronEnabled=ON` után
+  ~5 perc múlva a következő cron tick lefut.
+- **`weatherApplyCityOffset` toggle** → ha valaki vissza akarja állítani a régi
+  bugos viselkedést, ott tudja. Default OFF (helyes).
+- **`weatherMaxEdgeCap`** → 40% default; ha a felhasználó nagyobb edge-eket is
+  látni akar (pl. paper kísérletezés), feljebb húzhatja.
+
+### Régi mai session változások (2026-05-08)
 - **A.1 Kelly egységesítés:** új `src/lib/math.ts` `kellyBinary()` (¼-Kelly + 8% hard cap), Dashboard.tsx 3 call site-ja átállítva, `MAX_KELLY_FRACTION` env default 0.20→0.08.
 - **A.2 Polymarket Auto-Claim:** új `netlify/functions/polymarket-redeem.mts` (auth-protected, intent-only mintázat) + `RedeemSection` a TradingPanel Polymarket sub-paneljében.
 - **A.3 Korai Exit (BTC 5m/15m):** TP/SL clamp + entry-window filter (60-180s), hold-to-end (<60s). `MarketInfo.openedAtEstimate` mező + `getBtcExitConfig()` env-ekkel + új `checkExitConditions()` pure függvény.

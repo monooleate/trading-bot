@@ -37,12 +37,15 @@ interface SettingsPanelProps {
 }
 
 function formatVal(v: number, unit: string): string {
-  if (unit === "frac") return (v * 100).toFixed(2) + "%";
+  if (unit === "bool")  return v >= 0.5 ? "ON" : "OFF";
+  if (unit === "frac")  return (v * 100).toFixed(2) + "%";
   if (unit === "price") return v.toFixed(2);
   if (unit === "ratio") return v.toFixed(2) + "×";
-  if (unit === "ms") return (v / 1000).toFixed(0) + "s";
-  if (unit === "sec") return v >= 60 ? (v / 60).toFixed(1) + "m" : v + "s";
-  if (unit === "USD") return "$" + v;
+  if (unit === "ms")    return (v / 1000).toFixed(0) + "s";
+  if (unit === "sec")   return v >= 60 ? (v / 60).toFixed(1) + "m" : v + "s";
+  if (unit === "min")   return v + " min";
+  if (unit === "days")  return v === 0 ? "auto" : v + " day" + (v === 1 ? "" : "s");
+  if (unit === "USD")   return "$" + v;
   return String(v);
 }
 
@@ -227,6 +230,7 @@ export default function SettingsPanel({ category, title, subtitle }: SettingsPan
                 const cur = draft[k] ?? data.effective[k];
                 const isOverride = data.overrides[k] !== undefined;
                 const dirty = cur !== data.effective[k];
+                const isBool = spec.unit === "bool";
                 return (
                   <div key={k} className={`set-field ${dirty ? "dirty" : ""} ${isOverride ? "override" : ""}`}>
                     <div className="set-field-label">
@@ -234,29 +238,44 @@ export default function SettingsPanel({ category, title, subtitle }: SettingsPan
                       {isOverride && <span className="set-tag">override</span>}
                       {dirty && <span className="set-tag set-tag-dirty">változás</span>}
                     </div>
-                    <div className="set-field-row">
-                      <input
-                        type="range"
-                        min={spec.min}
-                        max={spec.max}
-                        step={spec.step}
-                        value={cur}
-                        onChange={e => setDraft({ ...draft, [k]: parseFloat(e.target.value) })}
-                      />
-                      <input
-                        type="number"
-                        min={spec.min}
-                        max={spec.max}
-                        step={spec.step}
-                        value={cur}
-                        onChange={e => setDraft({ ...draft, [k]: parseFloat(e.target.value) })}
-                        className="set-num"
-                      />
-                      <span className="set-formatted">{formatVal(cur, spec.unit)}</span>
-                    </div>
+                    {isBool ? (
+                      <div className="set-field-row">
+                        <button
+                          type="button"
+                          className={`set-toggle ${cur >= 0.5 ? "on" : "off"}`}
+                          onClick={() => setDraft({ ...draft, [k]: cur >= 0.5 ? 0 : 1 })}
+                          aria-pressed={cur >= 0.5}
+                        >
+                          <span className="set-toggle-dot" />
+                        </button>
+                        <span className="set-formatted">{formatVal(cur, spec.unit)}</span>
+                      </div>
+                    ) : (
+                      <div className="set-field-row">
+                        <input
+                          type="range"
+                          min={spec.min}
+                          max={spec.max}
+                          step={spec.step}
+                          value={cur}
+                          onChange={e => setDraft({ ...draft, [k]: parseFloat(e.target.value) })}
+                        />
+                        <input
+                          type="number"
+                          min={spec.min}
+                          max={spec.max}
+                          step={spec.step}
+                          value={cur}
+                          onChange={e => setDraft({ ...draft, [k]: parseFloat(e.target.value) })}
+                          className="set-num"
+                        />
+                        <span className="set-formatted">{formatVal(cur, spec.unit)}</span>
+                      </div>
+                    )}
                     <div className="set-range-hint">
-                      tartomány: {formatVal(spec.min, spec.unit)} … {formatVal(spec.max, spec.unit)}
-                      {" · "}env-default: {formatVal(spec.default, spec.unit)}
+                      {isBool
+                        ? "kapcsoló · default: " + formatVal(spec.default, spec.unit)
+                        : `tartomány: ${formatVal(spec.min, spec.unit)} … ${formatVal(spec.max, spec.unit)} · env-default: ${formatVal(spec.default, spec.unit)}`}
                     </div>
                   </div>
                 );
@@ -339,4 +358,8 @@ const css = `
 .set-readonly { width:100%; max-width:780px; opacity:.7; pointer-events:none; }
 .set-field.readonly { padding:9px 11px; }
 .set-field.readonly .set-formatted { font-size:14px; margin-top:3px; text-align:left; }
+.set-toggle { background:var(--surface); border:1px solid var(--border); width:46px; height:24px; border-radius:12px; position:relative; cursor:pointer; padding:0; transition:background .12s ease; flex-shrink:0; }
+.set-toggle.on { background:var(--accent); border-color:var(--accent); }
+.set-toggle-dot { position:absolute; top:2px; left:2px; width:18px; height:18px; border-radius:50%; background:var(--text); transition:left .15s ease, background .12s; }
+.set-toggle.on .set-toggle-dot { left:24px; background:#000; }
 `;

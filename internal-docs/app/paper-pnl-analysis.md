@@ -171,3 +171,37 @@ A két nézet redundánsan mutatja a 141 trade-et, csak a `TraderStatus` szöveg
 ## Mit válaszolnék a "nincs vesztes kereskedés?" kérdésre
 
 **Van 2 vesztes** (`loser_count: 2`), amelyek mindkettő a 0.75–0.80 predikció buckét-ből jön. A 98.6% win rate strukturálisan paper sim artefakt — nem azt jelenti hogy a stratégia ennyire jó, hanem hogy a szimulátor a saját predikciót automatikusan profitba tolja. **Élesben várhatóan 50% körüli win rate** lenne ezzel a signal-szettel az IC = 0.0 mellett, de még ez is optimista becslés (negatív lehet).
+
+---
+
+## 2026-05-09 follow-up — fixek élesítve
+
+Az analízis 144–153. sorában listázott négy fixből háromnak kódfedezete van, és egy negyedik (UI badge) is ki lett egészítve. Részletek: `internal-docs/changelog/CHANGELOG-2026-05-09.md` "Crypto paper trader: realisztikussá tett szimulátor" szekciója.
+
+| Eredeti probléma | Status | Hol |
+|---|---|---|
+| `simulatePaperExit` halfway-toward-prediction → finalProb-függő profit | ✅ KIVÉVE | `auto-trader/crypto/paper-resolver.mts` (real Polymarket resolution + Brownian-bridge fallback, mindkettő finalProb-független) |
+| `btc-market-finder` deep-OTM piacokat választ ($0.01 fill artefakt) | ✅ JAVÍTVA | `MIN_PRICE_BAND = 0.10` szűrő (yes < 0.10 vagy > 0.90 → skip) |
+| Calibration alarm hiánya | ✅ HOZZÁADVA | `computeCalibrationHealth` + Telegram + auto-suspend live |
+| Edge tracker UI calibration badge | ✅ HOZZÁADVA | `CalibrationHealthBadge` a Tab 12 tetején |
+| 143 régi (torzított) trade history | ✅ AUTO-ARCHIVE | `simVersion=2` bump, deploy után az első cron tickkor archiválódik és tiszta session indul |
+
+### Mit várhatunk az új paper sim-től 50+ trade után
+
+- **Win rate**: 50–58% körül (vs 98.6%) — Bernoulli(marketPrice) null + véletlen Brownian volatilitás miatt
+- **Avg PnL/trade**: $0–$2 (vs $20.54) — a deep-OTM filter kizárja a $0.01 entry artefaktokat
+- **Sharpe**: 0–1.0 (vs 2.89) — realisztikus, nem fizikailag-valószínűtlen
+- **Per-signal IC**: ha valódi alpha van, akkor 0.02–0.10 között; ha nincs, akkor 0 körül marad — ez a teszt
+- **Calibration scatter**: ha a signal-combiner kalibrált, akkor a buckets a 45° vonal körül szóródnak; ha nem, akkor láthatóvá válik az eltérés
+
+A live váltás döntéséhez a Tab 12 calibration badge **zöld** (max |IC| ≥ 0.05) értéke + 50+ trade kell. Ha 30+ trade után minden signal IC < 0.02, akkor:
+
+- Telegram alarm érkezik (idempotens, egyszer/session)
+- Live mód automatikusan stop-ol
+- Paper mód folytatódik, hogy a user iterálhasson
+
+### Mit nem oldottak meg ezek a fixek
+
+- Ha a Brownian-bridge fallback aktiválódik (nem érkezett vissza Polymarket resolution 30 min-en belül), az nem 100%-ban valós. De: (1) finalProb-független, (2) Bernoulli(marketPrice) ground truth, (3) csak vészforgatókönyvben fut.
+- A signal-combiner IC weights még mindig priorok. Az új paper-tényleges IC mérések után (50+ trade) érdemes ezeket újrahangolni.
+- A TP/SL profile paper módban most "hold-to-end vagy Brownian-fallback" — nem éles-szerű periodikus midprice polling. Ez egy következő iteráció témája.

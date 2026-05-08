@@ -37,6 +37,15 @@ interface SignalICResult {
   strength: "strong" | "moderate" | "weak" | "noise";
 }
 
+interface CalibrationHealth {
+  status: "good" | "weak" | "noise" | "insufficient";
+  maxAbsIC: number;
+  topSignal: string | null;
+  tradeCount: number;
+  shouldSuspendLive: boolean;
+  message: string;
+}
+
 interface EdgeDecayPoint {
   week: string; avgEdge: number; avgPnl: number; tradeCount: number;
 }
@@ -62,6 +71,7 @@ interface EdgeTrackerData {
   cumulativePnl: CumulativePoint[];
   calibration: CalibrationBucket[];
   signalIC: SignalICResult[];
+  calibrationHealth?: CalibrationHealth;
   edgeDecay: { points: EdgeDecayPoint[]; slope: number; hasDecay: boolean };
   heatmap: HeatmapCell[];
   distribution: HistogramBin[];
@@ -145,6 +155,10 @@ export default function EdgeTrackerPanel({ defaultCategory = "all" }: Props) {
             </div>
           )}
 
+          {data.calibrationHealth && (
+            <CalibrationHealthBadge health={data.calibrationHealth} />
+          )}
+
           <SummaryCards s={data.summary} />
           <CumulativePnlChart points={data.cumulativePnl} />
           <div className="et-grid2">
@@ -198,6 +212,34 @@ function FilterGroup({ label, options, value, onChange }: any) {
           >{l}</button>
         ))}
       </div>
+    </div>
+  );
+}
+
+// ─── Calibration health badge ───────────────────────────
+
+function CalibrationHealthBadge({ health }: { health: CalibrationHealth }) {
+  const palette = {
+    good:         { bg: "#0f1f00", border: COLORS.actual, fg: COLORS.actual,    label: "CALIBRATED",  glyph: "●" },
+    weak:         { bg: "#1f1500", border: COLORS.warn,   fg: COLORS.warn,      label: "WEAK SIGNALS", glyph: "●" },
+    noise:        { bg: "#1f0808", border: COLORS.loss,   fg: COLORS.loss,      label: "NOISE",        glyph: "●" },
+    insufficient: { bg: "#16161c", border: COLORS.muted,  fg: COLORS.muted,     label: "WARMING UP",   glyph: "○" },
+  } as const;
+  const p = palette[health.status];
+  return (
+    <div
+      className="et-calhealth"
+      style={{ background: p.bg, borderColor: p.border, color: p.fg }}
+    >
+      <span className="et-calhealth-dot" style={{ color: p.fg }}>{p.glyph}</span>
+      <span className="et-calhealth-label">{p.label}</span>
+      <span className="et-calhealth-detail">
+        max |IC| <strong>{(health.maxAbsIC * 100).toFixed(2)}%</strong>
+        {health.topSignal ? ` (${health.topSignal.replace("_", " ")})` : ""}
+        &nbsp;•&nbsp; {health.tradeCount} trades
+        {health.shouldSuspendLive ? " — live trading auto-suspended" : ""}
+      </span>
+      <span className="et-calhealth-msg">{health.message}</span>
     </div>
   );
 }
@@ -631,6 +673,12 @@ const styles = `
 .et-loading { color: var(--muted); font-family: var(--mono); font-size: 12px; padding: 20px; text-align: center; }
 .et-mock-banner { background: rgba(241,160,53,0.08); border: 1px solid var(--warn); color: var(--warn); padding: 10px 14px; border-radius: 4px; font-family: var(--mono); font-size: 11px; margin-bottom: 14px; }
 .et-warn-banner { background: rgba(241,160,53,0.08); border: 1px solid var(--warn); color: var(--warn); padding: 8px 14px; border-radius: 4px; font-family: var(--mono); font-size: 11px; margin-bottom: 14px; }
+
+.et-calhealth { display: grid; grid-template-columns: auto auto 1fr; column-gap: 12px; row-gap: 4px; align-items: center; padding: 10px 14px; border: 1px solid var(--border); border-radius: 4px; font-family: var(--mono); font-size: 11px; margin-bottom: 14px; }
+.et-calhealth-dot { font-size: 14px; line-height: 1; }
+.et-calhealth-label { font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; }
+.et-calhealth-detail { color: var(--muted); justify-self: end; }
+.et-calhealth-msg { grid-column: 1 / -1; color: var(--muted); font-size: 10px; }
 
 .et-kpi-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; margin-bottom: 18px; }
 .et-card { background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 12px 10px; text-align: center; }

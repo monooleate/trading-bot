@@ -1,4 +1,5 @@
 import DashboardShell from "./shared/DashboardShell";
+import AuthGate from "./shared/AuthGate";
 import CryptoTrader from "./trader/CryptoTrader";
 import WeatherTrader from "./trader/WeatherTrader";
 import HyperliquidTrader from "./trader/HyperliquidTrader";
@@ -108,5 +109,12 @@ export default function CategoryDashboard({ category }: { category: string }) {
   };
 
   const defaultTab = tabs[0]?.[0] || "trader";
-  return <DashboardShell tabs={tabs} defaultTab={defaultTab}>{(tab) => render(tab)}</DashboardShell>;
+  return (
+    <AuthGate
+      title={`Bejelentkezés — ${category}`}
+      subtitle="Trader vezérléshez (indítás, megállítás, reset, paraméter mentés) belépés kell. Read-only nézet alább."
+    >
+      <DashboardShell tabs={tabs} defaultTab={defaultTab}>{(tab) => render(tab)}</DashboardShell>
+    </AuthGate>
+  );
 }

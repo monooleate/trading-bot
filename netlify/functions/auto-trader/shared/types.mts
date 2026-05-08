@@ -85,6 +85,15 @@ export interface Position {
   costBasis: number;              // USDC spent
   openedAt: string;
   buyOrderId: string;
+  // Paper-resolver metadata: lets the next cron tick close this position
+  // by querying real Polymarket resolution or running a finalProb-independent
+  // Brownian-bridge fallback.
+  conditionId?: string;
+  endDate?: string;
+  marketPriceAtEntry?: number;
+  predictedProb?: number;
+  signalBreakdown?: SignalBreakdown | null;
+  category?: Category;
 }
 
 // ─── Session types ────────────────────────────────────────
@@ -101,6 +110,14 @@ export interface SessionState {
   paperMode: boolean;
   stopped: boolean;
   stoppedReason: string | null;
+  // Bumped when we change the paper simulator semantics. Sessions with an
+  // older simVersion are auto-reset on load so analysis is run on a single
+  // clean methodology rather than a mix of legacy (halfway-toward-prediction)
+  // and current (real-resolution + Brownian-bridge) trades.
+  simVersion?: number;
+  // Tracks whether a calibration-noise alert has been sent for the current
+  // session, so we don't spam Telegram on every cron tick.
+  calibrationAlertSentAt?: string | null;
 }
 
 export interface ClosedTrade {
@@ -135,6 +152,9 @@ export type LogEvent =
   | "TRADE_CLOSED"
   | "SESSION_START"
   | "SESSION_STOP"
+  | "PAPER_RESOLVED"
+  | "PAPER_RESOLVE_SKIP"
+  | "CALIBRATION_ALARM"
   | "ARB_OPEN"
   | "ARB_CLOSE"
   | "ERROR";

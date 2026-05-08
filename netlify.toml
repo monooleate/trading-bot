@@ -20,6 +20,12 @@
 [functions."auto-trader"]
   schedule = "*/3 * * * *"
 
+# Weather auto-trader cron — minden 5 percben.
+# Csak akkor csinál bármit, ha a Settings tab-on a "Enable scheduled cron runs"
+# toggle be van kapcsolva (weatherCronEnabled = 1 a runtime overrides-ban).
+[functions."auto-trader-weather-cron"]
+  schedule = "*/5 * * * *"
+
 [[headers]]
   for = "/*"
   [headers.values]

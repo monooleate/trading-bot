@@ -85,8 +85,16 @@ function parseYesPrice(m: GammaMarket): number {
   return 0.5;
 }
 
+// Deep-OTM / deep-ITM filter band. Markets where the YES mid-price is below
+// MIN_PRICE or above 1-MIN_PRICE are skipped: at $0.01 the ask side is so
+// thin that paper-mode "instant fills" don't reflect any liquidity that
+// would exist in production, which was the root cause of the 141 trades at
+// $0.01 entry described in paper-pnl-analysis.md.
+const MIN_PRICE_BAND = parseFloat(process.env.BTC_MIN_PRICE_BAND || "0.10");
+
 export async function findBtcMarkets(
   minOpenInterest: number = 500,
+  minPriceBand: number = MIN_PRICE_BAND,
 ): Promise<MarketInfo[]> {
   // Fetch crypto events from Gamma API
   const url = `${GAMMA_API}/events?tag=crypto&limit=30&order=volume24hr&ascending=false&active=true`;
@@ -102,6 +110,7 @@ export async function findBtcMarkets(
   );
 
   const results: MarketInfo[] = [];
+  const upperBand = 1 - minPriceBand;
 
   for (const evt of events) {
     for (const m of evt.markets || []) {
@@ -124,6 +133,12 @@ export async function findBtcMarkets(
       if (oi < minOpenInterest) continue;
 
       const yesPrice = parseYesPrice(m);
+
+      // Skip deep-OTM (yes ≤ 0.10) or deep-ITM (yes ≥ 0.90) markets. These
+      // are dominated by 1-2 share market-maker quotes; "fills" at the
+      // top-of-book are unrealistic and inflate paper PnL.
+      if (yesPrice < minPriceBand || yesPrice > upperBand) continue;
+
       const vol24h = parseFloat(m.volume24hr || m.volume || "0");
 
       const durationMs = parseDurationMs(question);

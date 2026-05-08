@@ -48,6 +48,15 @@ const SCHEMA: Record<string, FieldSpec> = {
   btcHoldToEndCutoffMs: { default: 60000,   min: 10000,   max: 300000,  label: "Hold-to-end cutoff",         step: 5000,  unit: "ms",    category: "crypto", group: "BTC short-market exit" },
   obImbalanceUpRatio:   { default: 1.80,    min: 1.10,    max: 5.00,    label: "OB imbalance UP threshold",  step: 0.05,  unit: "ratio", category: "crypto", group: "OB imbalance" },
   obImbalanceDownRatio: { default: 0.55,    min: 0.20,    max: 0.95,    label: "OB imbalance DOWN threshold",step: 0.05,  unit: "ratio", category: "crypto", group: "OB imbalance" },
+  // ─── Paper-mode resolver (v2 simulator) ──────────────────────
+  // How long after a market's endDate we wait for real Polymarket
+  // resolution data before falling back to the Brownian-bridge sim.
+  paperFallbackAfterMs: { default: 1800000, min: 60000,   max: 21600000,label: "Paper resolver fallback delay", step: 60000, unit: "ms",   category: "crypto", group: "Paper resolver" },
+  paperBrownianSigma:   { default: 0.45,    min: 0.10,    max: 1.50,    label: "Brownian σ per √min",        step: 0.05,  unit: "σ",     category: "crypto", group: "Paper resolver" },
+  // YES price-band cutoff for the BTC market finder. Markets with YES
+  // mid below this (or above 1-this) are skipped to avoid deep-OTM
+  // fill artefacts.
+  btcMinPriceBand:      { default: 0.10,    min: 0.02,    max: 0.30,    label: "Min YES price (deep-OTM cut)", step: 0.01, unit: "frac", category: "crypto", group: "Market finder" },
   // ─── Weather trader knobs ──────────────────────────────────────
   weatherEdgeThreshold:   { default: 0.12, min: 0.02, max: 0.40, label: "Edge threshold (net)",          step: 0.005, unit: "frac", category: "weather", group: "Risk & sizing" },
   weatherConfidenceMin:   { default: 0.65, min: 0.30, max: 0.95, label: "Min model confidence",          step: 0.01,  unit: "frac", category: "weather", group: "Risk & sizing" },
