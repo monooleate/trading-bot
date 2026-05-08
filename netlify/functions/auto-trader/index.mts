@@ -375,6 +375,7 @@ function sessionSummary(s: SessionState) {
     sessionPnL: Math.round(s.sessionPnL * 100) / 100,
     sessionLoss: Math.round(s.sessionLoss * 100) / 100,
     tradeCount: s.tradeCount,
+    closedTrades: s.closedTrades.length,
     openPositions: s.openPositions.length,
     startedAt: s.startedAt,
   };

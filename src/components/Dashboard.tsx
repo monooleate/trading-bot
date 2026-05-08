@@ -696,9 +696,36 @@ function SwarmTab({ bankroll }: { bankroll: number }) {
 }
 
 // ─── ROOT ─────────────────────────────────────────────────────────────────────
+const VALID_TABS = ["scanner","ev","funding","swarm","trading","orderflow","vol","apex","condprob","signals","arbmatrix","autotrader","settings"] as const;
+
 export default function Dashboard() {
-  const [tab, setTab]         = useState<string>("swarm");
+  // Honour /tools#<tabid> deep-links coming from the HomePage control center.
+  const initialTab = (() => {
+    if (typeof window === "undefined") return "swarm";
+    const h = window.location.hash.replace(/^#/, "");
+    return (VALID_TABS as readonly string[]).includes(h) ? h : "swarm";
+  })();
+  const [tab, setTab]           = useState<string>(initialTab);
   const [bankroll, setBankroll] = useState(200);
+
+  useEffect(() => {
+    const onHash = () => {
+      const h = window.location.hash.replace(/^#/, "");
+      if ((VALID_TABS as readonly string[]).includes(h)) setTab(h);
+    };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
+  // Keep URL in sync when user clicks tabs manually
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const cur = window.location.hash.replace(/^#/, "");
+    if (cur !== tab) {
+      history.replaceState(null, "", `#${tab}`);
+    }
+  }, [tab]);
+
   const TABS = [["scanner","01 // Scanner"],["ev","02 // EV Kalk."],["funding","03 // Funding Arb"],["swarm","04 // Swarm"],["trading","05 // Trading"],["orderflow","06 // Order Flow"],["vol","07 // Vol Harvest"],["apex","08 // Apex Wallets"],["condprob","09 // Cond. Prob"],["signals","10 // Signals"],["arbmatrix","11 // Arb Matrix"],["autotrader","12 // Auto-Trader"],["settings","⚙ Beállítások"]] as const;
 
   return (
