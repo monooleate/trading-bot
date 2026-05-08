@@ -9,6 +9,16 @@ export interface WeatherConfig {
   maxPositionUSD: number;     // 25
   roundtripFeePct: number;    // 0.01 = 1%
   paperMode: boolean;
+  // Sanity-check: gross edges above this almost certainly indicate model
+  // error rather than real opportunity (e.g. predicting 24°C against an
+  // 85%-on-26°C market consensus is suspicious, not edge).
+  maxEdgeCap: number;         // 0.40 = 40%
+  // Forecast pipeline knobs (passed through to getForecast).
+  applyCityOffset: boolean;   // default false — see forecast-engine.mts
+  forecastDays: number;       // 0 = auto-compute from target date
+  useEnsemble: boolean;       // default false (env USE_ENSEMBLE)
+  // Cron-driven background runs from the scheduled wrapper.
+  cronEnabled: boolean;       // default false (manual-only)
 }
 
 export interface WeatherTradeDecision {
@@ -29,13 +39,48 @@ export interface WeatherTradeDecision {
 
 export function getWeatherConfig(): WeatherConfig {
   return {
-    edgeThreshold: parseFloat(process.env.WEATHER_EDGE_THRESHOLD || "0.12"),
-    confidenceMin: parseFloat(process.env.WEATHER_CONFIDENCE_MIN || "0.65"),
-    exitBeforeMin: parseInt(process.env.WEATHER_EXIT_BEFORE_MIN || "45", 10),
-    maxPositionUSD: parseFloat(process.env.WEATHER_MAX_POSITION_USD || "25"),
+    edgeThreshold:   parseFloat(process.env.WEATHER_EDGE_THRESHOLD  || "0.12"),
+    confidenceMin:   parseFloat(process.env.WEATHER_CONFIDENCE_MIN  || "0.65"),
+    exitBeforeMin:   parseInt(process.env.WEATHER_EXIT_BEFORE_MIN   || "45", 10),
+    maxPositionUSD:  parseFloat(process.env.WEATHER_MAX_POSITION_USD || "25"),
     roundtripFeePct: 0.01,
-    paperMode: process.env.PAPER_MODE !== "false",
+    paperMode:       process.env.PAPER_MODE !== "false",
+    maxEdgeCap:      parseFloat(process.env.WEATHER_MAX_EDGE_CAP    || "0.40"),
+    applyCityOffset: process.env.WEATHER_APPLY_CITY_OFFSET === "true",
+    forecastDays:    parseInt(process.env.WEATHER_FORECAST_DAYS     || "0", 10),
+    useEnsemble:     (process.env.USE_ENSEMBLE || "").toLowerCase() === "true",
+    cronEnabled:     process.env.WEATHER_CRON_ENABLED === "true",
   };
+}
+
+/**
+ * Effective config = env defaults merged with runtime Blobs overrides.
+ * Lazily imports trader-settings to avoid a circular dependency at init.
+ * Falls back to env-only on any read error so the trader always runs.
+ */
+export async function getEffectiveWeatherConfig(): Promise<WeatherConfig> {
+  const env = getWeatherConfig();
+  try {
+    const mod: any = await import("../../trader-settings.mts");
+    const ov = await mod.loadRuntimeOverrides();
+    return {
+      ...env,
+      edgeThreshold:   ov.weatherEdgeThreshold   ?? env.edgeThreshold,
+      confidenceMin:   ov.weatherConfidenceMin   ?? env.confidenceMin,
+      exitBeforeMin:   ov.weatherExitBeforeMin   ?? env.exitBeforeMin,
+      maxPositionUSD:  ov.weatherMaxPositionUSD  ?? env.maxPositionUSD,
+      maxEdgeCap:      ov.weatherMaxEdgeCap      ?? env.maxEdgeCap,
+      applyCityOffset: ov.weatherApplyCityOffset !== undefined
+        ? ov.weatherApplyCityOffset >= 0.5 : env.applyCityOffset,
+      forecastDays:    ov.weatherForecastDays    ?? env.forecastDays,
+      useEnsemble:     ov.weatherUseEnsemble !== undefined
+        ? ov.weatherUseEnsemble >= 0.5 : env.useEnsemble,
+      cronEnabled:     ov.weatherCronEnabled !== undefined
+        ? ov.weatherCronEnabled >= 0.5 : env.cronEnabled,
+    };
+  } catch {
+    return env;
+  }
 }
 
 const noTrade = (reason: string): WeatherTradeDecision => ({
@@ -79,6 +124,17 @@ export function makeWeatherDecision(params: {
     return noTrade(
       `Net edge ${(netEdge * 100).toFixed(1)}% < threshold ${(config.edgeThreshold * 100).toFixed(0)}% ` +
       `(gross ${(grossEdge * 100).toFixed(1)}% - fee ${(config.roundtripFeePct * 100).toFixed(1)}%)`,
+    );
+  }
+
+  // 4b. Sanity cap. A 70% gross edge against a market that's 85% on a single
+  // bucket is almost certainly model error (forecast bias, station mismatch,
+  // wrong unit). Above the cap we refuse to trade and surface the reason so
+  // the misbehaviour shows up in the run log.
+  if (grossEdge > config.maxEdgeCap) {
+    return noTrade(
+      `Gross edge ${(grossEdge * 100).toFixed(1)}% > sanity cap ${(config.maxEdgeCap * 100).toFixed(0)}% ` +
+      `— likely model error, not opportunity`,
     );
   }
 

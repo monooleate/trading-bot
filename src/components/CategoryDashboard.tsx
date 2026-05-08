@@ -3,60 +3,110 @@ import CryptoTrader from "./trader/CryptoTrader";
 import WeatherTrader from "./trader/WeatherTrader";
 import HyperliquidTrader from "./trader/HyperliquidTrader";
 import FundingArbPanel from "./trader/FundingArbPanel";
+import BybitTrader from "./trader/BybitTrader";
+import BinanceTrader from "./trader/BinanceTrader";
+import PolymarketManualTrader from "./trader/PolymarketManualTrader";
 import EdgeTrackerPanel from "./EdgeTrackerPanel";
+import SettingsPanel from "./SettingsPanel";
 
-// Only trading-essential tabs per category.
-// Diagnostic / analytical tools are available under /tools.
+// Each /trade/<venue>/ page owns its own context (auto-trader UI, edge
+// tracker, venue-scoped settings). Diagnostic tools live under /tools.
 const CATEGORY_TABS: Record<string, [string, string][]> = {
   crypto: [
     ["autotrader",   "Auto-Trader"],
     ["edge-tracker", "Edge Tracker"],
+    ["settings",     "⚙ Beállítások"],
   ],
   weather: [
     ["autotrader",   "Weather Trader"],
     ["edge-tracker", "Edge Tracker"],
+    ["settings",     "⚙ Beállítások"],
   ],
   hyperliquid: [
     ["autotrader",   "Perp Trader"],
     ["funding-arb",  "Funding Arb"],
+    ["settings",     "⚙ Beállítások"],
+  ],
+  bybit: [
+    ["trader",       "Manuális Trade"],
+    ["settings",     "⚙ Beállítások"],
+  ],
+  binance: [
+    ["trader",       "Manuális Trade"],
+    ["settings",     "⚙ Beállítások"],
+  ],
+  "polymarket-manual": [
+    ["trader",       "Manual + Auto-Claim"],
+    ["settings",     "⚙ Beállítások"],
   ],
 };
 
-function renderCryptoTab(tab: string, _bankroll: number) {
+function renderCryptoTab(tab: string) {
   switch (tab) {
-    case "autotrader":    return <CryptoTrader />;
-    case "edge-tracker":  return <EdgeTrackerPanel defaultCategory="crypto" />;
-    default:              return <CryptoTrader />;
+    case "autotrader":   return <CryptoTrader />;
+    case "edge-tracker": return <EdgeTrackerPanel defaultCategory="crypto" />;
+    case "settings":     return <SettingsPanel category="crypto" title="Crypto Auto-Trader paraméterek" subtitle="BTC short markets · runtime override · Netlify Blobs" />;
+    default:             return <CryptoTrader />;
   }
 }
 
-function renderWeatherTab(tab: string, _bankroll: number) {
+function renderWeatherTab(tab: string) {
   switch (tab) {
-    case "autotrader":    return <WeatherTrader />;
-    case "edge-tracker":  return <EdgeTrackerPanel defaultCategory="weather" />;
-    default:              return <WeatherTrader />;
+    case "autotrader":   return <WeatherTrader />;
+    case "edge-tracker": return <EdgeTrackerPanel defaultCategory="weather" />;
+    case "settings":     return <SettingsPanel category="weather" title="Weather Trader paraméterek" subtitle="Hőmérséklet piacok · GFS ensemble · station fix" />;
+    default:             return <WeatherTrader />;
   }
 }
 
-function renderHyperliquidTab(tab: string, _bankroll: number) {
+function renderHyperliquidTab(tab: string) {
   switch (tab) {
-    case "autotrader":    return <HyperliquidTrader />;
-    case "funding-arb":   return <FundingArbPanel />;
-    default:              return <HyperliquidTrader />;
+    case "autotrader":   return <HyperliquidTrader />;
+    case "funding-arb":  return <FundingArbPanel />;
+    case "settings":     return <SettingsPanel category="hyperliquid" title="Hyperliquid paraméterek" subtitle="Perp + Funding Arb · paper-only Netlify-on" />;
+    default:             return <HyperliquidTrader />;
+  }
+}
+
+function renderBybitTab(tab: string) {
+  switch (tab) {
+    case "trader":   return <BybitTrader />;
+    case "settings": return <SettingsPanel category="bybit" title="Bybit paraméterek" subtitle="Manuális venue · nincs auto-trader" />;
+    default:         return <BybitTrader />;
+  }
+}
+
+function renderBinanceTab(tab: string) {
+  switch (tab) {
+    case "trader":   return <BinanceTrader />;
+    case "settings": return <SettingsPanel category="binance" title="Binance paraméterek" subtitle="Manuális venue · nincs auto-trader" />;
+    default:         return <BinanceTrader />;
+  }
+}
+
+function renderPolymarketManualTab(tab: string) {
+  switch (tab) {
+    case "trader":   return <PolymarketManualTrader />;
+    case "settings": return <SettingsPanel category="polymarket-manual" title="Polymarket Manual paraméterek" subtitle="Read-only piac scan · intent generátor · Auto-Claim" />;
+    default:         return <PolymarketManualTrader />;
   }
 }
 
 export default function CategoryDashboard({ category }: { category: string }) {
   const tabs = CATEGORY_TABS[category] || CATEGORY_TABS.crypto;
 
-  const render = (tab: string, bankroll: number) => {
+  const render = (tab: string) => {
     switch (category) {
-      case "crypto":      return renderCryptoTab(tab, bankroll);
-      case "weather":     return renderWeatherTab(tab, bankroll);
-      case "hyperliquid": return renderHyperliquidTab(tab, bankroll);
-      default:            return renderCryptoTab(tab, bankroll);
+      case "crypto":             return renderCryptoTab(tab);
+      case "weather":            return renderWeatherTab(tab);
+      case "hyperliquid":        return renderHyperliquidTab(tab);
+      case "bybit":              return renderBybitTab(tab);
+      case "binance":            return renderBinanceTab(tab);
+      case "polymarket-manual":  return renderPolymarketManualTab(tab);
+      default:                   return renderCryptoTab(tab);
     }
   };
 
-  return <DashboardShell tabs={tabs} defaultTab="autotrader">{render}</DashboardShell>;
+  const defaultTab = tabs[0]?.[0] || "trader";
+  return <DashboardShell tabs={tabs} defaultTab={defaultTab}>{(tab) => render(tab)}</DashboardShell>;
 }

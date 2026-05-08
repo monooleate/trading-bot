@@ -1,8 +1,10 @@
 // src/components/HomePage.tsx
 //
-// Mission-control style landing page. Shows live session metrics from
-// /auto-trader, env-var availability from /env-status, and routes the
-// user to every trading + analysis surface the app exposes.
+// Mission-control landing page. Aggregates session state across every
+// auto-trader category (multi-status), shows env-var availability
+// (env-status), and routes each card to its dedicated /trade/<venue>/
+// page — never to a /tools# tab anymore. Tools dashboard is kept
+// strictly for analysis (signal layer + research).
 
 import { useEffect, useState } from "react";
 
@@ -10,17 +12,30 @@ const FN = "/.netlify/functions";
 
 // ─── Types ────────────────────────────────────────────────────────────
 
-interface SessionState {
+interface MultiStatus {
+  ok: boolean;
   paperMode: boolean;
-  bankrollCurrent: number;
-  bankrollStart: number;
-  sessionPnL: number;
-  sessionLoss: number;
-  tradeCount: number;
-  closedTrades?: number;     // older deployments may not return this; fall back to tradeCount
-  openPositions: number;
-  stopped: boolean;
-  stoppedReason: string | null;
+  totals: {
+    bankrollStart: number;
+    bankrollCurrent: number;
+    sessionPnL: number;
+    closedTrades: number;
+    openPositions: number;
+  };
+  categories: {
+    category: string;
+    label: string;
+    found: boolean;
+    paperMode: boolean | null;
+    bankrollStart: number;
+    bankrollCurrent: number;
+    sessionPnL: number;
+    closedTrades: number;
+    openPositions: number;
+    stopped: boolean;
+    startedAt: string | null;
+  }[];
+  activeCount: number;
 }
 
 interface EnvStatus {
@@ -37,49 +52,52 @@ interface Card {
   blurb: string;
   icon: string;
   href: string;
-  external?: boolean;
   mode: "PAPER+LIVE" | "PAPER-ONLY" | "MANUAL" | "READ-ONLY" | "ANALYSIS";
-  capability?: string;       // matches env-status capabilities key
+  capability?: string;
   group: "execution" | "tools" | "analysis";
+  category?: string;     // links per-category bankroll snapshot to this card
 }
 
 const CARDS: Card[] = [
-  // ── Execution ──
+  // ── Execution: dedicated /trade/<x>/ pages ──
   {
     id: "crypto",
     title: "Crypto Auto-Trader",
-    blurb: "BTC short markets · cron 3 perc · TP/SL + entry window",
+    blurb: "Polymarket BTC short markets · cron 3 perc · TP/SL + entry window",
     icon: "🪙",
     href: "/trade/crypto/",
     mode: "PAPER+LIVE",
     capability: "live-crypto-auto",
+    category: "crypto",
     group: "execution",
   },
   {
     id: "hyperliquid",
-    title: "Hyperliquid Trader",
-    blurb: "BTC/ETH/SOL perp · paper-only Netlify-on · live: Hetzner",
+    title: "Hyperliquid Perp",
+    blurb: "BTC/ETH/SOL perp + Funding Arb · paper-only Netlify-on",
     icon: "⚡",
     href: "/trade/hyperliquid/",
     mode: "PAPER-ONLY",
     capability: "hyperliquid-paper",
+    category: "hyperliquid",
     group: "execution",
   },
   {
     id: "weather",
     title: "Weather Trader",
-    blurb: "Hőmérséklet piacok · 31-tagú GFS ensemble · station fix",
+    blurb: "Hőmérséklet piacok · 31-tagú GFS ensemble · KLGA/KDAL/EGLC station fix",
     icon: "🌤️",
     href: "/trade/weather/",
     mode: "PAPER+LIVE",
+    category: "weather",
     group: "execution",
   },
   {
     id: "bybit",
     title: "Bybit Futures",
-    blurb: "Manuális order leadás · balances · positions",
+    blurb: "Manuális order leadás · v5 API · balances + positions",
     icon: "📉",
-    href: "/tools#trading",
+    href: "/trade/bybit/",
     mode: "MANUAL",
     capability: "bybit-manual",
     group: "execution",
@@ -87,65 +105,25 @@ const CARDS: Card[] = [
   {
     id: "binance",
     title: "Binance Futures",
-    blurb: "Manuális order leadás · balances · positions",
+    blurb: "Manuális order leadás · USDM perpetual",
     icon: "🟡",
-    href: "/tools#trading",
+    href: "/trade/binance/",
     mode: "MANUAL",
     capability: "binance-manual",
     group: "execution",
   },
   {
     id: "polymarket-manual",
-    title: "Polymarket Manual",
-    blurb: "Read-only piacok + intent JSON (Python script lokálisan)",
+    title: "Polymarket Manual + Auto-Claim",
+    blurb: "Read-only piac scan · intent generátor · nyertes pozíció redeem",
     icon: "🎯",
-    href: "/tools#trading",
+    href: "/trade/polymarket-manual/",
     mode: "MANUAL",
     capability: "manual-trading",
     group: "execution",
   },
 
-  // ── Tools (Polymarket-specifikus) ──
-  {
-    id: "auto-claim",
-    title: "Auto-Claim",
-    blurb: "Polymarket nyertes pozíciók scan + redeem intent",
-    icon: "💰",
-    href: "/tools#trading",
-    mode: "READ-ONLY",
-    capability: "auto-claim",
-    group: "tools",
-  },
-  {
-    id: "pair-arb",
-    title: "Pair-Cost Arb",
-    blurb: "YES+NO < $1.00 redeem arb · VWAP @ notional",
-    icon: "♻️",
-    href: "/tools#arbmatrix",
-    mode: "READ-ONLY",
-    group: "tools",
-  },
-  {
-    id: "edge-tracker",
-    title: "Edge Tracker",
-    blurb: "PnL · kalibráció · IC bar · edge decay · heatmap",
-    icon: "📊",
-    href: "/tools#autotrader",
-    mode: "ANALYSIS",
-    group: "tools",
-  },
-  {
-    id: "settings",
-    title: "⚙ Beállítások",
-    blurb: "11 paraméter · runtime override · auth-protected",
-    icon: "🔧",
-    href: "/tools#settings",
-    mode: "MANUAL",
-    capability: "settings",
-    group: "tools",
-  },
-
-  // ── Analysis (signal layer + research) ──
+  // ── Analysis: /tools (csak elemzés, nincs trading itt) ──
   {
     id: "scanner",
     title: "Market Scanner",
@@ -200,6 +178,15 @@ const CARDS: Card[] = [
     mode: "ANALYSIS",
     group: "analysis",
   },
+  {
+    id: "arbmatrix",
+    title: "Arb Matrix",
+    blurb: "VWAP arb · LLM dependency · Pair-Cost arb scanner",
+    icon: "♻️",
+    href: "/tools#arbmatrix",
+    mode: "ANALYSIS",
+    group: "analysis",
+  },
 ];
 
 // ─── Mode badge styling ───────────────────────────────────────────────
@@ -215,24 +202,27 @@ const MODE_LABEL: Record<Card["mode"], { txt: string; cls: string }> = {
 // ─── Component ────────────────────────────────────────────────────────
 
 export default function HomePage() {
-  const [session, setSession] = useState<SessionState | null>(null);
+  const [multi, setMulti]     = useState<MultiStatus | null>(null);
   const [envStat, setEnvStat] = useState<EnvStatus | null>(null);
   const [loadErr, setLoadErr] = useState<string>("");
 
   useEffect(() => {
     Promise.all([
-      fetch(`${FN}/auto-trader?action=status`).then((r) => r.json()).catch(() => null),
+      fetch(`${FN}/multi-status?paper=true`).then((r) => r.json()).catch(() => null),
       fetch(`${FN}/env-status`).then((r) => r.json()).catch(() => null),
-    ]).then(([trader, env]) => {
-      if (trader?.session) setSession(trader.session);
-      else if (trader?.ok && trader?.session) setSession(trader.session);
-      if (env?.ok) setEnvStat(env);
-      if (!trader || !env) setLoadErr("Néhány adat nem töltődött be — frissíts.");
-    }).catch((e) => setLoadErr(e.message));
+    ]).then(([m, e]) => {
+      if (m?.ok) setMulti(m);
+      if (e?.ok) setEnvStat(e);
+      if (!m || !e) setLoadErr("Néhány adat nem töltődött be — frissíts.");
+    }).catch((err) => setLoadErr(err.message));
   }, []);
 
-  const live = envStat ? !envStat.paperMode : false;
-  const pnlPositive = (session?.sessionPnL ?? 0) >= 0;
+  const live    = envStat ? !envStat.paperMode : false;
+  const totals  = multi?.totals;
+  const pnlPositive = (totals?.sessionPnL ?? 0) >= 0;
+  const roi = totals && totals.bankrollStart > 0
+    ? (totals.sessionPnL / totals.bankrollStart) * 100
+    : 0;
 
   // Group env by category for the bottom checklist
   const byCategory: Record<string, EnvStatus["env"]> = {};
@@ -261,7 +251,7 @@ export default function HomePage() {
       <header className="hp-header">
         <div>
           <div className="hp-logo">EDGE<span>/</span>CALC</div>
-          <div className="hp-sub">Mission Control · Quantitative Polymarket Auto-Trader</div>
+          <div className="hp-sub">Mission Control · Polymarket + Hyperliquid + Crypto venues</div>
         </div>
         <div className="hp-mode-display">
           <span className={`hp-mode-pill ${live ? "live" : "paper"}`}>
@@ -270,57 +260,69 @@ export default function HomePage() {
         </div>
       </header>
 
-      {/* ─── SESSION SUMMARY ─── */}
+      {/* ─── SESSION SUMMARY (összesített) ─── */}
+      <SectionTitle title="Aggregated session" subtitle="Minden bot összesítve · per-category lentebb" />
       <section className="hp-summary">
         <Stat
-          label="Bankroll"
-          value={session ? `$${session.bankrollCurrent.toFixed(2)}` : "…"}
-          sub={session ? `start: $${session.bankrollStart.toFixed(0)}` : ""}
+          label="Bankroll (Σ)"
+          value={totals ? `$${totals.bankrollCurrent.toFixed(0)}` : "…"}
+          sub={totals && totals.bankrollStart > 0
+            ? `start: $${totals.bankrollStart.toFixed(0)}`
+            : "no active session"}
           accent="neu"
         />
         <Stat
-          label="Session PnL"
-          value={session ? (pnlPositive ? "+" : "") + "$" + session.sessionPnL.toFixed(2) : "…"}
-          sub={session && session.bankrollStart > 0
-            ? `${((session.sessionPnL / session.bankrollStart) * 100).toFixed(1)}%`
-            : ""}
+          label="PnL (Σ)"
+          value={totals ? (pnlPositive ? "+" : "") + "$" + totals.sessionPnL.toFixed(0) : "…"}
+          sub={totals ? `${roi.toFixed(0)}% ROI` : ""}
           accent={pnlPositive ? "pos" : "neg"}
         />
         <Stat
           label="Closed trades"
-          value={session ? `${session.closedTrades ?? session.tradeCount ?? 0}` : "…"}
-          sub={session?.openPositions ? `${session.openPositions} nyitott` : "0 nyitott"}
+          value={totals ? `${totals.closedTrades}` : "…"}
+          sub={totals?.openPositions ? `${totals.openPositions} nyitott` : "0 nyitott"}
           accent="neu"
         />
         <Stat
-          label="Status"
-          value={session?.stopped ? "STOPPED" : (session ? "RUNNING" : "…")}
-          sub={session?.stoppedReason ?? "cron */3 perc"}
-          accent={session?.stopped ? "warn" : "pos"}
+          label="Active bots"
+          value={multi ? `${multi.activeCount}/4` : "…"}
+          sub="cron */3 perc · UTC"
+          accent={multi && multi.activeCount > 0 ? "pos" : "neu"}
         />
       </section>
 
+      {/* ─── PER-CATEGORY BREAKDOWN ─── */}
+      {multi && multi.categories.some((c) => c.found) && (
+        <div className="hp-breakdown">
+          {multi.categories.filter((c) => c.found).map((c) => (
+            <div key={c.category} className="hp-bd-row">
+              <span className="hp-bd-cat">{c.label}</span>
+              <span className="hp-bd-bk">${c.bankrollCurrent.toFixed(0)}</span>
+              <span className={`hp-bd-pnl ${c.sessionPnL >= 0 ? "pos" : "neg"}`}>
+                {c.sessionPnL >= 0 ? "+" : ""}${c.sessionPnL.toFixed(0)}
+              </span>
+              <span className="hp-bd-trades">{c.closedTrades} trade</span>
+              <span className={`hp-bd-status ${c.stopped ? "stopped" : "running"}`}>
+                {c.stopped ? "STOPPED" : "RUNNING"}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* ─── EXECUTION CARDS ─── */}
-      <SectionTitle title="Trading & Execution" subtitle="Auto-trader pillérek és manuális kereskedés" />
+      <SectionTitle title="Trading & Execution" subtitle="Saját oldal kategóriánként · /trade/<venue>/ — itt nincs duplikáció a /tools-szal" />
       <div className="hp-grid">
         {CARDS.filter((c) => c.group === "execution").map((c) => (
-          <CapCard key={c.id} card={c} envStat={envStat} />
-        ))}
-      </div>
-
-      {/* ─── TOOLS CARDS ─── */}
-      <SectionTitle title="Tools" subtitle="Polymarket-specifikus segédoldalak + tracking" />
-      <div className="hp-grid">
-        {CARDS.filter((c) => c.group === "tools").map((c) => (
-          <CapCard key={c.id} card={c} envStat={envStat} />
+          <CapCard key={c.id} card={c} envStat={envStat} multi={multi} />
         ))}
       </div>
 
       {/* ─── ANALYSIS CARDS ─── */}
-      <SectionTitle title="Signal Layer & Research" subtitle="8 jelzés + market discovery, csak elemzés (read-only)" />
+      <SectionTitle title="Analysis & Research" subtitle="Csak elemzés (read-only) · /tools — nincs trading execution itt" />
       <div className="hp-grid">
         {CARDS.filter((c) => c.group === "analysis").map((c) => (
-          <CapCard key={c.id} card={c} envStat={envStat} />
+          <CapCard key={c.id} card={c} envStat={envStat} multi={multi} />
         ))}
       </div>
 
@@ -345,7 +347,10 @@ export default function HomePage() {
 
       <footer className="hp-footer">
         <span>cron */3 perc UTC · Netlify Functions · v8</span>
-        <a href="https://github.com/monooleate/trading-bot" target="_blank" rel="noopener noreferrer">github</a>
+        <span>
+          <a href="/tools" style={{ marginRight: 18 }}>tools →</a>
+          <a href="https://github.com/monooleate/trading-bot" target="_blank" rel="noopener noreferrer">github</a>
+        </span>
       </footer>
     </div>
   );
@@ -374,22 +379,31 @@ function SectionTitle({ title, subtitle }: { title: string; subtitle: string }) 
   );
 }
 
-function CapCard({ card, envStat }: { card: Card; envStat: EnvStatus | null }) {
-  const cap  = card.capability ? envStat?.capabilities?.[card.capability] : null;
+function CapCard({ card, envStat, multi }: { card: Card; envStat: EnvStatus | null; multi: MultiStatus | null }) {
+  const cap     = card.capability ? envStat?.capabilities?.[card.capability] : null;
   const blocked = cap && !cap.ok;
-  const mode = MODE_LABEL[card.mode];
+  const mode    = MODE_LABEL[card.mode];
+  const cat     = card.category && multi
+    ? multi.categories.find((c) => c.category === card.category)
+    : null;
 
   return (
-    <a
-      href={card.href}
-      className={`hp-card ${blocked ? "blocked" : ""}`}
-    >
+    <a href={card.href} className={`hp-card ${blocked ? "blocked" : ""}`}>
       <div className="hp-card-top">
         <span className="hp-card-icon">{card.icon}</span>
         <span className={`hp-pill ${mode.cls}`}>{mode.txt}</span>
       </div>
       <div className="hp-card-title">{card.title}</div>
       <div className="hp-card-blurb">{card.blurb}</div>
+      {cat && cat.found && (
+        <div className="hp-card-stats">
+          <span>${cat.bankrollCurrent.toFixed(0)}</span>
+          <span className={cat.sessionPnL >= 0 ? "pos" : "neg"}>
+            {cat.sessionPnL >= 0 ? "+" : ""}${cat.sessionPnL.toFixed(0)}
+          </span>
+          <span className="hp-card-trades">{cat.closedTrades} trade</span>
+        </div>
+      )}
       {blocked && cap && (
         <div className="hp-card-warn">
           <span className="hp-warn-icon">⚠</span>
@@ -441,11 +455,6 @@ const css = `
   text-transform: uppercase;
   margin-top: 5px;
 }
-.hp-mode-display {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
 .hp-mode-pill {
   font-family: var(--mono);
   font-size: 11px;
@@ -476,7 +485,7 @@ const css = `
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 10px;
-  margin-bottom: 36px;
+  margin-bottom: 12px;
 }
 .hp-stat {
   background: var(--surface);
@@ -509,6 +518,33 @@ const css = `
   color: var(--muted);
   margin-top: 5px;
 }
+
+/* ─── Per-category breakdown ─── */
+.hp-breakdown {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 10px;
+  margin-bottom: 36px;
+}
+.hp-bd-row {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1fr 1fr;
+  align-items: center;
+  padding: 8px 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  border-bottom: 1px solid var(--border);
+}
+.hp-bd-row:last-child { border-bottom: none; }
+.hp-bd-cat { color: var(--text); font-weight: 700; }
+.hp-bd-bk { color: var(--muted); }
+.hp-bd-pnl.pos { color: var(--accent); font-weight: 700; }
+.hp-bd-pnl.neg { color: var(--danger); font-weight: 700; }
+.hp-bd-trades { color: var(--muted); font-size: 10px; }
+.hp-bd-status { font-size: 9px; padding: 2px 6px; border-radius: 2px; text-align: center; letter-spacing: .08em; }
+.hp-bd-status.running { background: #0a2010; color: var(--accent); border: 1px solid #1a3300; }
+.hp-bd-status.stopped { background: #1f1400; color: var(--warn); border: 1px solid #332200; }
 
 /* ─── Section header ─── */
 .hp-section {
@@ -558,21 +594,14 @@ const css = `
   transform: translateY(-1px);
   background: #131318;
 }
-.hp-card.blocked {
-  border-color: #5a1a1a;
-}
-.hp-card.blocked:hover {
-  border-color: var(--danger);
-}
+.hp-card.blocked { border-color: #5a1a1a; }
+.hp-card.blocked:hover { border-color: var(--danger); }
 .hp-card-top {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
 }
-.hp-card-icon {
-  font-size: 24px;
-  line-height: 1;
-}
+.hp-card-icon { font-size: 24px; line-height: 1; }
 .hp-card-title {
   font-family: var(--sans);
   font-size: 14px;
@@ -587,6 +616,22 @@ const css = `
   line-height: 1.55;
   flex: 1;
 }
+.hp-card-stats {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  padding: 6px 8px;
+  border-radius: 2px;
+  margin-top: 4px;
+}
+.hp-card-stats .pos { color: var(--accent); font-weight: 700; }
+.hp-card-stats .neg { color: var(--danger); font-weight: 700; }
+.hp-card-trades { margin-left: auto; font-size: 9px; }
 .hp-card-warn {
   display: flex;
   align-items: flex-start;
@@ -600,15 +645,7 @@ const css = `
   border-radius: 2px;
   margin-top: 4px;
 }
-.hp-card-warn code {
-  color: var(--warn);
-  font-size: 9px;
-  word-break: break-all;
-}
-.hp-warn-icon, .hp-ready-icon {
-  flex-shrink: 0;
-  font-weight: 700;
-}
+.hp-card-warn code { color: var(--warn); font-size: 9px; word-break: break-all; }
 .hp-card-ready {
   display: flex;
   align-items: center;
@@ -674,23 +711,11 @@ const css = `
   font-family: var(--mono);
   font-size: 10px;
 }
-.hp-env-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  display: inline-block;
-}
+.hp-env-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 .hp-env-dot.ok      { background: var(--accent); box-shadow: 0 0 6px rgba(200,241,53,.35); }
 .hp-env-dot.missing { background: var(--danger); box-shadow: 0 0 6px rgba(241,53,53,.35); }
-.hp-env-name {
-  color: var(--text);
-  font-weight: 700;
-  font-size: 10px;
-}
-.hp-env-desc {
-  color: var(--muted);
-  font-size: 9.5px;
-}
+.hp-env-name { color: var(--text); font-weight: 700; font-size: 10px; }
+.hp-env-desc { color: var(--muted); font-size: 9.5px; }
 
 /* ─── Footer ─── */
 .hp-err {

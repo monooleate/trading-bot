@@ -1,15 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { fetchMarkets, fetchFundingRates, loadSettings, saveSettings, getOrCreateUID } from "../lib/api";
 import { calcEV as sharedCalcEV, calcKelly as sharedCalcKelly, kellyBinary } from "../lib/math";
-import TradingPanel from "./TradingPanel";
 import OrderFlowPanel from "./OrderFlowPanel";
 import VolDivergencePanel from "./VolDivergencePanel";
 import ApexWalletsPanel from "./ApexWalletsPanel";
 import CondProbPanel from "./CondProbPanel";
 import SignalCombinerPanel from "./SignalCombinerPanel";
 import ArbMatrixPanel from "./ArbMatrixPanel";
-import TraderStatus from "./trader/TraderStatus";
-import SettingsPanel from "./SettingsPanel";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 interface Market {
@@ -696,7 +693,10 @@ function SwarmTab({ bankroll }: { bankroll: number }) {
 }
 
 // ─── ROOT ─────────────────────────────────────────────────────────────────────
-const VALID_TABS = ["scanner","ev","funding","swarm","trading","orderflow","vol","apex","condprob","signals","arbmatrix","autotrader","settings"] as const;
+// Tools dashboard = analysis only. Trading + execution lives on the
+// dedicated /trade/<venue>/ pages (CategoryDashboard) so that data isn't
+// duplicated and each trader has its own context, params and bankroll.
+const VALID_TABS = ["scanner","ev","swarm","orderflow","vol","apex","condprob","signals","arbmatrix"] as const;
 
 export default function Dashboard() {
   // Honour /tools#<tabid> deep-links coming from the HomePage control center.
@@ -726,16 +726,29 @@ export default function Dashboard() {
     }
   }, [tab]);
 
-  const TABS = [["scanner","01 // Scanner"],["ev","02 // EV Kalk."],["funding","03 // Funding Arb"],["swarm","04 // Swarm"],["trading","05 // Trading"],["orderflow","06 // Order Flow"],["vol","07 // Vol Harvest"],["apex","08 // Apex Wallets"],["condprob","09 // Cond. Prob"],["signals","10 // Signals"],["arbmatrix","11 // Arb Matrix"],["autotrader","12 // Auto-Trader"],["settings","⚙ Beállítások"]] as const;
+  const TABS = [
+    ["scanner",   "01 // Scanner"],
+    ["ev",        "02 // EV Kalk."],
+    ["swarm",     "03 // Swarm"],
+    ["orderflow", "04 // Order Flow"],
+    ["vol",       "05 // Vol Harvest"],
+    ["apex",      "06 // Apex Wallets"],
+    ["condprob",  "07 // Cond. Prob"],
+    ["signals",   "08 // Signals"],
+    ["arbmatrix", "09 // Arb Matrix"],
+  ] as const;
 
   return (
     <>
       <style>{css}</style>
       <div style={{ background: "var(--bg)", minHeight: "100vh", color: "var(--text)" }}>
         <div className="ec-header">
-          <div className="ec-logo">EDGE<span>/</span>CALC <span>// polymarket + funding arb toolkit v3</span></div>
+          <div className="ec-logo">
+            <a href="/" style={{ color: "inherit", textDecoration: "none" }}>EDGE<span>/</span>CALC</a>
+            <span> // analysis tools — trading lives at /trade/&lt;venue&gt;/</span>
+          </div>
           <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-            <span style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--muted)", textTransform: "uppercase" }}>Bankroll:</span>
+            <span style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--muted)", textTransform: "uppercase" }}>Bankroll (preview):</span>
             <input type="number" value={bankroll} onChange={e => setBankroll(+e.target.value)} min={10}
               style={{ background: "var(--surface2)", border: "1px solid var(--border)", color: "var(--accent)", fontFamily: "var(--mono)", fontSize: 13, padding: "4px 8px", borderRadius: 2, outline: "none", width: 82, textAlign: "right" }} />
             <span style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--muted)" }}>USD</span>
@@ -745,19 +758,15 @@ export default function Dashboard() {
           {TABS.map(([id, lbl]) => <button key={id} className={`ec-tab ${tab === id ? "active" : ""}`} onClick={() => setTab(id)}>{lbl}</button>)}
         </div>
         <div className="ec-content">
-          {tab === "scanner"  && <ScannerTab bankroll={bankroll} />}
-          {tab === "ev"       && <EVTab bankroll={bankroll} />}
-          {tab === "funding"  && <FundingTab />}
-          {tab === "swarm"    && <SwarmTab bankroll={bankroll} />}
-          {tab === "trading"  && <TradingPanel />}
+          {tab === "scanner"   && <ScannerTab bankroll={bankroll} />}
+          {tab === "ev"        && <EVTab bankroll={bankroll} />}
+          {tab === "swarm"     && <SwarmTab bankroll={bankroll} />}
           {tab === "orderflow" && <OrderFlowPanel />}
           {tab === "vol"       && <VolDivergencePanel />}
           {tab === "apex"      && <ApexWalletsPanel bankroll={bankroll} />}
           {tab === "condprob"  && <CondProbPanel bankroll={bankroll} />}
           {tab === "signals"   && <SignalCombinerPanel bankroll={bankroll} />}
           {tab === "arbmatrix" && <ArbMatrixPanel bankroll={bankroll} />}
-          {tab === "autotrader" && <TraderStatus />}
-          {tab === "settings"  && <SettingsPanel />}
         </div>
       </div>
     </>

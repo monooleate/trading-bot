@@ -15,6 +15,15 @@ export interface WeatherMarket {
   active: boolean;
 }
 
+// Diagnostics: events that look like weather markets but were dropped before
+// reaching the trader. Useful for surfacing coverage gaps in the Settings tab.
+export interface DroppedEvent {
+  slug:   string;
+  title:  string;
+  reason: "no-city-mapped" | "no-station" | "no-date" | "no-buckets" | "expired";
+  vol24h: number;
+}
+
 export interface TemperatureBucket {
   label: string;             // e.g. "18°C" or "65°F or higher"
   tokenId: string;
@@ -27,16 +36,29 @@ export interface TemperatureBucket {
 // Patterns are matched as hyphen-delimited tokens so short aliases like "la"
 // don't accidentally hit "kua-la-lumpur".
 const CITY_PATTERNS: Record<string, string[]> = {
-  shanghai: ["shanghai"],
-  london: ["london"],
-  "new-york": ["new-york", "nyc", "new-york-city"],
+  shanghai:      ["shanghai"],
+  london:        ["london"],
+  "new-york":    ["new-york", "nyc", "new-york-city"],
   "los-angeles": ["los-angeles", "la"],
-  chicago: ["chicago"],
-  "hong-kong": ["hong-kong"],
-  seoul: ["seoul"],
-  miami: ["miami"],
-  seattle: ["seattle"],
-  atlanta: ["atlanta"],
+  chicago:       ["chicago"],
+  "hong-kong":   ["hong-kong"],
+  seoul:         ["seoul"],
+  miami:         ["miami"],
+  seattle:       ["seattle"],
+  atlanta:       ["atlanta"],
+  // Newly mapped — were configured in station-config but missing from the
+  // pattern list, so their slugs were silently dropped.
+  dallas:        ["dallas"],
+  tokyo:         ["tokyo"],
+  // Coverage extension — see station-config.mts.
+  madrid:        ["madrid"],
+  paris:         ["paris"],
+  milan:         ["milan", "milano"],
+  munich:        ["munich", "muenchen"],
+  ankara:        ["ankara"],
+  lagos:         ["lagos"],
+  "sao-paulo":   ["sao-paulo", "são-paulo"],
+  austin:        ["austin"],
 };
 
 function parseCityFromSlug(slug: string): string | null {
@@ -149,7 +171,12 @@ function parseBucketsFromEvent(evt: any): TemperatureBucket[] {
 
 // ─── Main finder ──────────────────────────────────────────
 
-export async function findWeatherMarkets(): Promise<WeatherMarket[]> {
+export interface FindResult {
+  markets: WeatherMarket[];
+  dropped: DroppedEvent[];
+}
+
+export async function findWeatherMarketsDetailed(): Promise<FindResult> {
   // Gamma's `tag=weather` filter is broken (returns unrelated markets), so
   // pull a wide active slice and filter by question text / slug ourselves.
   const url = `${GAMMA_API}/events?limit=500&active=true&closed=false&order=volume24hr&ascending=false`;
@@ -165,10 +192,12 @@ export async function findWeatherMarkets(): Promise<WeatherMarket[]> {
   );
 
   const results: WeatherMarket[] = [];
+  const dropped: DroppedEvent[] = [];
 
   for (const evt of events) {
     const title = evt.title || "";
     const slug  = evt.slug  || "";
+    const vol   = parseFloat(evt.volume24hr || evt.volume || "0");
 
     // Must be a daily-max temperature event. Our forecast engine models the
     // daily high, so "lowest/coldest" markets would be semantically backwards.
@@ -183,23 +212,36 @@ export async function findWeatherMarkets(): Promise<WeatherMarket[]> {
 
     // Parse city + date (event-level)
     const city = parseCityFromSlug(slug) || parseCityFromSlug(t.replace(/\s+/g, "-"));
-    if (!city) continue;
+    if (!city) {
+      dropped.push({ slug, title, reason: "no-city-mapped", vol24h: vol });
+      continue;
+    }
 
     const station = getStation(city);
-    if (!station) continue;
+    if (!station) {
+      dropped.push({ slug, title, reason: "no-station", vol24h: vol });
+      continue;
+    }
 
     const date = parseDateFromSlug(slug) || parseDateFromSlug(t.replace(/\s+/g, "-"));
-    if (!date) continue;
+    if (!date) {
+      dropped.push({ slug, title, reason: "no-date", vol24h: vol });
+      continue;
+    }
 
     // Aggregate sub-markets into buckets
     const outcomes = parseBucketsFromEvent(evt);
-    if (outcomes.length === 0) continue;
+    if (outcomes.length === 0) {
+      dropped.push({ slug, title, reason: "no-buckets", vol24h: vol });
+      continue;
+    }
 
     // Event end date = max of sub-market endDates (fallback to evt.endDate)
     const endDate = evt.endDate || evt.markets?.[0]?.endDate || "";
-    if (endDate && new Date(endDate).getTime() < Date.now()) continue;
-
-    const vol = parseFloat(evt.volume24hr || evt.volume || "0");
+    if (endDate && new Date(endDate).getTime() < Date.now()) {
+      dropped.push({ slug, title, reason: "expired", vol24h: vol });
+      continue;
+    }
 
     results.push({
       slug,
@@ -216,5 +258,12 @@ export async function findWeatherMarkets(): Promise<WeatherMarket[]> {
   }
 
   results.sort((a, b) => b.volume24h - a.volume24h);
-  return results;
+  dropped.sort((a, b) => b.vol24h - a.vol24h);
+  return { markets: results, dropped };
+}
+
+// Backwards compat shim — most callers only need the matched markets.
+export async function findWeatherMarkets(): Promise<WeatherMarket[]> {
+  const { markets } = await findWeatherMarketsDetailed();
+  return markets;
 }

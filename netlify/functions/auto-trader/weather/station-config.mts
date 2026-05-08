@@ -189,6 +189,53 @@ export const SETTLEMENT_STATIONS: Record<string, StationConfig> = {
       spring: [5, 6, 7],
     },
   },
+  // ─── Coverage extension: cities Polymarket actively lists but we previously
+  // dropped silently. Coordinates are the official airport METAR station
+  // Polymarket settles on. city_offset is left at 0.0 — the new default
+  // behaviour (forecast at airport coords, no further correction) makes any
+  // hand-tuned offset value either wrong or redundant. Tune later via the
+  // Settings tab once we have closed-trade samples per city.
+  madrid: {
+    icao: "LEMD", lat: 40.4936, lon: -3.5668,
+    tz: "Europe/Madrid", city_offset: 0.0,
+    peakHoursUTC: { summer: [14, 15, 16], winter: [13, 14], autumn: [13, 14, 15], spring: [14, 15] },
+  },
+  paris: {
+    icao: "LFPG", lat: 49.0097, lon: 2.5479,
+    tz: "Europe/Paris", city_offset: 0.0,
+    peakHoursUTC: { summer: [13, 14, 15], winter: [12, 13], autumn: [12, 13, 14], spring: [13, 14] },
+  },
+  milan: {
+    icao: "LIMC", lat: 45.6306, lon: 8.7281,
+    tz: "Europe/Rome", city_offset: 0.0,
+    peakHoursUTC: { summer: [13, 14, 15], winter: [12, 13], autumn: [12, 13, 14], spring: [13, 14] },
+  },
+  munich: {
+    icao: "EDDM", lat: 48.3537, lon: 11.7750,
+    tz: "Europe/Berlin", city_offset: 0.0,
+    peakHoursUTC: { summer: [13, 14, 15], winter: [12, 13], autumn: [12, 13, 14], spring: [13, 14] },
+  },
+  ankara: {
+    icao: "LTAC", lat: 40.1281, lon: 32.9951,
+    tz: "Europe/Istanbul", city_offset: 0.0,
+    peakHoursUTC: { summer: [11, 12, 13], winter: [10, 11], autumn: [10, 11, 12], spring: [11, 12] },
+  },
+  lagos: {
+    icao: "DNMM", lat: 6.5774, lon: 3.3212,
+    tz: "Africa/Lagos", city_offset: 0.0,
+    peakHoursUTC: { summer: [13, 14, 15], winter: [13, 14, 15], autumn: [13, 14, 15], spring: [13, 14, 15] },
+  },
+  "sao-paulo": {
+    icao: "SBGR", lat: -23.4356, lon: -46.4731,
+    tz: "America/Sao_Paulo", city_offset: 0.0,
+    // Southern hemisphere — peak hours are local solar noon ~15-18 UTC.
+    peakHoursUTC: { summer: [16, 17, 18], winter: [16, 17], autumn: [16, 17], spring: [16, 17, 18] },
+  },
+  austin: {
+    icao: "KAUS", lat: 30.1945, lon: -97.6699,
+    tz: "America/Chicago", city_offset: 0.0,
+    peakHoursUTC: { summer: [20, 21, 22], winter: [20, 21], autumn: [20, 21], spring: [20, 21, 22] },
+  },
 };
 
 // ─── Helpers ──────────────────────────────────────────────

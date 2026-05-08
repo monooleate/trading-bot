@@ -43,6 +43,7 @@ interface HourlyData {
 async function fetchOpenMeteo(
   station: StationConfig,
   model: "gfs_seamless" | "ecmwf_ifs025",
+  targetDate: string,            // YYYY-MM-DD in station.tz
   forecastDays: number = 2,
 ): Promise<{ maxTemp: number; cloudCover: number } | null> {
   const url =
@@ -58,11 +59,35 @@ async function fetchOpenMeteo(
     if (!res.ok) return null;
     const data = await res.json();
     const hourly: HourlyData = data.hourly;
-    if (!hourly?.temperature_2m?.length) return null;
+    if (!hourly?.temperature_2m?.length || !Array.isArray(hourly.time)) return null;
 
-    const maxTemp = Math.max(...hourly.temperature_2m);
-    const cloudCover = hourly.cloudcover
-      ? hourly.cloudcover.reduce((a: number, b: number) => a + b, 0) / hourly.cloudcover.length
+    // Bug fix B: filter to the target date (in station tz) instead of taking
+    // the global max across the whole multi-day window. Open-Meteo returns
+    // local-time strings prefixed with YYYY-MM-DDT...
+    const prefix = targetDate + "T";
+    const idxs: number[] = [];
+    for (let i = 0; i < hourly.time.length; i++) {
+      if (typeof hourly.time[i] === "string" && hourly.time[i].startsWith(prefix)) {
+        idxs.push(i);
+      }
+    }
+
+    // If the target date isn't in the response (e.g. forecastDays too short
+    // or date is past), fall back to global max so we don't silently 0-out.
+    const tempIdxs = idxs.length > 0 ? idxs : hourly.temperature_2m.map((_, i) => i);
+
+    let maxTemp = -Infinity;
+    for (const i of tempIdxs) {
+      const v = hourly.temperature_2m[i];
+      if (typeof v === "number" && !isNaN(v) && v > maxTemp) maxTemp = v;
+    }
+    if (maxTemp === -Infinity) return null;
+
+    const cloudVals = hourly.cloudcover
+      ? tempIdxs.map(i => hourly.cloudcover![i]).filter(v => typeof v === "number" && !isNaN(v))
+      : [];
+    const cloudCover = cloudVals.length > 0
+      ? cloudVals.reduce((a, b) => a + b, 0) / cloudVals.length
       : 50;
 
     return { maxTemp, cloudCover };
@@ -75,6 +100,7 @@ async function fetchOpenMeteo(
 
 async function fetchNOAA(
   station: StationConfig,
+  targetDate: string,            // YYYY-MM-DD in station.tz
 ): Promise<number | null> {
   // NOAA only works for US stations
   const usTimezones = ["America/New_York", "America/Chicago", "America/Los_Angeles"];
@@ -102,9 +128,19 @@ async function fetchNOAA(
     const periods = fcData.properties?.periods;
     if (!Array.isArray(periods) || periods.length === 0) return null;
 
-    // Find max temperature from next 48h periods
+    // Filter periods to the target date in the station's local timezone.
+    // NOAA's `startTime` is an ISO string with offset (e.g. "2026-05-09T13:00:00-04:00")
+    // — comparing the date portion in local time gives us the right day.
+    const targetDay = targetDate;
+    const targetPeriods = periods.filter((p: any) => {
+      if (typeof p.startTime !== "string") return false;
+      const localDay = p.startTime.slice(0, 10); // ISO date portion
+      return localDay === targetDay;
+    });
+    const usePeriods = targetPeriods.length > 0 ? targetPeriods : periods.slice(0, 48);
+
     let maxF = -Infinity;
-    for (const p of periods.slice(0, 48)) {
+    for (const p of usePeriods) {
       const temp = p.temperature;
       if (typeof temp === "number" && temp > maxF) maxF = temp;
     }
@@ -169,21 +205,43 @@ function computeEnsemble(
 
 // ─── Main forecast function ───────────────────────────────
 
+export interface ForecastOptions {
+  // When true, applies the configured city_offset to the raw forecast.
+  // Default false: Open-Meteo is queried at airport coordinates, so the
+  // returned value is already station-relative — adding the offset on top
+  // double-corrects and biases the prediction.
+  applyCityOffset?: boolean;
+  // Override forecast_days (1–7). Default: auto-computed from targetDate.
+  forecastDays?: number;
+  // Override the USE_ENSEMBLE env flag.
+  useEnsemble?: boolean;
+}
+
+function autoForecastDays(targetDate: string): number {
+  const ms = new Date(targetDate + "T12:00:00Z").getTime() - Date.now();
+  const days = Math.ceil(ms / 86_400_000) + 1;
+  return Math.max(2, Math.min(7, days));
+}
+
 export async function getForecast(
   city: string,
   station: StationConfig,
   targetDate: string, // YYYY-MM-DD
+  opts: ForecastOptions = {},
 ): Promise<ForecastResult> {
   // Load DEB weights (per-city if available). Falls back to fixed defaults
   // when the city has < MIN_TRADES_FOR_DEB closed trades.
   const debWeights = await getDebWeights(city);
 
+  const fcDays   = opts.forecastDays ?? autoForecastDays(targetDate);
+  const wantEns  = opts.useEnsemble ?? ensembleEnabled();
+
   // Parallel fetch: GFS + ECMWF + NOAA always; ensemble only if enabled.
   const [gfsResult, ecmwfResult, noaaResult, ensembleResult] = await Promise.all([
-    fetchOpenMeteo(station, "gfs_seamless"),
-    fetchOpenMeteo(station, "ecmwf_ifs025"),
-    fetchNOAA(station),
-    ensembleEnabled() ? fetchEnsemble(station, targetDate) : Promise.resolve(null),
+    fetchOpenMeteo(station, "gfs_seamless", targetDate, fcDays),
+    fetchOpenMeteo(station, "ecmwf_ifs025", targetDate, fcDays),
+    fetchNOAA(station, targetDate),
+    wantEns ? fetchEnsemble(station, targetDate) : Promise.resolve(null),
   ]);
 
   const gfsMax     = gfsResult?.maxTemp ?? null;
@@ -209,8 +267,13 @@ export async function getForecast(
     modelUsed = `GFS-ENS31(${ensembleResult.memberCount})+${base.modelUsed}`;
   }
 
-  // Apply station offset + METAR rounding
-  const predictedMax = correctForecast(ensembleMaxC, station.city_offset);
+  // Bug fix A: city_offset is only applied when explicitly requested.
+  // Open-Meteo is queried at the station's airport coordinates, so the
+  // returned forecast already represents station temp; adding the offset
+  // double-corrects. METAR rounding (°C → °F → integer → °C) is always
+  // applied because that *is* how Polymarket settles.
+  const offsetToApply = opts.applyCityOffset ? station.city_offset : 0;
+  const predictedMax = correctForecast(ensembleMaxC, offsetToApply);
 
   return {
     city,

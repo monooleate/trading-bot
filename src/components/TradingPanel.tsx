@@ -499,9 +499,25 @@ function PolymarketPanel() {
 }
 
 // ─── ROOT ─────────────────────────────────────────────────────────────────────
-export default function TradingPanel() {
+type Venue = Exchange | "polymarket";
+
+interface TradingPanelProps {
+  defaultExchange?: Venue;
+  lockExchange?: Venue;     // hide the picker and force this venue
+  title?: string;            // header title override
+  subtitle?: string;         // header subtitle override
+  infoBox?: React.ReactNode; // optional info section above the panel
+}
+
+export default function TradingPanel({
+  defaultExchange = "bybit",
+  lockExchange,
+  title = "Trading Panel",
+  subtitle = "Bybit Futures • Binance Futures • Polymarket",
+  infoBox,
+}: TradingPanelProps = {}) {
   const [authed,   setAuthed]   = useState<boolean | null>(null); // null = loading
-  const [exchange, setExchange] = useState<Exchange | "polymarket">("bybit");
+  const [exchange, setExchange] = useState<Venue>(lockExchange ?? defaultExchange);
 
   // Auth állapot ellenőrzés mountkor
   useEffect(() => {
@@ -535,19 +551,23 @@ export default function TradingPanel() {
       <div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 20 }}>
           <div>
-            <div style={{ fontFamily: "var(--sans)", fontSize: 18, fontWeight: 800, letterSpacing: "-.02em", marginBottom: 3 }}>Trading Panel</div>
-            <div style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--muted)" }}>Bybit Futures • Binance Futures • Polymarket</div>
+            <div style={{ fontFamily: "var(--sans)", fontSize: 18, fontWeight: 800, letterSpacing: "-.02em", marginBottom: 3 }}>{title}</div>
+            <div style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--muted)" }}>{subtitle}</div>
           </div>
           <button className="tp-btn-sm" onClick={logout} style={{ color: "var(--danger)", borderColor: "var(--danger)" }}>Kilépés</button>
         </div>
 
-        <div className="tp-exchange-row">
-          {(["bybit","binance","polymarket"] as const).map(ex => (
-            <button key={ex} className={`tp-ex-btn ${ex === "polymarket" ? "poly" : ""} ${exchange === ex ? "active" : ""}`} onClick={() => setExchange(ex)}>
-              {ex.charAt(0).toUpperCase() + ex.slice(1)}
-            </button>
-          ))}
-        </div>
+        {infoBox}
+
+        {!lockExchange && (
+          <div className="tp-exchange-row">
+            {(["bybit","binance","polymarket"] as const).map(ex => (
+              <button key={ex} className={`tp-ex-btn ${ex === "polymarket" ? "poly" : ""} ${exchange === ex ? "active" : ""}`} onClick={() => setExchange(ex)}>
+                {ex.charAt(0).toUpperCase() + ex.slice(1)}
+              </button>
+            ))}
+          </div>
+        )}
 
         {exchange === "bybit"      && <ExchangePanel exchange="bybit" />}
         {exchange === "binance"    && <ExchangePanel exchange="binance" />}

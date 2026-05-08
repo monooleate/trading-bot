@@ -18,6 +18,8 @@ interface FieldSpec {
   label: string;
   step: number;
   unit: string;
+  category?: string;
+  group?: string;
 }
 
 interface ServerResponse {
@@ -28,11 +30,11 @@ interface ServerResponse {
   authed: boolean;
 }
 
-const FIELD_GROUPS: { title: string; keys: string[] }[] = [
-  { title: "Risk & sizing", keys: ["edgeThreshold", "maxKellyFraction", "sessionLossLimit", "cooldownSeconds"] },
-  { title: "BTC short markets (P1.2 — korai exit)", keys: ["btcTpTarget", "btcSlTarget", "btcEntryWindowStartMs", "btcEntryWindowEndMs", "btcHoldToEndCutoffMs"] },
-  { title: "Order book imbalance (P1.3 — előkészítés)", keys: ["obImbalanceUpRatio", "obImbalanceDownRatio"] },
-];
+interface SettingsPanelProps {
+  category?: string;   // when set, only fields with matching schema.category are shown
+  title?: string;
+  subtitle?: string;
+}
 
 function formatVal(v: number, unit: string): string {
   if (unit === "frac") return (v * 100).toFixed(2) + "%";
@@ -44,7 +46,7 @@ function formatVal(v: number, unit: string): string {
   return String(v);
 }
 
-export default function SettingsPanel() {
+export default function SettingsPanel({ category, title, subtitle }: SettingsPanelProps = {}) {
   const [data, setData] = useState<ServerResponse | null>(null);
   const [draft, setDraft] = useState<Record<string, number>>({});
   const [busy, setBusy] = useState(false);
@@ -160,10 +162,43 @@ export default function SettingsPanel() {
           <div className="set-readonly-hint">
             A jelenlegi (env-default) értékek alább olvashatók, módosításhoz belépés kell.
           </div>
-          <ReadOnlyView data={data} />
+          <ReadOnlyView data={data} category={category} />
         </div>
       </>
     );
+  }
+
+  // Filter schema by category if requested, then group by spec.group
+  const visibleEntries = Object.entries(data.schema).filter(([, spec]) =>
+    category ? spec.category === category : true,
+  );
+
+  if (visibleEntries.length === 0) {
+    return (
+      <>
+        <style>{css}</style>
+        <div className="set-root">
+          <div className="set-header">
+            <div>
+              <div className="set-title">{title ?? "Beállítások"}</div>
+              <div className="set-sub">{subtitle ?? "Runtime override-ok"}</div>
+            </div>
+          </div>
+          <div className="set-msg set-msg-info">
+            Ehhez a kategóriához ({category}) jelenleg nincs runtime-állítható paraméter.
+            Az alapértékeket az env varok határozzák meg, módosításhoz redeploy szükséges.
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  const groupOrder: string[] = [];
+  const grouped: Record<string, [string, FieldSpec][]> = {};
+  for (const [k, spec] of visibleEntries) {
+    const g = spec.group || "Általános";
+    if (!grouped[g]) { grouped[g] = []; groupOrder.push(g); }
+    grouped[g].push([k, spec]);
   }
 
   return (
@@ -172,8 +207,8 @@ export default function SettingsPanel() {
       <div className="set-root">
         <div className="set-header">
           <div>
-            <div className="set-title">Auto-trader paraméterek</div>
-            <div className="set-sub">Runtime override-ok — Netlify Blobs, env defaults felülírása</div>
+            <div className="set-title">{title ?? "Auto-trader paraméterek"}</div>
+            <div className="set-sub">{subtitle ?? "Runtime override-ok — Netlify Blobs, env defaults felülírása"}</div>
           </div>
           <div className="set-actions">
             <button className="set-btn-ghost" onClick={resetAll} disabled={busy}>↺ Reset alapértékek</button>
@@ -184,13 +219,11 @@ export default function SettingsPanel() {
 
         {msg && <div className={`set-msg set-msg-${msg.kind}`}>{msg.text}</div>}
 
-        {FIELD_GROUPS.map(group => (
-          <div key={group.title} className="set-group">
-            <div className="set-group-title">{group.title}</div>
+        {groupOrder.map(g => (
+          <div key={g} className="set-group">
+            <div className="set-group-title">{g}</div>
             <div className="set-grid">
-              {group.keys.map(k => {
-                const spec = data.schema[k];
-                if (!spec) return null;
+              {grouped[g].map(([k, spec]) => {
                 const cur = draft[k] ?? data.effective[k];
                 const isOverride = data.overrides[k] !== undefined;
                 const dirty = cur !== data.effective[k];
@@ -199,7 +232,7 @@ export default function SettingsPanel() {
                     <div className="set-field-label">
                       {spec.label}
                       {isOverride && <span className="set-tag">override</span>}
-                      {dirty && <span className="set-tag set-tag-dirty">változatlan-mentve</span>}
+                      {dirty && <span className="set-tag set-tag-dirty">változás</span>}
                     </div>
                     <div className="set-field-row">
                       <input
@@ -236,23 +269,29 @@ export default function SettingsPanel() {
   );
 }
 
-function ReadOnlyView({ data }: { data: ServerResponse }) {
+function ReadOnlyView({ data, category }: { data: ServerResponse; category?: string }) {
+  const visible = Object.entries(data.schema).filter(([, spec]) =>
+    category ? spec.category === category : true,
+  );
+  const order: string[] = [];
+  const grouped: Record<string, [string, FieldSpec][]> = {};
+  for (const [k, spec] of visible) {
+    const g = spec.group || "Általános";
+    if (!grouped[g]) { grouped[g] = []; order.push(g); }
+    grouped[g].push([k, spec]);
+  }
   return (
     <div className="set-readonly">
-      {FIELD_GROUPS.map(group => (
-        <div key={group.title} className="set-group">
-          <div className="set-group-title">{group.title}</div>
+      {order.map(g => (
+        <div key={g} className="set-group">
+          <div className="set-group-title">{g}</div>
           <div className="set-grid">
-            {group.keys.map(k => {
-              const spec = data.schema[k];
-              if (!spec) return null;
-              return (
-                <div key={k} className="set-field readonly">
-                  <div className="set-field-label">{spec.label}</div>
-                  <div className="set-formatted">{formatVal(data.effective[k], spec.unit)}</div>
-                </div>
-              );
-            })}
+            {grouped[g].map(([k, spec]) => (
+              <div key={k} className="set-field readonly">
+                <div className="set-field-label">{spec.label}</div>
+                <div className="set-formatted">{formatVal(data.effective[k], spec.unit)}</div>
+              </div>
+            ))}
           </div>
         </div>
       ))}

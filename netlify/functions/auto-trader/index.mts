@@ -23,8 +23,8 @@ import {
   resetSession,
 } from "./crypto/session-manager.mts";
 import type { SessionState, MarketInfo, SignalBreakdown } from "./shared/types.mts";
-import { runWeatherTrader } from "./weather/index.mts";
-import { getWeatherConfig } from "./weather/decision-engine.mts";
+import { runWeatherTrader, getWeatherRunStatus } from "./weather/index.mts";
+import { getWeatherConfig, getEffectiveWeatherConfig } from "./weather/decision-engine.mts";
 import {
   runHyperliquidTrader,
   getHlStatus,
@@ -105,8 +105,8 @@ export default async function handler(req: Request, _ctx: Context) {
     switch (action) {
       case "run":
         if (cat === "weather") {
-          const wConfig = getWeatherConfig();
-          return jsonResponse(await runWeatherTrader(wConfig));
+          const wConfig = await getEffectiveWeatherConfig();
+          return jsonResponse(await runWeatherTrader(wConfig, "manual"));
         }
         return await runCryptoTrader(config);
       case "status":

@@ -1,7 +1,8 @@
+import { getStore } from "@netlify/blobs";
 import { log } from "../shared/logger.mts";
 import { alertError } from "../shared/telegram.mts";
-import { findWeatherMarkets } from "./market-finder.mts";
-import type { WeatherMarket } from "./market-finder.mts";
+import { findWeatherMarketsDetailed } from "./market-finder.mts";
+import type { WeatherMarket, DroppedEvent } from "./market-finder.mts";
 import { getStation, getSeason } from "./station-config.mts";
 import { getForecast } from "./forecast-engine.mts";
 import { detectModelLag } from "./model-lag-detector.mts";
@@ -21,6 +22,63 @@ import {
 import type { MarketInfo, Position, ClosedTrade } from "../shared/types.mts";
 
 const DEFAULT_BANKROLL = 100;
+
+// ─── Run-state store (lastRunAt, isRunning, lastSummary) ──
+//
+// Surfaced in the UI so the user can see whether the trader is currently
+// scanning and how long ago the last tick ran. Lives in Netlify Blobs so
+// state survives across cron ticks and manual UI calls.
+
+const RUN_STORE = "weather-runtime";
+const RUN_KEY   = "v1";
+
+interface RunState {
+  startedAt:  string | null;   // set at the start of a run, cleared on finish
+  lastRunAt:  string | null;   // ISO of most recent finished run
+  lastResult: any | null;      // summary object from the last finished run
+  source:     "manual" | "cron" | null;
+}
+
+async function loadRunState(): Promise<RunState> {
+  try {
+    const raw = await getStore(RUN_STORE).get(RUN_KEY);
+    if (raw) return JSON.parse(raw as string);
+  } catch {}
+  return { startedAt: null, lastRunAt: null, lastResult: null, source: null };
+}
+
+async function saveRunState(s: RunState): Promise<void> {
+  try { await getStore(RUN_STORE).set(RUN_KEY, JSON.stringify(s)); } catch {}
+}
+
+export async function getWeatherRunStatus(): Promise<{
+  isRunning:  boolean;
+  startedAt:  string | null;
+  lastRunAt:  string | null;
+  source:     "manual" | "cron" | null;
+  ageSec:     number | null;     // seconds since lastRunAt
+  lastResult: any | null;
+}> {
+  const s = await loadRunState();
+  // Stale "running" guard: if the start-of-run flag is older than 90s, the
+  // previous run probably crashed before clearing it. Treat as not-running.
+  let isRunning = false;
+  if (s.startedAt) {
+    const ageMs = Date.now() - new Date(s.startedAt).getTime();
+    isRunning = ageMs < 90_000;
+  }
+  const ageSec = s.lastRunAt
+    ? Math.floor((Date.now() - new Date(s.lastRunAt).getTime()) / 1000)
+    : null;
+  return {
+    isRunning,
+    startedAt:  s.startedAt,
+    lastRunAt:  s.lastRunAt,
+    source:     s.source,
+    ageSec,
+    lastResult: s.lastResult,
+  };
+}
 
 // ─── Telegram weather alerts ──────────────────────────────
 
@@ -62,7 +120,32 @@ function toMarketInfo(wm: WeatherMarket, tokenId: string): MarketInfo {
 
 // ─── Main weather trading loop ────────────────────────────
 
-export async function runWeatherTrader(config: WeatherConfig) {
+export async function runWeatherTrader(
+  config: WeatherConfig,
+  source: "manual" | "cron" = "manual",
+) {
+  // Mark "running" at the very start so the UI can show a live indicator.
+  const startedAt = new Date().toISOString();
+  await saveRunState({ ...(await loadRunState()), startedAt, source });
+
+  // Wrap the body so we always clear the running flag even on early returns.
+  let result: any;
+  try {
+    result = await runWeatherTraderInner(config);
+  } catch (err: any) {
+    result = { ok: false, action: "error", error: err.message, source };
+  }
+
+  await saveRunState({
+    startedAt:  null,
+    lastRunAt:  new Date().toISOString(),
+    lastResult: result,
+    source,
+  });
+  return { ...result, source, startedAt, finishedAt: new Date().toISOString() };
+}
+
+async function runWeatherTraderInner(config: WeatherConfig) {
   const session = await loadSession(config.paperMode, DEFAULT_BANKROLL, "weather");
 
   if (session.stopped) {
@@ -86,13 +169,14 @@ export async function runWeatherTrader(config: WeatherConfig) {
     };
   }
 
-  // 2. Find weather markets
-  const markets = await findWeatherMarkets();
+  // 2. Find weather markets (+ dropped diagnostics)
+  const { markets, dropped } = await findWeatherMarketsDetailed();
   if (markets.length === 0) {
     return {
       ok: true,
       action: "skipped",
       reason: "No active weather temperature markets found",
+      droppedEvents: dropped.slice(0, 20),
       session: summarize(session),
     };
   }
@@ -115,8 +199,12 @@ export async function runWeatherTrader(config: WeatherConfig) {
         continue;
       }
 
-      // 4. Get forecast
-      const forecast = await getForecast(market.city, station, market.date);
+      // 4. Get forecast (pass through pipeline knobs from effective config)
+      const forecast = await getForecast(market.city, station, market.date, {
+        applyCityOffset: config.applyCityOffset,
+        forecastDays:    config.forecastDays > 0 ? config.forecastDays : undefined,
+        useEnsemble:     config.useEnsemble,
+      });
 
       log("SIGNAL", config.paperMode, {
         type: "weather_forecast",
@@ -277,6 +365,14 @@ export async function runWeatherTrader(config: WeatherConfig) {
     marketsScanned: markets.length,
     modelLag: { age: modelLag.modelAge, hasLag: modelLag.hasLag },
     results,
+    droppedEvents: dropped.slice(0, 20),
+    config: {
+      edgeThreshold:   config.edgeThreshold,
+      confidenceMin:   config.confidenceMin,
+      maxEdgeCap:      config.maxEdgeCap,
+      applyCityOffset: config.applyCityOffset,
+      useEnsemble:     config.useEnsemble,
+    },
     session: summarize(updatedSession),
   };
 }
