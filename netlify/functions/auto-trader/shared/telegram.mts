@@ -106,3 +106,17 @@ export function alertCalibrationNoise(
       : `Live trading auto-suspended.`);
   return sendMessage(text);
 }
+
+export function alertLiveBlocked(
+  category: string,
+  reason: string,
+  failedGates: string[],
+): Promise<boolean> {
+  const text =
+    `🚦 <b>LIVE TRADING BLOCKED [${category.toUpperCase()}]</b>\n` +
+    `${reason}\n` +
+    (failedGates.length > 0 ? `Failed gates: ${failedGates.join(", ")}\n` : "") +
+    `Run reverted to PAPER for this tick. ` +
+    `Reach the thresholds in Settings → Live readiness, then re-enable PAPER_MODE=false.`;
+  return sendMessage(text);
+}

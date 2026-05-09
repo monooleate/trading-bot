@@ -36,7 +36,9 @@ const TARGETS: FanOutTarget[] = [
 
 async function runOne(target: FanOutTarget, ctx: Context): Promise<{ label: string; ok: boolean; status?: number; error?: string }> {
   try {
-    const req = new Request("https://multi-cron.local/.netlify/functions/auto-trader", {
+    // ?source=cron lets the dispatcher tag the run-state as cron-driven, so
+    // the UI pill says "Scanning… (cron)" rather than "(manual)" on tick.
+    const req = new Request("https://multi-cron.local/.netlify/functions/auto-trader?source=cron", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(target.body),

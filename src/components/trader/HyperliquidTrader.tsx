@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 
 const FN = "/.netlify/functions/auto-trader-api";
 
@@ -26,6 +26,24 @@ interface HlRunResult {
   session?: HlSessionSummary;
   reason?: string;
   error?: string;
+  source?: "manual" | "cron";
+}
+
+interface HlRunStatus {
+  isRunning: boolean;
+  startedAt: string | null;
+  lastRunAt: string | null;
+  source: "manual" | "cron" | null;
+  ageSec: number | null;
+  lastResult: any | null;
+}
+
+function formatAge(sec: number | null): string {
+  if (sec === null || sec < 0) return "—";
+  if (sec < 60)    return `${sec}s ago`;
+  if (sec < 3600)  return `${Math.floor(sec / 60)}m ago`;
+  if (sec < 86400) return `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m ago`;
+  return `${Math.floor(sec / 86400)}d ago`;
 }
 
 export default function HyperliquidTrader() {
@@ -33,18 +51,42 @@ export default function HyperliquidTrader() {
   const [lastRun, setLastRun] = useState<HlRunResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState<string | null>(null);
+  const [runStatus, setRunStatus] = useState<HlRunStatus | null>(null);
+  const [cronEnabled, setCronEnabled] = useState<boolean>(true);
+  // tick state forces re-render every second so the relative timestamp ages
+  const [, setTick] = useState(0);
+  const pollRef = useRef<NodeJS.Timeout | null>(null);
 
   const fetchStatus = useCallback(async () => {
     try {
       const res = await fetch(`${FN}?action=status&category=hyperliquid`);
       const data = await res.json();
-      if (data.ok) setSession(data.session);
+      if (data.ok) {
+        setSession(data.session);
+        if (data.runStatus) setRunStatus(data.runStatus);
+        if (typeof data.cronEnabled === "boolean") setCronEnabled(data.cronEnabled);
+      }
     } catch (err: any) {
       setError(err.message);
     }
   }, []);
 
-  useEffect(() => { fetchStatus(); }, [fetchStatus]);
+  useEffect(() => {
+    fetchStatus();
+    // Poll every 5s so cron-driven runs appear without a manual refresh.
+    pollRef.current = setInterval(() => {
+      fetchStatus();
+      setTick(t => t + 1);
+    }, 5000);
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, [fetchStatus]);
+
+  // Re-render once a second so "X minutes ago" stays current locally
+  // without re-fetching the API.
+  useEffect(() => {
+    const t = setInterval(() => setTick(x => x + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
 
   const doAction = useCallback(async (action: string) => {
     setLoading(true);
@@ -70,6 +112,12 @@ export default function HyperliquidTrader() {
   const pnlColor = (v: number) => v >= 0 ? "var(--accent)" : "var(--danger)";
   const pnlSign  = (v: number) => v >= 0 ? "+" : "";
 
+  const isRunning = loading || (runStatus?.isRunning ?? false);
+  const lastSrc = runStatus?.source ?? null;
+  const ageSec = runStatus?.lastRunAt
+    ? Math.floor((Date.now() - new Date(runStatus.lastRunAt).getTime()) / 1000)
+    : null;
+
   return (
     <div className="hl-wrap">
       <div className="hl-header">
@@ -79,6 +127,19 @@ export default function HyperliquidTrader() {
             {session.paperMode ? "TESTNET" : "MAINNET"}
           </span>
         )}
+        <div className="hl-status-cluster">
+          <div className={`hl-pill hl-pill-${isRunning ? "live" : "idle"}`}>
+            <span className="hl-pill-dot" />
+            {isRunning ? `Scanning… (${runStatus?.source ?? "manual"})` : "Idle"}
+          </div>
+          <div className={`hl-pill hl-pill-${cronEnabled ? "cron-on" : "cron-off"}`}
+               title="Driven by auto-trader-multi-cron, every 3 min">
+            cron {cronEnabled ? "ON · 3 min" : "OFF"}
+          </div>
+          <div className="hl-pill hl-pill-mute" title={runStatus?.lastRunAt || "no runs yet"}>
+            last {lastSrc ? `(${lastSrc})` : ""}: {formatAge(ageSec)}
+          </div>
+        </div>
       </div>
 
       <div className="hl-sub">
@@ -127,22 +188,22 @@ export default function HyperliquidTrader() {
 
       {/* Controls */}
       <div className="hl-controls">
-        <button className="hl-btn hl-btn-primary" onClick={() => doAction("run")} disabled={loading}>
+        <button className="hl-btn hl-btn-primary" onClick={() => doAction("run")} disabled={isRunning}>
           {loading ? "Running..." : "Run Scan"}
         </button>
-        <button className="hl-btn hl-btn-secondary" onClick={() => doAction("reset")} disabled={loading}>
+        <button className="hl-btn hl-btn-secondary" onClick={() => doAction("reset")} disabled={isRunning}>
           Reset
         </button>
         {session?.stopped || session?.pausedUntil ? (
-          <button className="hl-btn hl-btn-secondary" onClick={() => doAction("resume")} disabled={loading}>
+          <button className="hl-btn hl-btn-secondary" onClick={() => doAction("resume")} disabled={isRunning}>
             Resume
           </button>
         ) : (
-          <button className="hl-btn hl-btn-danger" onClick={() => doAction("stop")} disabled={loading}>
+          <button className="hl-btn hl-btn-danger" onClick={() => doAction("stop")} disabled={isRunning}>
             Stop
           </button>
         )}
-        <button className="hl-btn hl-btn-secondary" onClick={fetchStatus} disabled={loading}>
+        <button className="hl-btn hl-btn-secondary" onClick={fetchStatus} disabled={isRunning}>
           Refresh
         </button>
       </div>
@@ -180,7 +241,26 @@ export default function HyperliquidTrader() {
 
       <style>{`
         .hl-wrap { max-width: 760px; margin: 0 auto; padding: 1.5rem 1rem; }
-        .hl-header { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.25rem; }
+        .hl-header { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.25rem; flex-wrap: wrap; }
+        .hl-status-cluster { margin-left: auto; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+        .hl-pill {
+          font-family: var(--mono); font-size: 0.62rem;
+          padding: 3px 8px; border-radius: 12px;
+          display: inline-flex; align-items: center; gap: 5px;
+          border: 1px solid var(--border); background: var(--surface);
+          text-transform: uppercase; letter-spacing: .04em;
+        }
+        .hl-pill-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+        .hl-pill-live { color: var(--accent); border-color: var(--accent); }
+        .hl-pill-live .hl-pill-dot { background: var(--accent); animation: hl-pulse 1.4s ease-in-out infinite; }
+        .hl-pill-idle { color: var(--muted); }
+        .hl-pill-cron-on { color: var(--accent2); border-color: var(--accent2); }
+        .hl-pill-cron-off { color: var(--muted); }
+        .hl-pill-mute { color: var(--muted); }
+        @keyframes hl-pulse {
+          0%, 100% { opacity: 1; transform: scale(1); }
+          50%      { opacity: 0.45; transform: scale(1.4); }
+        }
         .hl-title { font-family: var(--sans); font-size: 1.25rem; color: var(--text); margin: 0; }
         .hl-sub { font-family: var(--mono); font-size: 0.7rem; color: var(--muted); margin-bottom: 1.5rem; letter-spacing: 0.05em; }
         .hl-mode { font-family: var(--mono); font-size: 0.65rem; padding: 2px 8px; border-radius: 4px; text-transform: uppercase; letter-spacing: 0.5px; }

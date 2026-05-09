@@ -26,6 +26,7 @@ import {
   placeHlEntry,
 } from "./order-manager.mts";
 import { resolveOpenHlPaperPositions } from "./paper-resolver.mts";
+import { markHlRunStart, markHlRunFinish, getHlRunStatus } from "./run-state.mts";
 import {
   loadHlSession,
   saveHlSession,
@@ -51,7 +52,25 @@ const SCAN_COINS: HlCoin[] = ["BTC", "ETH", "SOL"];
 // horizon; overridable via Settings later.
 const DEFAULT_MAX_PAPER_HOLD_MS = 4 * 60 * 60 * 1000;
 
-export async function runHyperliquidTrader(configOverride?: HlTraderConfig): Promise<any> {
+export async function runHyperliquidTrader(
+  configOverride?: HlTraderConfig,
+  source: "manual" | "cron" = "manual",
+): Promise<any> {
+  await markHlRunStart(source).catch(() => {});
+  let result: any;
+  try {
+    result = await runHyperliquidTraderInner(configOverride, source);
+  } catch (err: any) {
+    result = { ok: false, action: "error", error: err?.message || "unknown", source };
+  }
+  await markHlRunFinish(result).catch(() => {});
+  return { ...result, source };
+}
+
+async function runHyperliquidTraderInner(
+  configOverride: HlTraderConfig | undefined,
+  _source: "manual" | "cron",
+): Promise<any> {
   const config  = configOverride ?? getHlConfig();
   let   session = await loadHlSession(config.paperMode);
 
@@ -222,7 +241,16 @@ export async function runHyperliquidTrader(configOverride?: HlTraderConfig): Pro
 export async function getHlStatus(): Promise<any> {
   const config  = getHlConfig();
   const session = await loadHlSession(config.paperMode);
-  return { ok: true, action: "status", category: "hyperliquid", session: summarize(session) };
+  const runStatus = await getHlRunStatus();
+  return {
+    ok: true,
+    action: "status",
+    category: "hyperliquid",
+    session: summarize(session),
+    runStatus,
+    // HL is wired into auto-trader-multi-cron */3 * * * *, always-on.
+    cronEnabled: true,
+  };
 }
 
 export async function hlReset(): Promise<any> {

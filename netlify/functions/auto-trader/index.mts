@@ -21,7 +21,9 @@ import { CORS, getTraderConfig, getEffectiveTraderConfig, getEffectiveBtcExitCon
 // stopped session (those need `reset`/`resume`, which DO require auth).
 const PROTECTED_ACTIONS = new Set(["reset", "stop", "resume"]);
 import { log, getLogBuffer } from "./shared/logger.mts";
-import { alertTradeOpen, alertTradeClosed, alertSessionStop, alertError, alertCalibrationNoise } from "./shared/telegram.mts";
+import { alertTradeOpen, alertTradeClosed, alertSessionStop, alertError, alertCalibrationNoise, alertLiveBlocked } from "./shared/telegram.mts";
+import { computeLiveReadiness, shouldForcePaper, type LiveReadinessReport } from "./shared/live-readiness.mts";
+import { PAPER_SIM_VERSION } from "./crypto/session-manager.mts";
 import { findBtcMarkets } from "./crypto/btc-market-finder.mts";
 import { aggregateSignals } from "./crypto/signal-aggregator.mts";
 import { makeDecision, setCooldown } from "./crypto/decision-engine.mts";
@@ -115,7 +117,14 @@ export default async function handler(req: Request, _ctx: Context) {
       }
 
       switch (action) {
-        case "run":    return jsonResponse(await runHyperliquidTrader());
+        case "run": {
+          // Distinguish manual UI calls from the auto-trader-multi-cron
+          // fan-out so the live status pill shows the right source.
+          const url = new URL(req.url);
+          const source: "manual" | "cron" =
+            url.searchParams.get("source") === "cron" ? "cron" : "manual";
+          return jsonResponse(await runHyperliquidTrader(undefined, source));
+        }
         case "status": return jsonResponse(await getHlStatus());
         case "reset":  return jsonResponse(await hlReset());
         case "stop":   return jsonResponse(await hlStop());
