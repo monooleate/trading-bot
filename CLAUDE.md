@@ -351,6 +351,49 @@ netlify deploy --prod --dir=dist
 
 ## AKTUÁLIS ÁLLAPOT (2026-05-09) – Claude Code folytatáshoz
 
+### Harmadik session (2026-05-09) – Auto-Trader UI unification (4 bots → 1 shell)
+
+Egységesítés: a 4 trader (Crypto, Weather, Hyperliquid, Funding-Arb) eddig
+4 különálló komponensben élt — saját CSS prefixszel, saját polling loop-pal,
+saját button stílussal és inkonzisztens validálási chip-ekkel. Egyetlen
+megosztott shell + 5 reusable card alá kerültek. Ugyanaz a "Run Scan" gomb
+mostantól minden boton ugyanúgy néz ki, ugyanazt a chip-szettet használja,
+és minden boton kötelezően megjelenik a `LiveReadinessBadge` +
+`CalibrationHealthBadge` (eddig csak Cryptón volt).
+
+**Új közös modulok** (`src/components/shared/`):
+- `TraderShell.tsx` — 1 wrapper + `useAutoTraderStatus(category, layer?)` +
+  `useTraderAction(category, layer?)` hook. Kezeli a 5s status pollot, az
+  1s relativ-time tickert, a header pill clustert (live/cron/last) és a 2
+  badge-et.
+- `TraderResults.tsx` — `ScanResultsCard`, `ScanResultRow` (rich chips +
+  signal arrows + action chip + extra/pnl + reason footer),
+  `PendingPositionsCard`, `OpenPositionsCard`, `OpportunitiesCard`,
+  `DroppedCard`. Egyetlen `ResultChip` API (label + tone + outline + title).
+- `traderShellStyles.ts` — `ts-` prefix CSS.
+
+**Eredmény LOC-ban:** Crypto 532 → 248, Weather 429 → 196, HL 304 → 161,
+F-Arb 250 → 173. ~1500 → ~778 LOC, miközben minden bot megkapta a hiányzó
+feature-eket (status cluster F-Arb-on, cal+readiness badge mindenhol, rich
+validation chips mindenhol).
+
+**Future-proof:** új trader hozzáadása mostantól ~150 LOC adapter +
+TraderShell. Új feature (modal, sparkline) egyetlen helyre kerül és minden
+bot megkapja.
+
+Részletes leírás: `internal-docs/changelog/CHANGELOG-2026-05-09.md` -
+"Auto-Trader UI unification (4 bots → 1 shell)" szekciója.
+
+### Hova nyúlj legközelebb (UI)
+
+- Új trader category hozzáadása: új trader file ~150 LOC, ami `TraderShell`
+  + `useAutoTraderStatus(category)` + `useTraderAction(category)` köré épül,
+  és a `ScanResultsCard` / megfelelő cards-okat tölti.
+- Új validation chip mindenhol (pl. spread, liquidity score): a `ResultChip`
+  API kibővítése (új tone? új ikon?) → minden bot azonnal megjeleníti.
+- A `traderShellStyles.ts` az egyetlen forrás a `ts-` osztályokhoz; minden
+  vizuális tweak ott egy helyen van.
+
 ### Második session (2026-05-09) – Crypto paper trader v2 sim + calibration alarm
 
 A `paper-pnl-analysis.md` által leírt 4 strukturális hibát kódfedezetbe vontam:

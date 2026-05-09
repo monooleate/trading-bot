@@ -418,3 +418,100 @@ A 4 paper sim már független a saját predikciótól (audit eredménye):
 Tehát az IC/Sharpe/win-rate/drawdown gates **valós piaci kimenetelekre** alapulnak.
 - **IC kalibráció:** ha 50+ valós paper trade után a IC értékek tényleg ≥0.05-re jönnek fel, akkor a `signal-combiner` IC weightingjét újrahangolni az új mérési értékekre.
 - **Edge-decay alarm:** ha az IC eleinte jó volt majd 0-ra esett, az is alarm-érték (signal degradálódik). Most még nincs benne.
+
+---
+
+## Auto-Trader UI unification (4 bots → 1 shell)
+
+### Háttér
+
+A 4 trader oldal (Crypto, Weather, Hyperliquid, Funding-Arb) eddig 4 különálló
+React komponensben volt, mind saját CSS prefixszel (`ct-`, `wt-`, `hl-`, `fa-`),
+saját polling loop-pal, saját button stílussal és saját result-row markup-pal.
+Ugyanaz a "Run Scan" gomb mindenhol kicsit másképp nézett ki, és a per-market
+validálási értékek (mp / model / edge / direction / kelly / signals) csak a
+Crypto trader-en voltak rich chip-formában — a többiekben minimális szöveg.
+
+### Refaktor
+
+Új shared modulok (`src/components/shared/`):
+- **`TraderShell.tsx`** — egyetlen wrapper komponens. Kezeli: header
+  (title + mode badge + 3-pill status cluster: live/cron/last-run), opcionális
+  `LiveReadinessBadge` + `CalibrationHealthBadge`, subtitle info, stats grid,
+  alerts (stopped/paused), controls. Exportál `useAutoTraderStatus(category, layer?)`
+  és `useTraderAction(category, layer?)` hookokat — minden trader 5s status
+  poll + 1s relativ-time tick + POST action runner közös.
+- **`TraderResults.tsx`** — `ScanResultsCard`, `ScanResultRow` (chips +
+  signals + action chip + extra/pnl + reason footer), `PendingPositionsCard`
+  (weather paper trades), `OpenPositionsCard` (funding-arb), `OpportunitiesCard`
+  (funding-arb spreads), `DroppedCard` (collapsible skipped/coverage gap).
+  Egyetlen `ResultChip` API (label + tone + outline + title), egyetlen
+  `SignalArrow` API (név + score → ↑/↓/· szín-aware).
+- **`traderShellStyles.ts`** — egy `ts-` prefix CSS modul az összes új
+  komponenshez. Az addigi 4 stílussor (>1500 LOC összesen) eltűnik.
+
+### A 4 trader minden feature-t megkapott (table-pipa cél)
+
+| Feature                          | Crypto | Weather | HL  | F-Arb |
+|----------------------------------|:------:|:-------:|:---:|:-----:|
+| Header + mode badge              | ✓      | ✓       | ✓   | ✓     |
+| 3-pill status cluster            | ✓      | ✓       | ✓   | ✓ új  |
+| LiveReadinessBadge               | ✓      | ✓       | ✓   | ✓     |
+| CalibrationHealthBadge           | ✓      | ✓ új    | ✓ új| ✓ új  |
+| Stats grid                       | ✓      | —       | ✓ 5 | ✓ 4   |
+| Stopped alert                    | ✓      | ✓       | ✓   | ✓     |
+| Paused alert (HL)                | n/a    | n/a     | ✓   | n/a   |
+| Run / Reset / Stop / Refresh     | ✓      | ✓       | ✓   | ✓     |
+| Resume button (when stopped)     | ✓ új   | n/a     | ✓   | ✓     |
+| Reconcile pending (weather only) | n/a    | ✓       | n/a | n/a   |
+| Validation chips                 | rich   | rich új | rich új | rich új |
+| Signal arrows                    | ✓      | n/a     | n/a | n/a   |
+| Config line                      | ✓      | ✓       | —   | —     |
+| Pending positions card           | n/a    | ✓       | n/a | n/a   |
+| Open positions card              | n/a    | n/a     | n/a | ✓     |
+| Opportunities card               | n/a    | n/a     | n/a | ✓     |
+| Dropped/skipped collapsible      | ✓      | ✓       | —   | —     |
+
+### Validálási értékek mostantól minden boton ugyanúgy néznek ki
+
+Egy tipikus row chip-szettje (consistent palette: `pos`/`neg`/`warn`/`info` +
+`outline` direction chip):
+- `mp 54¢` — live market price (hover: 2 decimal precision)
+- `model 67%` — combined model probability for YES
+- `edge +13.0%` — net edge after fees, color-coded (green ≥5%, orange ≥0, red <0)
+- `YES`/`NO` outline chip — direction (green/red)
+- `kelly 1.7%` — ¼-Kelly fraction of bankroll
+- `3/5 signals` — number of contributing signals
+- `OB ↑` (crypto) — Binance top-10 bid/ask imbalance arrow
+- Signal arrows row (crypto): `FR↑ VPIN↓ VOL· APEX↑ CP↓` — score-driven
+
+A user kérdése ("ha belép miért lép be?") mostantól egy pillantás alatt
+megválaszolható: a chip-szett megmondja, miért fogadta el (pos edge, conf
+elég, signals konvergáltak), és a `reason` footer adja a végső döntés
+indoklását.
+
+### Backwards-compat
+
+A `CategoryDashboard.tsx` API-ja változatlan. Az `auto-trader-api`
+végpontok shape-je is változatlan — csak a frontend renderelés egységesül.
+A szerver-oldali `liveReadiness` és `cronEnabled` mezőket a meglévő hook
+forwardolja a badge-be, így a `LiveReadinessBadge` extra fetch-et nem indít.
+
+### Érintett fájlok
+
+```
+új: src/components/shared/TraderShell.tsx          (shell + 2 hook)
+új: src/components/shared/TraderResults.tsx        (5 reusable card)
+új: src/components/shared/traderShellStyles.ts     (egy CSS forrás)
+átírva: src/components/trader/CryptoTrader.tsx     (532 → 248 LOC)
+átírva: src/components/trader/WeatherTrader.tsx    (429 → 196 LOC)
+átírva: src/components/trader/HyperliquidTrader.tsx (304 → 161 LOC)
+átírva: src/components/trader/FundingArbPanel.tsx  (250 → 173 LOC)
+```
+
+### Future-proof
+
+Új trader hozzáadása mostantól ~150 LOC adapter, nem 400+ — `TraderShell` +
+`useAutoTraderStatus` + a megfelelő cards-szel. Új feature (pl. pozíció-
+részletek modal, edge sparkline) egyetlen helyen kerül be és minden bot
+megkapja.
