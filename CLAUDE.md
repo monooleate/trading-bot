@@ -351,6 +351,72 @@ netlify deploy --prod --dir=dist
 
 ## AKTUÁLIS ÁLLAPOT (2026-05-09) – Claude Code folytatáshoz
 
+### Negyedik session (2026-05-09) – HL split: 1 doboz → 2 doboz + API audit
+
+A `/trade/hyperliquid/` egy "Hyperliquid Perp" doboz alá rejtett **két
+külön botot**: directional perp trader + funding-rate arbitrage. A főoldalon
+mostantól **két különálló kártya** látszik (`/trade/hyperliquid/` és
+`/trade/funding-arb/`), és minden HL/Binance API hívás végig lett ellenőrizve
+a hivatalos doksi alapján.
+
+**UI split:**
+- `[category].astro` static path bővítve `funding-arb`-bal.
+- `CategoryDashboard.tsx` — két top-level kategória (`hyperliquid` és
+  `funding-arb`), külön 3-tabos layout (autotrader / edge-tracker / settings).
+- `HomePage.tsx` — execution-grid-en két kártya `Hyperliquid Perp` +
+  `Funding Rate Arbitrage`. Live-readiness banner anchor a megfelelő
+  oldalra ugrik (Funding-Arb sora már nem visszairányít HL-re).
+
+**API audit (a hivatalos doksi alapján):**
+- HL Info: `allMids`, `metaAndAssetCtxs`, `clearinghouseState` mind POST+JSON.
+  `funding` HOURLY decimal string. `openInterest` COIN UNITS. ✅ konformnak
+  találva, viszont validáció szigorítva (Number.isFinite + range guards) +
+  1× retry network/5xx-en, 4xx permanent.
+- HL Exchange (SDK): trigger orderhez `positionTpsl` grouping, entry-nél
+  `na`. Order ID extraction `resting.oid ?? filled.oid`. `HL_PRIVATE_KEY`
+  formátum-ellenőrzés (0x + 64 hex). Adapter cache + `liveAdapterError()`
+  helper a hibák diagnosztikájára.
+- Binance USDT-M `premiumIndex`: **kritikus bug**. `lastFundingRate` per
+  cycle (8h alapért., DE BTC/ETH/SOL és pár másik major 4h cycle-en megy
+  2023 óta). Eddig hard-kódolt `/8` 2× alulbecsülte az hourly rate-et a
+  4h-s symbol-okon → bogus arb-belépéseket triggerelhetett. Most új
+  `fundingInfo` cache (6h TTL) — symbol-onként valós interval.
+- Binance Spot order: `data.price` MARKET-nél mindig "0", helyette
+  `fills[]` weighted average + `cummulativeQuoteQty / executedQty` fallback.
+  `newOrderRespType=FULL` explicit. `executedQty=0` ok=false.
+
+**Trade-logikai bugfixek:**
+- **Paper-resolver elveszti a signal metadatát**: HlPosition kapott opc.
+  `predictedProb / edgeAtEntry / signalBreakdown` mezőket; placeHlEntry
+  rögzíti, paper-resolver átemeli a closed trade-be → IC-szám most
+  működik.
+- **Funding-arb accrueFunding logikai hiba**: spot hedge nem fizet
+  funding-ot, az `entrySpread × hours` képlet kétszeresen büntette a
+  Binance funding-ot. Most `entryHlFunding × hours` + per-tick
+  legfrissebb HL rate (paper realizmus + spread decay reflektálódik).
+- **fr-scanner operator-precedence bug** (`!x == null` → mindig false):
+  explicit Number.isFinite check.
+- **Funding-arb live close IOC limit `pos.hlEntryPrice`-on**: volatilis
+  ticken sosem fillel; most fresh markPrice ±0.5% slippage band.
+- **Funding-arb hiányzó run-state**: új `arb-run-state.mts`, dispatcher
+  `?source=cron`-t átadja, panel pill cluster (`Scanning…/cron ON/last`)
+  most működik.
+- `simulatePaperPnl` dead code törölve.
+
+Részletes leírás: `internal-docs/changelog/CHANGELOG-2026-05-09.md`
+"Hyperliquid: split into 2 separate bots + atomic API audit + bugfixes" szekciója.
+
+### Hova nyúlj legközelebb (HL + Funding-Arb)
+
+- **Két külön kártya a főoldalon**: külön klikk, külön session, külön
+  edge-tracker. Funding-Arb most live-readiness banner-en is külön sor.
+- **`@nktkas/hyperliquid` továbbra sincs telepítve** — paper-only.
+  Élesítéshez: `npm i @nktkas/hyperliquid viem` + `HL_PRIVATE_KEY` (0x +
+  64 hex hosszúság ellenőrizve). Adapter ekkor pontos hibaüzenetet ad,
+  ha valami hiányzik.
+- **fundingInfo cache TTL**: 6h hard-coded — ha kell, env-en keresztül
+  override-olni lehet később (jelenleg nincs Settings knob rá).
+
 ### Harmadik session (2026-05-09) – Auto-Trader UI unification (4 bots → 1 shell)
 
 Egységesítés: a 4 trader (Crypto, Weather, Hyperliquid, Funding-Arb) eddig

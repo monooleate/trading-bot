@@ -107,7 +107,14 @@ export default async function handler(req: Request, _ctx: Context) {
       // Default is directional for backwards compat; UI passes layer: "arb" for FR.
       if (layer === "arb") {
         switch (action) {
-          case "run":    return jsonResponse(await runFundingArbLoop());
+          case "run": {
+            // ?source=cron lets the dispatcher tag the run-state as
+            // cron-driven, so the UI status pill says "Scanning… (cron)".
+            const url = new URL(req.url);
+            const source: "manual" | "cron" =
+              url.searchParams.get("source") === "cron" ? "cron" : "manual";
+            return jsonResponse(await runFundingArbLoop(source));
+          }
           case "status": return jsonResponse(await getArbStatus());
           case "reset":  return jsonResponse(await arbReset());
           case "stop":   return jsonResponse(await arbStop());

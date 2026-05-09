@@ -40,6 +40,14 @@ async function binanceSign(params: Record<string, string>): Promise<string> {
     .join("");
 }
 
+// Per the Binance Spot REST docs (POST /api/v3/order, type=MARKET) the
+// response contains:
+//   { orderId, executedQty, cummulativeQuoteQty, fills: [{price, qty, ...}] }
+// `data.price` is always "0.00000000" for MARKET orders, so we MUST use the
+// fills array (or cummulativeQuoteQty / executedQty) to compute the true
+// average price. The previous version fell through to `data.price` and
+// stored 0 as the entryPrice, which then propagated into the closed-trade
+// summary as a meaningless mark.
 async function binanceSpotMarket(
   coin: HlCoin,
   side: "BUY" | "SELL",
@@ -59,8 +67,17 @@ async function binanceSpotMarket(
     timestamp: Date.now().toString(),
     recvWindow: "5000",
   };
-  if (side === "BUY"  && quoteOrderQty) params.quoteOrderQty = quoteOrderQty.toFixed(2);
-  if (side === "SELL" && quantity)       params.quantity      = quantity.toFixed(5);
+  // newOrderRespType=FULL guarantees the `fills` array is populated; the
+  // default for MARKET is also FULL but stating it explicitly removes any
+  // ambiguity if Binance ever changes the default.
+  params.newOrderRespType = "FULL";
+  if (side === "BUY"  && quoteOrderQty && quoteOrderQty > 0) params.quoteOrderQty = quoteOrderQty.toFixed(2);
+  if (side === "SELL" && quantity      && quantity      > 0) params.quantity      = quantity.toFixed(5);
+
+  // One of quoteOrderQty / quantity MUST be present per the docs.
+  if (!params.quoteOrderQty && !params.quantity) {
+    return { ok: false, error: "binance order requires quoteOrderQty (BUY) or quantity (SELL)" };
+  }
 
   try {
     const signature = await binanceSign(params);
@@ -75,17 +92,40 @@ async function binanceSpotMarket(
       signal:  AbortSignal.timeout(8000),
     });
     const data = await res.json() as any;
-    if (!res.ok) return { ok: false, error: data?.msg || `HTTP ${res.status}` };
+    if (!res.ok) {
+      // Binance error envelope: { code: -1234, msg: "..." }
+      return { ok: false, error: data?.msg || `Binance HTTP ${res.status}` };
+    }
 
-    const orderId   = String(data.orderId || "");
-    const fills     = Array.isArray(data.fills) ? data.fills : [];
-    const avgPrice  = fills.length > 0
-      ? fills.reduce((s: number, f: any) => s + parseFloat(f.price) * parseFloat(f.qty), 0) /
-        fills.reduce((s: number, f: any) => s + parseFloat(f.qty), 0)
-      : parseFloat(data.price || "0");
-    const qty       = parseFloat(data.executedQty || "0");
+    const orderId  = String(data.orderId || "");
+    const execQty  = parseFloat(data.executedQty || "0");
+    const cumQuote = parseFloat(data.cummulativeQuoteQty || "0");
+    const fills    = Array.isArray(data.fills) ? data.fills : [];
 
-    return { ok: true, orderId, entryPrice: avgPrice, filledQty: qty };
+    let avgPrice = 0;
+    if (fills.length > 0) {
+      let qSum = 0, qPrSum = 0;
+      for (const f of fills) {
+        const px = parseFloat(f?.price ?? "0");
+        const q  = parseFloat(f?.qty   ?? "0");
+        if (Number.isFinite(px) && Number.isFinite(q) && q > 0) {
+          qPrSum += px * q;
+          qSum   += q;
+        }
+      }
+      if (qSum > 0) avgPrice = qPrSum / qSum;
+    }
+    // Fallback: cumQuote / execQty (accurate even when fills are empty,
+    // which can happen if newOrderRespType ends up as RESULT/ACK instead).
+    if (avgPrice === 0 && execQty > 0 && cumQuote > 0) {
+      avgPrice = cumQuote / execQty;
+    }
+
+    if (execQty <= 0) {
+      return { ok: false, error: `Binance order accepted but executedQty=0 (status=${data?.status ?? "?"})` };
+    }
+
+    return { ok: true, orderId, entryPrice: avgPrice, filledQty: execQty };
   } catch (err: any) {
     return { ok: false, error: err?.message || "binance fetch failed" };
   }

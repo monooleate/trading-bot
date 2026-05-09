@@ -123,13 +123,13 @@ export async function resolveOpenHlPaperPositions(
       openedAt:      pos.openedAt,
       closedAt:      new Date().toISOString(),
       closeReason:   reason === "timeout" ? "timeout" : reason,
-      // edgeAtEntry / predictedProb / signalBreakdown stay undefined
-      // here — they're informational metadata that the entry call attaches
-      // to the open position when it stores it. If we want them in
-      // ClosedTrade we can carry them through HlPosition; for now keep
-      // back-compat with existing types.
-      edgeAtEntry:   0,
-      predictedProb: 0.5,
+      // Carry the signal context captured at entry through to the closed
+      // trade so edge-tracker IC computation has real predictions to
+      // correlate with realised PnL. Older positions stored before the
+      // metadata patch fall back to neutral defaults.
+      edgeAtEntry:     pos.edgeAtEntry   ?? 0,
+      predictedProb:   pos.predictedProb ?? 0.5,
+      signalBreakdown: pos.signalBreakdown,
     };
 
     updated = closePosition(updated, pos.entryOrderId, closed);

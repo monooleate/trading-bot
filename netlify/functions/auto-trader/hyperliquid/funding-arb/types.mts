@@ -2,9 +2,19 @@
 // Funding Rate Arbitrage types.
 //
 // Strategy: delta-neutral carry trade.
-//   Leg 1: SHORT the Hyperliquid perp (collects high positive funding)
-//   Leg 2: LONG the Binance spot (hedge — no funding, no directional risk)
-// Net directional exposure: 0. Net income: hlFunding - binanceFunding per hour.
+//   Leg 1: SHORT the Hyperliquid perp (collects HL funding when rate > 0)
+//   Leg 2: LONG the Binance spot (hedge — spot pays NO funding,
+//          eliminates directional risk from Leg 1)
+//
+// Net directional exposure: 0.
+// Net income per hour:  hlFundingHourly × notional   (Binance spot has no
+//                       funding, so the per-hour carry is just HL's payment
+//                       to shorts).
+//
+// The Binance USDT-M `binanceFundingHourly` is only used at scan time as a
+// VIABILITY benchmark (avoid entering when HL pays similarly to the rest of
+// the market — the cross-venue arb may be already arbed elsewhere). It is
+// NOT a cost line on the spot hedge.
 
 import type { HlCoin } from "../types.mts";
 

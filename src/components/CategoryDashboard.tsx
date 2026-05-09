@@ -25,9 +25,12 @@ const CATEGORY_TABS: Record<string, [string, string][]> = {
   ],
   hyperliquid: [
     ["autotrader",   "Perp Trader"],
-    ["funding-arb",  "Funding Arb"],
-    ["edge-tracker-perp",  "Edge Tracker (Perp)"],
-    ["edge-tracker-arb",   "Edge Tracker (Arb)"],
+    ["edge-tracker", "Edge Tracker"],
+    ["settings",     "⚙ Beállítások"],
+  ],
+  "funding-arb": [
+    ["autotrader",   "Funding Arb"],
+    ["edge-tracker", "Edge Tracker"],
     ["settings",     "⚙ Beállítások"],
   ],
   bybit: [
@@ -64,12 +67,19 @@ function renderWeatherTab(tab: string) {
 
 function renderHyperliquidTab(tab: string) {
   switch (tab) {
-    case "autotrader":         return <HyperliquidTrader />;
-    case "funding-arb":        return <FundingArbPanel />;
-    case "edge-tracker-perp":  return <EdgeTrackerPanel defaultCategory="hyperliquid" />;
-    case "edge-tracker-arb":   return <EdgeTrackerPanel defaultCategory="funding-arb" />;
-    case "settings":           return <SettingsPanel category="hyperliquid" title="Hyperliquid paraméterek" subtitle="Perp + Funding Arb · paper-only Netlify-on" />;
-    default:                   return <HyperliquidTrader />;
+    case "autotrader":   return <HyperliquidTrader />;
+    case "edge-tracker": return <EdgeTrackerPanel defaultCategory="hyperliquid" />;
+    case "settings":     return <SettingsPanel category="hyperliquid" title="Hyperliquid Perp paraméterek" subtitle="Directional perp execution · paper-only Netlify-on" />;
+    default:             return <HyperliquidTrader />;
+  }
+}
+
+function renderFundingArbTab(tab: string) {
+  switch (tab) {
+    case "autotrader":   return <FundingArbPanel />;
+    case "edge-tracker": return <EdgeTrackerPanel defaultCategory="funding-arb" />;
+    case "settings":     return <SettingsPanel category="hyperliquid" title="Funding Arb paraméterek" subtitle="Delta-neutral carry · SHORT HL perp + LONG Binance spot" />;
+    default:             return <FundingArbPanel />;
   }
 }
 
@@ -105,6 +115,7 @@ export default function CategoryDashboard({ category }: { category: string }) {
       case "crypto":             return renderCryptoTab(tab);
       case "weather":            return renderWeatherTab(tab);
       case "hyperliquid":        return renderHyperliquidTab(tab);
+      case "funding-arb":        return renderFundingArbTab(tab);
       case "bybit":              return renderBybitTab(tab);
       case "binance":            return renderBinanceTab(tab);
       case "polymarket-manual":  return renderPolymarketManualTab(tab);

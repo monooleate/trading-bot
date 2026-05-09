@@ -4,7 +4,7 @@
 // Live mode: calls the HlExecutionAdapter (lazy-loaded SDK). If the adapter
 // is unavailable, we refuse to place the entry rather than guess.
 
-import { tryLoadLiveAdapter, formatPrice } from "./hl-client.mts";
+import { tryLoadLiveAdapter, liveAdapterError, formatPrice } from "./hl-client.mts";
 import { computeTpSl } from "./kelly-sizer.mts";
 import type { HlCoin, HlDirection, HlPosition } from "./types.mts";
 
@@ -18,6 +18,10 @@ export interface PlaceEntryInput {
   leverage:    number;
   edge:        number;
   paperMode:   boolean;
+  // Signal context that the paper-resolver carries through into the
+  // HlClosedTrade so the edge-tracker can correlate predictions with PnL.
+  predictedProb?:    number;
+  signalBreakdown?:  import("../shared/types.mts").SignalBreakdown;
 }
 
 export interface PlaceEntryResult {
@@ -52,6 +56,9 @@ export async function placeHlEntry(p: PlaceEntryInput): Promise<PlaceEntryResult
       slPrice:      parseFloat(pricedSl),
       tpOrderId:    `paper-tp-${Date.now()}`,
       slOrderId:    `paper-sl-${Date.now()}`,
+      predictedProb:   p.predictedProb,
+      edgeAtEntry:     p.edge,
+      signalBreakdown: p.signalBreakdown,
     };
     return { ok: true, position };
   }
@@ -59,7 +66,11 @@ export async function placeHlEntry(p: PlaceEntryInput): Promise<PlaceEntryResult
   // ── Live mode ──────────────────────────────────────────────────────────
   const adapter = await tryLoadLiveAdapter(false);
   if (!adapter) {
-    return { ok: false, error: "Live adapter unavailable (install @nktkas/hyperliquid + viem and set HL_PRIVATE_KEY)" };
+    const why = liveAdapterError();
+    return {
+      ok: false,
+      error: `Live adapter unavailable${why ? `: ${why}` : ""} — install @nktkas/hyperliquid + viem and set HL_PRIVATE_KEY`,
+    };
   }
 
   const isLong = p.direction === "LONG";
@@ -121,52 +132,10 @@ export async function placeHlEntry(p: PlaceEntryInput): Promise<PlaceEntryResult
     slPrice:      parseFloat(pricedSl),
     tpOrderId:    tp.ok ? (tp.orderId || null) : null,
     slOrderId:    sl.orderId || null,
+    predictedProb:   p.predictedProb,
+    edgeAtEntry:     p.edge,
+    signalBreakdown: p.signalBreakdown,
   };
   return { ok: true, position };
 }
 
-// ─── Paper-mode PnL simulator ─────────────────────────────────────────────
-// Simulates the position walk to either TP or SL based on the current price
-// drift relative to entry. Called after `placeHlEntry` in paper mode so the
-// trade is captured in closedTrades within the same run.
-export function simulatePaperPnl(params: {
-  position:     HlPosition;
-  currentPrice: number;
-  feeRoundtrip: number;
-}): { exitPrice: number; pnlUSDC: number; pnlPct: number; closeReason: "tp" | "sl" | "paper_sim" } {
-  const { position, currentPrice, feeRoundtrip } = params;
-  const isLong = position.direction === "LONG";
-
-  let exitPrice = currentPrice;
-  let closeReason: "tp" | "sl" | "paper_sim" = "paper_sim";
-
-  // Walk halfway toward the TP if the trend is favourable, else halfway to SL.
-  const favoured = isLong ? currentPrice > position.entryPrice : currentPrice < position.entryPrice;
-  if (favoured) {
-    exitPrice = isLong
-      ? position.entryPrice + (position.tpPrice - position.entryPrice) * 0.6
-      : position.entryPrice - (position.entryPrice - position.tpPrice) * 0.6;
-    closeReason = "tp";
-  } else {
-    exitPrice = isLong
-      ? position.entryPrice - (position.entryPrice - position.slPrice) * 0.5
-      : position.entryPrice + (position.slPrice - position.entryPrice) * 0.5;
-    closeReason = "sl";
-  }
-
-  const priceMovePct = isLong
-    ? (exitPrice - position.entryPrice) / position.entryPrice
-    : (position.entryPrice - exitPrice) / position.entryPrice;
-
-  const grossPnl = position.sizeUSDC * position.leverage * priceMovePct;
-  const fees     = position.sizeUSDC * position.leverage * feeRoundtrip;
-  const pnlUSDC  = grossPnl - fees;
-  const pnlPct   = position.sizeUSDC > 0 ? pnlUSDC / position.sizeUSDC : 0;
-
-  return {
-    exitPrice: parseFloat(exitPrice.toFixed(4)),
-    pnlUSDC:   parseFloat(pnlUSDC.toFixed(2)),
-    pnlPct:    parseFloat(pnlPct.toFixed(4)),
-    closeReason,
-  };
-}

@@ -35,6 +35,12 @@ export interface HlPosition {
   slPrice:      number;
   tpOrderId:    string | null;
   slOrderId:    string | null;
+  // Signal metadata captured at entry. The paper-resolver carries these
+  // forward into HlClosedTrade so the edge-tracker IC computation can
+  // correlate predicted probability with realised PnL.
+  predictedProb?:    number;
+  edgeAtEntry?:      number;
+  signalBreakdown?:  SignalBreakdown;
 }
 
 // ─── Closed trade (for Edge Tracker + summary) ─────────────────────────────────

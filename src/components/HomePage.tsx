@@ -103,12 +103,23 @@ const CARDS: Card[] = [
   {
     id: "hyperliquid",
     title: "Hyperliquid Perp",
-    blurb: "BTC/ETH/SOL perp + Funding Arb · paper-only Netlify-on",
+    blurb: "BTC/ETH/SOL directional perp · cron 3 perc · TP/SL via HL markPrice",
     icon: "⚡",
     href: "/trade/hyperliquid/",
     mode: "PAPER-ONLY",
     capability: "hyperliquid-paper",
     category: "hyperliquid",
+    group: "execution",
+  },
+  {
+    id: "funding-arb",
+    title: "Funding Rate Arbitrage",
+    blurb: "Delta-neutral carry · SHORT HL perp + LONG Binance spot · cron 3 perc",
+    icon: "♻️",
+    href: "/trade/funding-arb/",
+    mode: "PAPER-ONLY",
+    capability: "hyperliquid-paper",
+    category: "funding-arb",
     group: "execution",
   },
   {
@@ -281,7 +292,7 @@ export default function HomePage() {
   const readinessRows = READINESS_CATEGORIES.map((c) => ({
     key: c.key,
     label: c.label,
-    href: c.key === "funding-arb" ? "/trade/hyperliquid/" : `/trade/${c.key}/`,
+    href: `/trade/${c.key}/`,
     report: readiness[c.key] ?? null,
   }));
   const notReady = readinessRows.filter((r) => r.report && !r.report.ready);

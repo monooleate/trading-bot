@@ -1,5 +1,136 @@
 # Changelog — 2026-05-09
 
+## Hyperliquid: split into 2 separate bots + atomic API audit + bugfixes
+
+### Háttér
+
+A felhasználó kérte:
+1. A `/trade/hyperliquid/` oldalon eddig egy "Hyperliquid Perp" doboz alatt
+   ténylegesen **két különálló bot** futott (directional perp trader +
+   funding-rate arbitrage). A főoldalon külön dobozban kell látni őket.
+2. Ellenőrizni kell, hogy minden HL és Binance API hívás megfelel-e a
+   hivatalos dokumentációnak ("atombiztos legyen minden hívás").
+
+### A — UI split (1 doboz → 2 doboz)
+
+- `src/pages/trade/[category].astro` — új `funding-arb` static path.
+- `src/components/CategoryDashboard.tsx` — `hyperliquid` és `funding-arb`
+  most külön top-level kategóriák, mindegyiknek saját 3-tabos layout
+  (autotrader / edge-tracker / settings).
+- `src/components/HomePage.tsx` — execution-grid mostantól két kártyát
+  jelenít meg: **Hyperliquid Perp** és **Funding Rate Arbitrage**, külön
+  href-fel (`/trade/hyperliquid/` és `/trade/funding-arb/`).
+- A live-readiness gates banner anchor-ja már nem ugrik vissza HL-re a
+  funding-arb sorra; mindkét sor a saját aloldalára visz.
+
+### B — API hívások audit a hivatalos doksi alapján
+
+Áttekintve:
+- HL Info endpoint (`/info`, POST + JSON):
+  - `allMids` — válasz: `Record<string, string>`. ✅ `parseFloat` szigorítva
+    `Number.isFinite + > 0` ellenőrzéssel.
+  - `metaAndAssetCtxs` — válasz: `[meta, ctxs]` tuple. `funding` HOURLY
+    decimal string (HL hourly funding cycle). `openInterest` COIN UNITS
+    (nem USD), tehát `× markPx` kell — ez már jól volt, csak validáció
+    szigorítva (NaN/0 markPx-et és invalid funding-ot droppol).
+  - `clearinghouseState` — body: `{type, user}` ✅ + 0x40-hex address
+    validáció a hívás előtt.
+  - Minden Info call most 1× retry-t kap network/5xx-en, 4xx permanent
+    error → azonnal dob diagnosztikus üzenettel.
+- HL Exchange endpoint (`/exchange`):
+  - SDK (`@nktkas/hyperliquid`) használata megfelel a doksinak: `t.limit`
+    vs `t.trigger`, `grouping`. Trigger orderhez most `positionTpsl`
+    grouping kerül (TP/SL a pozícióhoz kötve), entry-nél `na`.
+  - Order ID extraction: `resting.oid ?? filled.oid`. Hozzáadva: explicit
+    `status0.error` és `resp.status !== "ok"` ellenőrzések.
+  - `HL_PRIVATE_KEY` formátum-ellenőrzés (0x + 64 hex) az SDK betöltése
+    előtt — különben confusing viem error fut le.
+  - Adapter eredmény cache-elve cold-start-onként + `liveAdapterError()`
+    helper, ami a hibát publikussá teszi a hívóknak.
+- Binance USDT-M futures:
+  - `/fapi/v1/premiumIndex.lastFundingRate` — **per-cycle**, nem hourly.
+    Eddig hard-kódolt `/8` osztott. **Bug**: BTC/ETH/SOL és pár másik
+    major Binance-en 4h cycle-en megy 2023 óta — `/8` 2× alulbecsülte
+    az hourly rate-et, ami felfelé torzította a HL−Binance spread-et és
+    bogus arb belépéseket triggerelhetett. **Fix**: új `fundingInfo`
+    endpoint cache (6h TTL) — symbol-onként a tényleges
+    `fundingIntervalHours`-zel osztunk.
+- Binance Spot order:
+  - `data.price` MARKET-rendelésnél mindig "0.00000000" → eddig 0-ként
+    rögzítettük az entryPrice-t. **Fix**: `fills[]` weighted average,
+    fallback `cummulativeQuoteQty / executedQty`. `newOrderRespType=FULL`
+    explicit. `executedQty <= 0` esetén ok=false (a paper úton változatlan).
+
+### C — Trade-logikai bugfixek
+
+1. **Paper-resolver elveszti a signal metadatát**
+   `paper-resolver.mts` eddig hard-coded `edgeAtEntry: 0`,
+   `predictedProb: 0.5`-t írt a `HlClosedTrade`-be → IC-számolás a
+   live-readiness gate-ben működésképtelen volt HL-re. **Fix**:
+   `HlPosition` kapott opcionális `predictedProb` / `edgeAtEntry` /
+   `signalBreakdown` mezőket; `placeHlEntry` rögzíti, paper-resolver
+   átemeli a closed trade-be. Régi nyitott pozíciók fallback 0/0.5-re.
+
+2. **Funding-arb spread-of-spot-funding számítási hiba**
+   `accrueFunding` eddig `entrySpread × hours × notional`-lal accrue-olt,
+   pedig a hedge leg **Binance SPOT** (nincs funding). Az `entrySpread`
+   beleszámította a Binance funding-ot mintha az pénzkifolyás lenne, és
+   az entry-time spread-et fagyasztotta tickek között. **Fix**: most
+   `entryHlFunding × hours`-t használ, és a fő loop minden tickben átadja
+   a friss HL hourly rate-et a `currentHlFundingByCoin` Map-ben →
+   realisztikus, decay-ző accrual.
+
+3. **fr-scanner operator-precedence bug**
+   `if (!hl.markPrice == null || !hl.hlFundingHourly == null)` — a
+   precedence miatt a jobb oldal mindig `false`. **Fix**: explicit
+   `Number.isFinite + > 0` markPrice check, NaN-funding drop.
+
+4. **Funding-arb live close `pos.hlEntryPrice`-ot használt IOC limitnek**
+   Volatilis tick után az IOC ekkora limittel sosem fillel. **Fix**:
+   a fő loop átadja az aktuális markPrice-ot (`current?.markPrice`),
+   amit a `closeArbPosition` ±0.5% slippage band-del IOC limitté alakít.
+   Ha mark missing live módban → fresh `getCurrentPrice` lookup, ha az
+   sem → entry-price ±0.5%. SHORT entry IOC most `Ioc + (mark − 0.5%)`-en
+   megy be (előbb `Gtc` volt entryPrice-on, ami lassabb fill).
+
+5. **Funding-arb hiányzó run-state**
+   `FundingArbPanel` UI permanently `Idle / no runs yet`, mert
+   `getArbStatus` nem adott vissza `runStatus`/`cronEnabled`-t. **Fix**:
+   új `arb-run-state.mts` (mirrors HL directional `run-state.mts`),
+   `runFundingArbLoop` most start/finish marker-ekkel hívódik, dispatcher
+   átadja a `?source=cron` paramot, panel a megszokott pill cluster-t
+   (`Scanning… (cron) · cron ON · 3 min · last (cron): 12s ago`)
+   automatikusan megkapja.
+
+6. **`simulatePaperPnl` dead code**
+   `order-manager.mts`-ből kikerült. A paper-mode már markPrice-driven
+   resolution-on megy a `paper-resolver.mts`-en keresztül.
+
+7. **OI cap kifejezés egyszerűsítés**
+   `opp.markPrice * opp.markPrice > 0` → `opp.openInterestUSD > 0`.
+
+### Hova nyúlj legközelebb (HL + Funding-Arb)
+
+- **Két külön kártya a főoldalon**: Hyperliquid Perp + Funding Rate
+  Arbitrage. Minden bot saját edge-tracker tab-bal érhető el.
+- **Live-readiness banner**: Funding-Arb most külön sorban, `/trade/funding-arb/`-re
+  visz.
+- **Új tunable knob a Settings tab-on**: nincs, az új `fundingInfo` cache
+  TTL hard-coded (6h) — ha valaki kísérletezik, env-en keresztül később
+  override-olható.
+- **Élesedés**: a két bot külön live-readiness gate alatt áll,
+  funding-arb nem kapja meg az IC/calibration kapukat (rate-driven, nem
+  prediction-driven). Trade count + winrate + Sharpe + drawdown + sim
+  version + session-active gate-ek vonatkoznak rá.
+- **`@nktkas/hyperliquid` továbbra sincs telepítve** — paper-only az
+  egyetlen futtatható mód. Ha valaki élesít, `npm i @nktkas/hyperliquid viem`
+  + `HL_PRIVATE_KEY` env (0x + 64 hex). Adapter most pontos diagnosztikus
+  üzenetet ad vissza, ha valami hiányzik.
+
+---
+
+
+
 ## Weather trader: 6 bug fix + tunable Settings + live status
 
 ### Háttér

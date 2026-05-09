@@ -31,12 +31,27 @@ import {
   resetArbSession,
 } from "./fr-session.mts";
 import { getFrArbConfig } from "./config.mts";
+import { markArbRunStart, markArbRunFinish, getArbRunStatus } from "./arb-run-state.mts";
 import type { ArbSessionState, ArbPosition } from "./types.mts";
 
 // Broader coin universe than directional — funding edge is coin-agnostic
 const ARB_COINS: HlCoin[] = ["BTC", "ETH", "SOL", "XRP", "AVAX"];
 
-export async function runFundingArbLoop(): Promise<any> {
+export async function runFundingArbLoop(
+  source: "manual" | "cron" = "manual",
+): Promise<any> {
+  await markArbRunStart(source).catch(() => {});
+  let result: any;
+  try {
+    result = await runFundingArbInner();
+  } catch (err: any) {
+    result = { ok: false, action: "error", error: err?.message || "unknown", source };
+  }
+  await markArbRunFinish(result).catch(() => {});
+  return { ...result, source };
+}
+
+async function runFundingArbInner(): Promise<any> {
   const baseConfig = getFrArbConfig();
   // Mutable clone so the live-readiness gate can flip paperMode back to
   // true if the paper track record hasn't yet met validation thresholds.
@@ -97,14 +112,19 @@ export async function runFundingArbLoop(): Promise<any> {
     return { ok: true, action: "skipped", reason: `Arb session stopped: ${session.stoppedReason}`, session: summarize(session), liveReadiness };
   }
 
-  // 1. Accrue funding across open positions
-  session = accrueFunding(session);
-
   const results: any[] = [];
 
   try {
-    // 2. Scan fundings
+    // 1. Scan fundings (HL + Binance) — done BEFORE accrual so we can
+    //    accrue at the latest observed HL hourly rate rather than the
+    //    entry-time snapshot. See accrueFunding's signature in fr-session.
     const fundings = await scanFundings(ARB_COINS, config.paperMode);
+    const hlRateByCoin = new Map<string, number>();
+    for (const f of fundings) hlRateByCoin.set(f.coin, f.hlFundingHourly);
+
+    // 2. Accrue funding using the freshest HL rate.
+    session = accrueFunding(session, new Date(), hlRateByCoin);
+
     const opportunities = fundings.map(f => detectArbOpportunity(f, config));
     const viable = rankOpportunities(opportunities.filter(o => o.isViable));
 
@@ -123,7 +143,7 @@ export async function runFundingArbLoop(): Promise<any> {
       else if (currentSpread < 0)                       closeReason = `Spread flipped negative — shorts now pay`;
 
       if (closeReason) {
-        const closeResp = await closeArbPosition(pos, closeReason, config);
+        const closeResp = await closeArbPosition(pos, closeReason, config, current?.markPrice);
         if (closeResp.ok) {
           session = replacePosition(session, pos);
           log("ARB_CLOSE", config.paperMode, {
@@ -158,9 +178,11 @@ export async function runFundingArbLoop(): Promise<any> {
         break;
       }
 
-      // Conservative sizing: half of remaining headroom, capped at 10% of OI proxy
-      const oiCap = opp.markPrice * opp.markPrice > 0
-        ? Math.min(opp.openInterestUSD * 0.001, headroom)   // 0.1% of OI max
+      // Conservative sizing: half of remaining headroom, capped at 0.1% of
+      // OI so we never become a meaningful share of the book. Falls back
+      // to plain headroom when OI data is missing.
+      const oiCap = opp.openInterestUSD > 0
+        ? Math.min(opp.openInterestUSD * 0.001, headroom)
         : headroom;
       const sizeUSDC = Math.min(headroom * 0.5, oiCap);
       if (sizeUSDC < config.minPositionUSDC) {
@@ -225,9 +247,64 @@ export async function runFundingArbLoop(): Promise<any> {
 
 // ─── Status / control handlers ─────────────────────────────────────────────
 export async function getArbStatus(): Promise<any> {
-  const config  = getFrArbConfig();
-  const session = await loadArbSession(config.paperMode);
-  return { ok: true, action: "status", category: "hyperliquid-arb", session: summarize(session) };
+  const config    = getFrArbConfig();
+  const session   = await loadArbSession(config.paperMode);
+  const runStatus = await getArbRunStatus();
+
+  // Live-readiness verdict for the UI badge — same shape as getHlStatus
+  // returns for the directional bot, so the home-page banner can poll
+  // `category=hyperliquid&layer=arb` and read it from a single field.
+  let liveReadiness: LiveReadinessReport | null = null;
+  try {
+    const closedTrades = (session.positions ?? [])
+      .filter((p) => p.closedAt && (p.closeFundingNet ?? null) !== null)
+      .map((p) => ({
+        market:     p.coin,
+        direction:  "NO" as const,
+        entryPrice: p.hlEntryPrice ?? 0,
+        exitPrice:  0,
+        shares:     p.sizeCoins ?? 0,
+        pnl:        p.closeFundingNet ?? 0,
+        pnlPct:     p.sizeUSDC > 0 ? ((p.closeFundingNet ?? 0) / p.sizeUSDC) * 100 : 0,
+        openedAt:   p.openedAt,
+        closedAt:   p.closedAt!,
+        category:   "funding-arb" as any,
+      }));
+    let readyOv: any = {};
+    try {
+      const mod: any = await import("../../../trader-settings.mts");
+      readyOv = (await mod.loadRuntimeOverrides()) ?? {};
+    } catch {}
+    liveReadiness = computeLiveReadiness({
+      category: "funding-arb",
+      session: {
+        closedTrades: [],
+        stopped: session.stopped,
+        stoppedReason: session.stoppedReason,
+        bankrollStart: 100,
+      } as any,
+      trades: closedTrades,
+      simVersionExpected: null,
+      thresholds: {
+        minTrades:         readyOv.liveReadyMinTrades,
+        minWinRate:        readyOv.liveReadyMinWinRate,
+        minSharpe:         readyOv.liveReadyMinSharpe,
+        maxDrawdownPct:    readyOv.liveReadyMaxDrawdownPct,
+      } as any,
+    });
+  } catch {}
+
+  return {
+    ok: true,
+    action:   "status",
+    category: "hyperliquid-arb",
+    session:  summarize(session),
+    runStatus,
+    // Funding-arb is wired into auto-trader-multi-cron */3 * * * *,
+    // always-on (same as the directional HL bot).
+    cronEnabled: true,
+    liveReadiness,
+  };
 }
 
 export async function arbReset(): Promise<any> {

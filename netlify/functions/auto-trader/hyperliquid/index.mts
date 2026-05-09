@@ -227,17 +227,21 @@ async function runHyperliquidTraderInner(
         continue;
       }
 
-      // 6. Place entry (paper sim or live SDK)
+      // 6. Place entry (paper sim or live SDK). Signal metadata is captured
+      // on the position so the paper-resolver can carry predictedProb /
+      // edgeAtEntry / signalBreakdown into the eventual HlClosedTrade.
       const entry = await placeHlEntry({
         coin,
-        direction:    signal.direction,
-        entryPrice:   hlPrice,
-        sizeCoins:    sized.sizeCoins,
-        sizeCoinsStr: sized.sizeCoinsStr,
-        sizeUSDC:     sized.sizeUSDC,
-        leverage:     sized.leverageUsed,
-        edge:         decision.edge,
-        paperMode:    config.paperMode,
+        direction:       signal.direction,
+        entryPrice:      hlPrice,
+        sizeCoins:       sized.sizeCoins,
+        sizeCoinsStr:    sized.sizeCoinsStr,
+        sizeUSDC:        sized.sizeUSDC,
+        leverage:        sized.leverageUsed,
+        edge:            decision.edge,
+        paperMode:       config.paperMode,
+        predictedProb:   signal.finalProb,
+        signalBreakdown: signal.signalBreakdown,
       });
       if (!entry.ok || !entry.position) {
         results.push({ coin, action: "error", reason: entry.error || "entry failed" });
