@@ -267,6 +267,7 @@ export const traderShellCSS = `
 .ts-dropped-vol { color: var(--accent2); text-align: right; white-space: nowrap; }
 
 @media (max-width: 600px) {
+  .ts-wrap { padding: 1rem 0.75rem; }
   .ts-stats { grid-template-columns: repeat(2, 1fr); }
   .ts-row {
     grid-template-columns: 1fr;
@@ -274,5 +275,14 @@ export const traderShellCSS = `
   .ts-row-action, .ts-row-extra, .ts-row-pnl { align-self: auto; text-align: left; }
   .ts-dropped-row { grid-template-columns: 1fr auto; }
   .ts-dropped-reason { grid-column: 1 / -1; }
+  .ts-status-cluster { margin-left: 0; width: 100%; }
+  .ts-title { font-size: 1.15rem; }
+  .ts-controls .ts-btn { flex: 1 1 calc(50% - 0.25rem); }
+  .ts-pos-row { font-size: 0.66rem; }
+  .ts-pos-acc { margin-left: 0; }
+}
+@media (max-width: 380px) {
+  .ts-stats { grid-template-columns: 1fr; }
+  .ts-controls .ts-btn { flex: 1 1 100%; }
 }
 `;

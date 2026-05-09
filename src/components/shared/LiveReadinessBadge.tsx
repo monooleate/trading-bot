@@ -138,6 +138,22 @@ export default function LiveReadinessBadge({
           border-radius: 3px;
           background: var(--surface2);
         }
+        @media (max-width: 480px) {
+          .lrb-gate {
+            grid-template-columns: 18px 1fr;
+            grid-template-areas:
+              "mark label"
+              "mark actual"
+              "mark req";
+            row-gap: 2px;
+          }
+          .lrb-gate-mark { grid-area: mark; }
+          .lrb-gate-label { grid-area: label; }
+          .lrb-gate-actual { grid-area: actual; text-align: left; font-size: 9.5px; }
+          .lrb-gate-req { grid-area: req; text-align: left; font-size: 9px; }
+          .lrb-head { flex-wrap: wrap; }
+          .lrb-count { margin-left: 0; }
+        }
         .lrb-pass .lrb-gate-mark { color: #c8f135; }
         .lrb-fail .lrb-gate-mark { color: #f13535; }
         .lrb-gate-label  { color: var(--text); }

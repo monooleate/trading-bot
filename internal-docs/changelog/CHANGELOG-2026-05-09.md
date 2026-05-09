@@ -416,6 +416,46 @@ A 4 paper sim már független a saját predikciótól (audit eredménye):
 - **Funding-arb**: real funding spreads (rate-driven by design)
 
 Tehát az IC/Sharpe/win-rate/drawdown gates **valós piaci kimenetelekre** alapulnak.
+
+---
+
+## HomePage live-block banner + mobil parity-pass (2026-05-09 negyedik passz)
+
+### Live-block banner
+
+A főoldalon (`/`) egy új useEffect lekérdezi mind a 4 auto-trader liveReadiness verdict-jét (`/auto-trader-api?action=status&category=…`, ami már computeLiveReadiness-t hív szerverside). 30 másodpercenként pollol, így a flip vissza paper-be ~fél perc alatt megjelenik.
+
+Két új szekció a fejléc alatt, az "Aggregated session" előtt:
+
+1. **`hp-live-blocked` banner** — csak akkor renderel, ha `envStat.paperMode === false` ÉS legalább egy bot `liveReadiness.ready === false`. Animált piros háttér (`hp-blocked-pulse` 3s-os shadow ciklus), 🚦 emoji, "Live trading auto-suspended on N bots" cím + per-bot kártyák. A kártyán látszik a verdict reason + per-gate fail listája (`✗ Trade count`, `✗ Sharpe ratio` stb.). A kártyák kattintással a megfelelő `/trade/<venue>/` oldalra visznek.
+
+2. **`hp-readiness-grid` per-trader rács** — mind a 4 bot verdict-je 4 oszlopban (mobil-on 2 / 1). Bal-szélső border-color zöld (READY) / sárga (PAPER) / szürke (lekérdezés alatt). Akkor is megjelenik ha `envStat.paperMode === true` — a user lássa hogy hol tartanak a gates.
+
+### Mobile parity-pass
+
+Új media query-ket kapott az összes érintett komponens, hogy a 480px alatt is használható legyen:
+
+| Komponens | Breakpoint | Mit csinál |
+|-----------|-----------|------------|
+| `HomePage` | 760px | Summary stats 4 → 2 kolóna, readiness grid 4 → 2 |
+| `HomePage` | 600px | Per-category breakdown row 5-col grid → 3-area stack (cat+status / bk+pnl / trades) |
+| `HomePage` | 480px | Padding csökken, logo kisebb, header wrap |
+| `HomePage` | 380px | Summary stats 1 kolóna, readiness grid 1 kolóna |
+| `LiveReadinessBadge` | 480px | Gate row 4-col → 2-col grid-area (mark/label/actual/req stack) |
+| `traderShellStyles` | 600px | Wrap padding csökken, status cluster wrap, kontroll gombok 2-onkénti grid |
+| `traderShellStyles` | 380px | Stats 1 kolóna, kontrollok 1 kolóna full-width |
+| `SettingsPanel` | 600px | Header column align, action buttons full-width, range slider 100% width, num input keskenyebb |
+
+A meglévő 720px-es breakpointok (env grid, capability cards) változatlanok.
+
+### Érintett fájlok
+
+```
+src/components/HomePage.tsx                    + READINESS_CATEGORIES, useEffect 30s polling, 2 új section, animált banner CSS, mobil breakpointok
+src/components/SettingsPanel.tsx               header wrap + 600px action stacking + slider full-width
+src/components/shared/LiveReadinessBadge.tsx   480px gate-row 2-col stack
+src/components/shared/traderShellStyles.ts     600px / 380px tighter packing minden trader oldalon
+```
 - **IC kalibráció:** ha 50+ valós paper trade után a IC értékek tényleg ≥0.05-re jönnek fel, akkor a `signal-combiner` IC weightingjét újrahangolni az új mérési értékekre.
 - **Edge-decay alarm:** ha az IC eleinte jó volt majd 0-ra esett, az is alarm-érték (signal degradálódik). Most még nincs benne.
 

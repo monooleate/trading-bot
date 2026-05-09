@@ -44,6 +44,35 @@ interface EnvStatus {
   capabilities: Record<string, { ok: boolean; missing: string[] }>;
 }
 
+// Mirror of LiveReadinessReport from auto-trader/shared/live-readiness.mts.
+// Pulled per-category from /auto-trader-api?action=status so the home page
+// can render the same gate verdict the cron path uses to refuse live trades.
+interface ReadinessGate {
+  key: string;
+  label: string;
+  passed: boolean;
+  actual: string;
+  required: string;
+  applicable: boolean;
+}
+interface LiveReadinessReport {
+  category: string;
+  ready: boolean;
+  gatesPassed: number;
+  gatesTotal: number;
+  gates: ReadinessGate[];
+  reason: string;
+}
+
+// Categories the cron loop force-flips back to paper if liveReadiness.ready
+// is false. Matches the auto-trader categories handled by live-readiness.mts.
+const READINESS_CATEGORIES: { key: "crypto" | "weather" | "hyperliquid" | "funding-arb"; label: string; statusUrl: string }[] = [
+  { key: "crypto",       label: "Crypto",        statusUrl: "/.netlify/functions/auto-trader-api?action=status&category=crypto" },
+  { key: "weather",      label: "Weather",       statusUrl: "/.netlify/functions/auto-trader-api?action=status&category=weather" },
+  { key: "hyperliquid",  label: "Hyperliquid",   statusUrl: "/.netlify/functions/auto-trader-api?action=status&category=hyperliquid" },
+  { key: "funding-arb",  label: "Funding Arb",   statusUrl: "/.netlify/functions/auto-trader-api?action=status&category=hyperliquid&layer=arb" },
+];
+
 // ─── Capability cards ─────────────────────────────────────────────────
 
 interface Card {
@@ -205,6 +234,7 @@ export default function HomePage() {
   const [multi, setMulti]     = useState<MultiStatus | null>(null);
   const [envStat, setEnvStat] = useState<EnvStatus | null>(null);
   const [loadErr, setLoadErr] = useState<string>("");
+  const [readiness, setReadiness] = useState<Record<string, LiveReadinessReport | null>>({});
 
   useEffect(() => {
     Promise.all([
@@ -217,8 +247,46 @@ export default function HomePage() {
     }).catch((err) => setLoadErr(err.message));
   }, []);
 
+  // Live-readiness aggregator: poll each auto-trader category every 30s so
+  // the home-page banner reflects the latest gate verdict without a manual
+  // refresh. Shorter than the cron tick so the user sees flips immediately.
+  useEffect(() => {
+    const fetchAll = async () => {
+      const results: Record<string, LiveReadinessReport | null> = {};
+      await Promise.all(
+        READINESS_CATEGORIES.map(async (c) => {
+          try {
+            const r = await fetch(c.statusUrl);
+            const j = await r.json();
+            results[c.key] = (j?.liveReadiness as LiveReadinessReport) ?? null;
+          } catch {
+            results[c.key] = null;
+          }
+        }),
+      );
+      setReadiness(results);
+    };
+    fetchAll();
+    const id = setInterval(fetchAll, 30_000);
+    return () => clearInterval(id);
+  }, []);
+
   const live    = envStat ? !envStat.paperMode : false;
   const totals  = multi?.totals;
+
+  // Aggregate readiness verdict — the banner is loud (red) when env intent
+  // is LIVE but at least one trader is NOT live-ready (the cron will have
+  // force-flipped it back to paper). When env is already PAPER the banner
+  // is informational (amber) so the operator still sees what's pending.
+  const readinessRows = READINESS_CATEGORIES.map((c) => ({
+    key: c.key,
+    label: c.label,
+    href: c.key === "funding-arb" ? "/trade/hyperliquid/" : `/trade/${c.key}/`,
+    report: readiness[c.key] ?? null,
+  }));
+  const notReady = readinessRows.filter((r) => r.report && !r.report.ready);
+  const anyKnownReadiness = readinessRows.some((r) => r.report !== null);
+  const liveBlocked = live && notReady.length > 0;
   const pnlPositive = (totals?.sessionPnL ?? 0) >= 0;
   const roi = totals && totals.bankrollStart > 0
     ? (totals.sessionPnL / totals.bankrollStart) * 100
@@ -259,6 +327,73 @@ export default function HomePage() {
           </span>
         </div>
       </header>
+
+      {/* ─── LIVE READINESS BANNER ─── */}
+      {liveBlocked && (
+        <div className="hp-live-blocked">
+          <div className="hp-live-blocked-head">
+            <span className="hp-live-blocked-glyph">🚦</span>
+            <div>
+              <div className="hp-live-blocked-title">
+                Live trading auto-suspended on {notReady.length} bot{notReady.length > 1 ? "s" : ""}
+              </div>
+              <div className="hp-live-blocked-sub">
+                PAPER_MODE=false van beállítva, de az alábbi bot(ok) nem teljesítik a live-readiness küszöböket. A cron minden tickben visszaállítja paper-be amíg a kapuk nem futnak át.
+              </div>
+            </div>
+          </div>
+          <div className="hp-live-blocked-grid">
+            {notReady.map((r) => (
+              <a key={r.key} href={r.href} className="hp-live-blocked-card">
+                <div className="hp-live-blocked-card-head">
+                  <span className="hp-live-blocked-cat">{r.label}</span>
+                  <span className="hp-live-blocked-pill">PAPER</span>
+                </div>
+                <div className="hp-live-blocked-reason">{r.report!.reason}</div>
+                <div className="hp-live-blocked-gates">
+                  {r.report!.gates.filter((g) => g.applicable && !g.passed).map((g) => (
+                    <span key={g.key} className="hp-live-gate-fail" title={`have ${g.actual} · need ${g.required}`}>
+                      ✗ {g.label}
+                    </span>
+                  ))}
+                </div>
+              </a>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ─── PER-TRADER LIVE-READINESS QUICK GLANCE ─── */}
+      {anyKnownReadiness && (
+        <>
+          <SectionTitle
+            title="Live-readiness gates"
+            subtitle="Bot-onkénti verdict — zöld = élesedhet, sárga = paper-validálás folyamatban / blokkolva"
+          />
+          <div className="hp-readiness-grid">
+            {readinessRows.map((r) => {
+              const rep = r.report;
+              const cls = !rep ? "unknown" : rep.ready ? "ready" : "not-ready";
+              return (
+                <a key={r.key} href={r.href} className={`hp-rd-card hp-rd-${cls}`}>
+                  <div className="hp-rd-head">
+                    <span className="hp-rd-cat">{r.label}</span>
+                    <span className="hp-rd-status">
+                      {!rep ? "?" : rep.ready ? "READY" : "PAPER"}
+                    </span>
+                  </div>
+                  <div className="hp-rd-count">
+                    {rep ? `${rep.gatesPassed}/${rep.gatesTotal} gates` : "lekérdezés…"}
+                  </div>
+                  {rep && (
+                    <div className="hp-rd-reason" title={rep.reason}>{rep.reason}</div>
+                  )}
+                </a>
+              );
+            })}
+          </div>
+        </>
+      )}
 
       {/* ─── SESSION SUMMARY (összesített) ─── */}
       <SectionTitle title="Aggregated session" subtitle="Minden bot összesítve · per-category lentebb" />
@@ -437,6 +572,13 @@ const css = `
   margin-bottom: 28px;
   padding-bottom: 18px;
   border-bottom: 1px solid var(--border);
+  gap: 12px;
+  flex-wrap: wrap;
+}
+@media (max-width: 480px) {
+  .hp-wrap { padding: 18px 12px 32px; }
+  .hp-header { margin-bottom: 18px; }
+  .hp-logo { font-size: 18px; }
 }
 .hp-logo {
   font-family: var(--mono);
@@ -480,6 +622,174 @@ const css = `
   50%      { opacity: .7; }
 }
 
+/* ─── Live-blocked banner ─── */
+.hp-live-blocked {
+  background: linear-gradient(180deg, #2a0000 0%, #1a0000 100%);
+  border: 1px solid var(--danger);
+  border-left: 4px solid var(--danger);
+  border-radius: 4px;
+  padding: 14px 16px;
+  margin-bottom: 22px;
+  animation: hp-blocked-pulse 3s ease-in-out infinite;
+}
+@keyframes hp-blocked-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(241,53,53,0); }
+  50%      { box-shadow: 0 0 22px 0 rgba(241,53,53,.18); }
+}
+.hp-live-blocked-head {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+.hp-live-blocked-glyph { font-size: 28px; line-height: 1; }
+.hp-live-blocked-title {
+  font-family: var(--sans);
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--danger);
+  letter-spacing: -.01em;
+}
+.hp-live-blocked-sub {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 4px;
+  line-height: 1.5;
+}
+.hp-live-blocked-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 10px;
+}
+.hp-live-blocked-card {
+  background: #1a0a0a;
+  border: 1px solid #5a1a1a;
+  border-radius: 3px;
+  padding: 10px 12px;
+  text-decoration: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: border-color .15s, background .15s;
+}
+.hp-live-blocked-card:hover {
+  border-color: var(--danger);
+  background: #220a0a;
+}
+.hp-live-blocked-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.hp-live-blocked-cat {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.hp-live-blocked-pill {
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--warn);
+  background: #1f1500;
+  border: 1px solid #4a3300;
+  padding: 2px 7px;
+  border-radius: 2px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+.hp-live-blocked-reason {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+.hp-live-blocked-gates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+}
+.hp-live-gate-fail {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  color: var(--danger);
+  background: #1a0000;
+  border: 1px solid #3a0000;
+  padding: 2px 6px;
+  border-radius: 2px;
+  white-space: nowrap;
+}
+
+/* ─── Per-trader readiness quick glance ─── */
+.hp-readiness-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-bottom: 24px;
+}
+@media (max-width: 760px) { .hp-readiness-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 380px) { .hp-readiness-grid { grid-template-columns: 1fr; } }
+.hp-rd-card {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: 3px;
+  padding: 12px 14px;
+  text-decoration: none;
+  color: var(--text);
+  transition: border-color .15s, background .15s;
+}
+.hp-rd-ready     { border-left-color: var(--accent); }
+.hp-rd-not-ready { border-left-color: var(--warn); }
+.hp-rd-unknown   { border-left-color: var(--muted); }
+.hp-rd-card:hover { background: #131318; }
+.hp-rd-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.hp-rd-cat {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.hp-rd-status {
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .12em;
+  padding: 2px 7px;
+  border-radius: 2px;
+}
+.hp-rd-ready     .hp-rd-status { background: #0a2010; color: var(--accent); border: 1px solid #1a3300; }
+.hp-rd-not-ready .hp-rd-status { background: #1f1500; color: var(--warn);   border: 1px solid #4a3300; }
+.hp-rd-unknown   .hp-rd-status { background: #16161c; color: var(--muted);  border: 1px solid var(--border); }
+.hp-rd-count {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+}
+.hp-rd-reason {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text);
+  opacity: .85;
+  line-height: 1.45;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
 /* ─── Summary stats ─── */
 .hp-summary {
   display: grid;
@@ -487,6 +797,8 @@ const css = `
   gap: 10px;
   margin-bottom: 12px;
 }
+@media (max-width: 760px) { .hp-summary { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 380px) { .hp-summary { grid-template-columns: 1fr; } }
 .hp-stat {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -535,6 +847,22 @@ const css = `
   font-family: var(--mono);
   font-size: 11px;
   border-bottom: 1px solid var(--border);
+  gap: 6px;
+}
+@media (max-width: 600px) {
+  .hp-bd-row {
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      "cat status"
+      "bk pnl"
+      "trades trades";
+    row-gap: 4px;
+  }
+  .hp-bd-cat { grid-area: cat; }
+  .hp-bd-bk { grid-area: bk; }
+  .hp-bd-pnl { grid-area: pnl; text-align: right; }
+  .hp-bd-trades { grid-area: trades; font-size: 9.5px; }
+  .hp-bd-status { grid-area: status; justify-self: end; }
 }
 .hp-bd-row:last-child { border-bottom: none; }
 .hp-bd-cat { color: var(--text); font-weight: 700; }

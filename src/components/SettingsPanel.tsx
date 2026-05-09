@@ -334,7 +334,15 @@ function ReadOnlyView({ data, category }: { data: ServerResponse; category?: str
 const css = `
 .set-root, .set-login { padding: 14px; font-family: var(--sans); }
 .set-loading { padding: 30px; text-align: center; color: var(--muted); font-family: var(--mono); }
-.set-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:18px; }
+.set-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:18px; gap:10px; flex-wrap:wrap; }
+@media (max-width: 600px) {
+  .set-header { align-items:flex-start; }
+  .set-actions { width: 100%; }
+  .set-actions .set-btn-primary, .set-actions .set-btn-ghost { flex: 1 1 auto; min-width: 0; padding: 8px 10px; font-size: 10px; }
+  .set-field-row { flex-wrap: wrap; }
+  .set-field-row input[type=range] { flex: 1 1 100%; }
+  .set-num { width: 70px; }
+}
 .set-title { font-size:18px; font-weight:700; }
 .set-sub { font-family: var(--mono); font-size:10px; color:var(--muted); margin-top:2px; text-transform:uppercase; letter-spacing:.06em; }
 .set-actions { display:flex; gap:8px; }

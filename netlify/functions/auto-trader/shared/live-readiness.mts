@@ -106,7 +106,17 @@ interface ComputeArgs {
 const PREDICTION_DRIVEN: Set<string> = new Set(["crypto", "weather"]);
 
 export function computeLiveReadiness(args: ComputeArgs): LiveReadinessReport {
-  const T: LiveReadinessThresholds = { ...DEFAULT_THRESHOLDS, ...(args.thresholds ?? {}) };
+  // Callers typically build the thresholds object from the runtime-override
+  // store, where every field is `undefined` until the operator sets it. A
+  // naive spread would overwrite our defaults with those undefineds and then
+  // `T.minWinRate.toFixed(0)` further down would throw. Strip undefined /
+  // non-finite numbers before merging so the defaults always win for unset keys.
+  const rawOv = (args.thresholds ?? {}) as Record<string, unknown>;
+  const cleanOv: Partial<LiveReadinessThresholds> = {};
+  for (const [k, v] of Object.entries(rawOv)) {
+    if (typeof v === "number" && Number.isFinite(v)) (cleanOv as any)[k] = v;
+  }
+  const T: LiveReadinessThresholds = { ...DEFAULT_THRESHOLDS, ...cleanOv };
   const trades = args.trades ?? args.session.closedTrades ?? [];
   const start = args.session.bankrollStart > 0 ? args.session.bankrollStart : 100;
   const summary = computeSummary(trades, start);
