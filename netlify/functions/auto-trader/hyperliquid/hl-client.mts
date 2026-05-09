@@ -4,7 +4,7 @@
 // (EIP-712 signing). This module handles all read-only calls that don't
 // need a wallet, and defines the adapter interface for live execution.
 
-import { hlBaseUrl, ASSET_INDEX } from "./config.mts";
+import { hlBaseUrl, STATIC_ASSET_INDEX_FALLBACK } from "./config.mts";
 import type { HlCoin } from "./types.mts";
 
 // ─── READ-ONLY API ─────────────────────────────────────────────────────────
@@ -102,6 +102,53 @@ export async function getClearinghouseState(
   }
 }
 
+// ─── Dynamic asset-index lookup ────────────────────────────────────────────
+//
+// HL's universe ordering shifts as coins are listed and delisted. The right
+// way to map a coin name to its `a` (asset index) for order placement is
+// via the `meta` endpoint's `universe[].name` array. We cache the result
+// per cold-start (Netlify functions are short-lived). Returns `null` only
+// when both the network call AND the static fallback fail — callers must
+// refuse to place an order in that case rather than guess.
+let universeCache: { fetchedAt: number; map: Map<string, number> } | null = null;
+const UNIVERSE_TTL_MS = 6 * 60 * 60 * 1000;
+
+export async function lookupAssetIndex(coin: HlCoin, paperMode: boolean): Promise<number | null> {
+  const now = Date.now();
+  if (!universeCache || now - universeCache.fetchedAt > UNIVERSE_TTL_MS) {
+    try {
+      const meta = await hlInfoPost(paperMode, { type: "meta" }, 6000);
+      const arr = meta?.universe;
+      if (Array.isArray(arr)) {
+        const map = new Map<string, number>();
+        for (let i = 0; i < arr.length; i++) {
+          const n = arr[i]?.name;
+          if (typeof n === "string" && !arr[i]?.isDelisted) map.set(n, i);
+        }
+        if (map.size > 0) universeCache = { fetchedAt: now, map };
+      }
+    } catch {
+      // fall through to static fallback below
+    }
+  }
+  const dyn = universeCache?.map.get(coin);
+  if (typeof dyn === "number") return dyn;
+  const stat = STATIC_ASSET_INDEX_FALLBACK[coin];
+  return typeof stat === "number" ? stat : null;
+}
+
+/** Build a coin → index map from a meta response without re-fetching. */
+export function buildIndexMapFromMeta(meta: any): Map<string, number> {
+  const out = new Map<string, number>();
+  const arr = meta?.universe;
+  if (!Array.isArray(arr)) return out;
+  for (let i = 0; i < arr.length; i++) {
+    const n = arr[i]?.name;
+    if (typeof n === "string" && !arr[i]?.isDelisted) out.set(n, i);
+  }
+  return out;
+}
+
 // ─── EXECUTION ADAPTER (live-mode only; paper mode sidesteps this) ─────────
 // Live order placement requires EIP-712 signing. Rather than reinvent it,
 // the live path pulls the @nktkas/hyperliquid SDK lazily — that way paper-
@@ -178,6 +225,13 @@ export async function tryLoadLiveAdapter(paperMode: boolean): Promise<HlExecutio
     const adapter: HlExecutionAdapter = {
       async placeOrder(p: HlOrderParams) {
         try {
+          // Resolve the asset index from the live universe — hard-coded
+          // indices break when HL adds/delists coins. If we can't resolve,
+          // we MUST refuse the order rather than send a wrong-asset trade.
+          const a = await lookupAssetIndex(p.coin, false);
+          if (a === null) {
+            return { ok: false, error: `HL asset index unresolved for ${p.coin} (meta unreachable, no static fallback)` };
+          }
           // Per the Exchange-endpoint docs, trigger orders set `t.trigger`
           // and the limit price `p` carries through as the worst-case fill
           // price; for `isMarket: true` HL accepts whatever price ticks
@@ -195,7 +249,7 @@ export async function tryLoadLiveAdapter(paperMode: boolean): Promise<HlExecutio
 
           const resp = await exchange.order({
             orders: [{
-              a: ASSET_INDEX[p.coin],
+              a,
               b: p.isBuy,
               p: p.price,
               s: p.sizeCoins,
@@ -230,8 +284,10 @@ export async function tryLoadLiveAdapter(paperMode: boolean): Promise<HlExecutio
         try {
           const oid = parseInt(orderId, 10);
           if (!Number.isFinite(oid)) return { ok: false, error: `bad oid: ${orderId}` };
+          const a = await lookupAssetIndex(coin, false);
+          if (a === null) return { ok: false, error: `HL asset index unresolved for ${coin}` };
           const resp: any = await exchange.cancel({
-            cancels: [{ a: ASSET_INDEX[coin], o: oid }],
+            cancels: [{ a, o: oid }],
           });
           if (resp?.status && resp.status !== "ok") {
             return { ok: false, error: `HL cancel rejected: ${JSON.stringify(resp).slice(0, 200)}` };

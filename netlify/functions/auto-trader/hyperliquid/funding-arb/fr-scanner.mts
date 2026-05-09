@@ -19,7 +19,6 @@
 // comparable.
 
 import { hlInfoPost } from "../hl-client.mts";
-import { ASSET_INDEX } from "../config.mts";
 import type { HlCoin } from "../types.mts";
 import type { FundingData } from "./types.mts";
 
@@ -33,6 +32,11 @@ const BINANCE_SYMBOL: Record<HlCoin, string> = {
 };
 
 // ─── HL: metaAndAssetCtxs → FundingData[] ──────────────────────────────────
+//
+// HL's universe ordering shifts as coins are listed and delisted, so we
+// match by `meta.universe[i].name` rather than a hard-coded asset-index
+// table. Skip entries flagged `isDelisted: true` — they still appear in
+// the array but the corresponding ctx[i] data is stale/zero.
 export async function getHlFundings(coins: HlCoin[], paperMode: boolean): Promise<Map<HlCoin, Partial<FundingData>>> {
   const out = new Map<HlCoin, Partial<FundingData>>();
   try {
@@ -42,15 +46,14 @@ export async function getHlFundings(coins: HlCoin[], paperMode: boolean): Promis
     const ctxs = resp[1];
     if (!Array.isArray(meta?.universe) || !Array.isArray(ctxs)) return out;
 
-    const wantedIdx: Record<number, HlCoin> = {};
-    for (const c of coins) {
-      const idx = ASSET_INDEX[c];
-      if (typeof idx === "number") wantedIdx[idx] = c;
-    }
+    const wanted = new Set<string>(coins);
 
     for (let i = 0; i < meta.universe.length; i++) {
-      const coin = wantedIdx[i];
-      if (!coin) continue;
+      const u = meta.universe[i];
+      if (!u || u.isDelisted) continue;
+      const name = u.name;
+      if (typeof name !== "string" || !wanted.has(name)) continue;
+
       const ctx = ctxs[i] || {};
       const hlFundingHourly = parseFloat(ctx.funding ?? "0");
       const markPrice       = parseFloat(ctx.markPx  ?? "0");
@@ -63,8 +66,8 @@ export async function getHlFundings(coins: HlCoin[], paperMode: boolean): Promis
       if (!Number.isFinite(hlFundingHourly))                    continue;
       if (!Number.isFinite(oiCoins) || oiCoins < 0)             continue;
 
-      out.set(coin, {
-        coin,
+      out.set(name as HlCoin, {
+        coin: name as HlCoin,
         hlFundingHourly,
         // 8760 hours per year × 100 = annualised %. Sign preserved.
         hlFundingAnnualized: hlFundingHourly * 8760 * 100,

@@ -3,15 +3,20 @@
 
 import type { HlCoin, HlTraderConfig } from "./types.mts";
 
-// Asset index in Hyperliquid's universe (verifiable via info.meta())
-// Keep in sync with https://api.hyperliquid.xyz/info meta() response.
-export const ASSET_INDEX: Record<HlCoin, number> = {
-  BTC:  0,
-  ETH:  1,
-  SOL:  2,
-  XRP:  3,
-  DOGE: 5,
-  AVAX: 6,
+// NOTE: Hyperliquid asset indices are NOT stable. As HL adds and delists
+// coins the universe[] array's order can shift relative to old positions
+// — and at this date BTC=0/ETH=1 are the only "obvious" mappings; SOL is
+// at index 5 (not 2), DOGE at 12 (not 5), XRP at 25 (not 3). The
+// authoritative source is the `meta` endpoint's `universe[].name` array.
+//
+// All call sites resolve the index via `lookupAssetIndex(coin)` (defined
+// in hl-client.mts) which caches the universe per cold start. We keep an
+// emergency static fallback ONLY for the two indices we can be reasonably
+// certain about so the bot still resolves SOMETHING if `meta` is briefly
+// unreachable; the dynamic lookup is preferred everywhere.
+export const STATIC_ASSET_INDEX_FALLBACK: Partial<Record<HlCoin, number>> = {
+  BTC: 0,
+  ETH: 1,
 };
 
 // Hyperliquid REST endpoints

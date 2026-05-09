@@ -109,6 +109,49 @@ A felhasználó kérte:
 7. **OI cap kifejezés egyszerűsítés**
    `opp.markPrice * opp.markPrice > 0` → `opp.openInterestUSD > 0`.
 
+### D — POST-PUSH P0: Hard-coded HL ASSET_INDEX rossz volt
+
+A push utáni live API audit (`POST https://api.hyperliquid.xyz/info` →
+`{type:"meta"}`) felfedte, hogy a `config.mts`-ben statikusan deklarált
+asset index tábla **HÁROM coinnál hibás** a tényleges HL universe-hez
+képest:
+
+| Coin | Régi (statikus) | Élő universe index |
+|------|-----------------|--------------------|
+| BTC  | 0  | 0 ✅ |
+| ETH  | 1  | 1 ✅ |
+| **SOL**  | **2**  | **5** (index 2 = ATOM!) |
+| **XRP**  | **3**  | **25** (index 3 = MATIC, delisted!) |
+| **DOGE** | **5**  | **12** (index 5 = SOL!) |
+| AVAX | 6  | 6 ✅ |
+
+**Mit jelentett ez ténylegesen:**
+- `getHlFundings` az ATOM funding/markPx/OI adatát írta be a `SOL`
+  ArbOpportunity rekordba — a ranking és viability gate-ek mind rossz
+  számokon dolgoztak.
+- A delisted MATIC (index 3) adatát rögzítettük XRP-ként → soha nem
+  matchel viable opportunity-ra (markPx=0), de tényleges XRP funding
+  spread-eket teljesen nem láttunk.
+- Live order placement `placeOrder({ a: ASSET_INDEX[coin], ... })`-ot
+  küldött volna → SOL-nak szánt SHORT az ATOM-on landolt volna.
+
+**Fix:**
+- `config.mts`: `ASSET_INDEX` constant törölve, helyette
+  `STATIC_ASSET_INDEX_FALLBACK` (csak BTC + ETH, ezek index-stabilak).
+- `hl-client.mts`: új `lookupAssetIndex(coin, paperMode)` async helper —
+  cache-eli a `meta` endpoint `universe[].name` listáját 6h TTL-lel,
+  átugrik `isDelisted: true` entry-ken. Cache miss + meta unreachable →
+  `null`-t ad, és a `placeOrder` / `cancelOrder` ekkor refuse-olja a
+  rendelést ahelyett, hogy rossz asset-re küldené.
+- `fr-scanner.mts`: `getHlFundings` mostantól universe[].name-mel
+  matchel, nem statikus index-szel. Delisted entry-k automatikusan
+  kihagyódnak.
+
+Ez a fix paper módban is kritikus, mert az eddigi paper-mode session
+funding-arb data-ja a rossz coin-on alapult, ezért a live-readiness
+gate-ek (trade count / Sharpe / drawdown) a tévesen címkézett trade-ek
+alapján mértek.
+
 ### Hova nyúlj legközelebb (HL + Funding-Arb)
 
 - **Két külön kártya a főoldalon**: Hyperliquid Perp + Funding Rate
