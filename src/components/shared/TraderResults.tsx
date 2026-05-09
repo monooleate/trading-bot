@@ -83,6 +83,58 @@ export function SignalRow({ signals }: { signals: SignalArrow[] }) {
   );
 }
 
+/* ─── Criteria gate ────────────────────────────────────── */
+
+// One pass/fail check applied to a scanned market row. Used by the
+// CriteriaSummary chip + popover below — the operator can hover any row
+// and see exactly which thresholds passed and which didn't.
+export interface CriteriaGate {
+  /** Short label, e.g. "edge ≥ threshold". */
+  label: string;
+  /** Did this gate pass for this row? */
+  passed: boolean;
+  /** Stringified actual value (e.g. "+13.0%", "0.07"). */
+  actual: string;
+  /** Stringified required threshold (e.g. "≥ 4.0%", "≤ 8.0%"). */
+  required: string;
+  /** Optional one-line tooltip explaining the gate. */
+  hint?: string;
+}
+
+/** Compact "X/Y gates ✓" chip with a hover popover that lists every gate.
+ *  Pure CSS — no JS needed for the hover interaction. */
+function CriteriaSummary({ gates }: { gates: CriteriaGate[] }) {
+  if (!gates.length) return null;
+  const passed = gates.filter((g) => g.passed).length;
+  const total  = gates.length;
+  const allPass = passed === total;
+  const tone = allPass ? "pos" : passed === 0 ? "neg" : "warn";
+  return (
+    <span className={`ts-crit ts-crit-${tone}`} tabIndex={0}>
+      <span className="ts-crit-chip">
+        {passed}/{total} gates {allPass ? "✓" : "—"}
+      </span>
+      <div className="ts-crit-popover" role="tooltip">
+        <div className="ts-crit-popover-head">
+          Belépési kritériumok • {passed} / {total} teljesült
+        </div>
+        {gates.map((g, i) => (
+          <div
+            key={i}
+            className={`ts-crit-row ${g.passed ? "ts-crit-pass" : "ts-crit-fail"}`}
+            title={g.hint}
+          >
+            <span className="ts-crit-mark">{g.passed ? "✓" : "✗"}</span>
+            <span className="ts-crit-label">{g.label}</span>
+            <span className="ts-crit-actual">{g.actual}</span>
+            <span className="ts-crit-req">{g.required}</span>
+          </div>
+        ))}
+      </div>
+    </span>
+  );
+}
+
 /* ─── ScanResultRow ────────────────────────────────────── */
 
 export interface ScanRowProps {
@@ -99,6 +151,8 @@ export interface ScanRowProps {
   chips?: ResultChip[];
   /** Per-signal arrow row (orderflow, vol-div, …). */
   signals?: SignalArrow[];
+  /** Per-row entry-criteria pass/fail — drives the hover gate popover. */
+  criteria?: CriteriaGate[];
   /** Right-side small detail line (e.g. "$3.40 @ 54¢"). */
   extra?: string;
   /** Right-side P&L (formatted, with sign). Coloured by `pnlValue`. */
@@ -128,6 +182,12 @@ export function ScanResultRow(p: ScanRowProps) {
         {p.chips && p.chips.length > 0 && (
           <div className="ts-row-chips">
             {p.chips.map((c, i) => <Chip key={i} chip={c} />)}
+            {p.criteria && <CriteriaSummary gates={p.criteria} />}
+          </div>
+        )}
+        {(!p.chips || p.chips.length === 0) && p.criteria && p.criteria.length > 0 && (
+          <div className="ts-row-chips">
+            <CriteriaSummary gates={p.criteria} />
           </div>
         )}
         {p.signals && <SignalRow signals={p.signals} />}
@@ -185,6 +245,209 @@ export function ScanResultsCard(p: ScanResultsCardProps) {
       {p.children}
     </div>
   );
+}
+
+/* ─── Per-bot criteria mappers ─────────────────────────── */
+
+// Pure helpers — given the per-row scan data + the per-tick config, build
+// the list of pass/fail gates that determined whether the bot would enter
+// this trade. Lives here so the four trader panels render an identical
+// hover popover and so adding a new gate touches only one file.
+
+interface CryptoRowCriteriaIn {
+  netEdge?: number;
+  edge?: number;
+  marketPrice?: number;
+  kellyUsed?: number;
+  activeSignals?: number;
+  obImbalance?: { ratio: number; direction: "UP" | "DOWN" | "NEUTRAL" } | null;
+  direction?: "YES" | "NO";
+}
+interface CryptoCfgCriteriaIn {
+  edgeThreshold:    number;
+  maxKellyFraction: number;
+  btcMinPriceBand:  number;
+}
+export function cryptoEntryCriteria(
+  r: CryptoRowCriteriaIn,
+  cfg?: CryptoCfgCriteriaIn,
+): CriteriaGate[] {
+  const gates: CriteriaGate[] = [];
+  const edge = r.netEdge ?? r.edge;
+
+  if (cfg && edge !== undefined) {
+    gates.push({
+      label: "Net edge ≥ küszöb",
+      passed: edge >= cfg.edgeThreshold,
+      actual: `${edge >= 0 ? "+" : ""}${(edge * 100).toFixed(2)}%`,
+      required: `≥ ${(cfg.edgeThreshold * 100).toFixed(1)}%`,
+      hint: "Modell-prob × payout − fees − market price (signed).",
+    });
+  }
+  if (cfg && r.marketPrice !== undefined) {
+    const lo = cfg.btcMinPriceBand;
+    const hi = 1 - cfg.btcMinPriceBand;
+    const inBand = r.marketPrice >= lo && r.marketPrice <= hi;
+    gates.push({
+      label: "Market price entry-band-ben",
+      passed: inBand,
+      actual: `${(r.marketPrice * 100).toFixed(0)}¢`,
+      required: `[${(lo * 100).toFixed(0)}¢, ${(hi * 100).toFixed(0)}¢]`,
+      hint: "A deep-OTM piacokon $0.01 fill artefakt torzítja az IC-t.",
+    });
+  }
+  if (cfg && r.kellyUsed !== undefined && r.kellyUsed > 0) {
+    gates.push({
+      label: "Kelly méret ≤ cap",
+      passed: r.kellyUsed <= cfg.maxKellyFraction,
+      actual: `${(r.kellyUsed * 100).toFixed(2)}%`,
+      required: `≤ ${(cfg.maxKellyFraction * 100).toFixed(1)}%`,
+      hint: "¼-Kelly + intézményi 8% hard cap.",
+    });
+  }
+  if (r.activeSignals !== undefined) {
+    gates.push({
+      label: "Aktív signal források",
+      passed: r.activeSignals >= 2,
+      actual: `${r.activeSignals}/5`,
+      required: "≥ 2",
+      hint: "Egyetlen signal-tól nem indítunk pozíciót.",
+    });
+  }
+  if (r.obImbalance && r.direction) {
+    const obDir = r.obImbalance.direction;
+    const aligned =
+      (r.direction === "YES" && obDir === "UP") ||
+      (r.direction === "NO"  && obDir === "DOWN") ||
+      obDir === "NEUTRAL";
+    gates.push({
+      label: "Order book imbalance gate",
+      passed: aligned,
+      actual: `OB ${obDir}`,
+      required: r.direction === "YES" ? "UP / NEUTRAL" : "DOWN / NEUTRAL",
+      hint: "Binance top-10 depth ratio, mint konvergencia szignál.",
+    });
+  }
+  return gates;
+}
+
+interface WeatherRowCriteriaIn {
+  edge?: number;
+  confidence?: number;
+}
+interface WeatherCfgCriteriaIn {
+  edgeThreshold: number;
+  confidenceMin: number;
+  maxEdgeCap:    number;
+}
+export function weatherEntryCriteria(
+  r: WeatherRowCriteriaIn,
+  cfg?: WeatherCfgCriteriaIn,
+): CriteriaGate[] {
+  const gates: CriteriaGate[] = [];
+  if (!cfg) return gates;
+  if (r.edge !== undefined) {
+    gates.push({
+      label: "Edge ≥ küszöb",
+      passed: r.edge >= cfg.edgeThreshold,
+      actual: `${r.edge >= 0 ? "+" : ""}${(r.edge * 100).toFixed(2)}%`,
+      required: `≥ ${(cfg.edgeThreshold * 100).toFixed(1)}%`,
+    });
+    gates.push({
+      label: "Edge ≤ cap (model-error gate)",
+      passed: Math.abs(r.edge) <= cfg.maxEdgeCap,
+      actual: `${(Math.abs(r.edge) * 100).toFixed(1)}%`,
+      required: `≤ ${(cfg.maxEdgeCap * 100).toFixed(0)}%`,
+      hint: "Túl nagy edge valószínűleg model-error, nem opportunity.",
+    });
+  }
+  if (r.confidence !== undefined) {
+    gates.push({
+      label: "Confidence ≥ küszöb",
+      passed: r.confidence >= cfg.confidenceMin,
+      actual: `${(r.confidence * 100).toFixed(0)}%`,
+      required: `≥ ${(cfg.confidenceMin * 100).toFixed(0)}%`,
+      hint: "Forecast confidence az ensemble σ alapján.",
+    });
+  }
+  return gates;
+}
+
+interface HlRowCriteriaIn {
+  edge?: number;
+  predictedProb?: number;
+  notionalUSD?: number;
+  leverage?: number;
+}
+interface HlCfgCriteriaIn {
+  edgeThreshold?:    number;
+  maxNotionalUSD?:   number;
+  maxLeverage?:      number;
+}
+export function hlEntryCriteria(
+  r: HlRowCriteriaIn,
+  cfg?: HlCfgCriteriaIn,
+): CriteriaGate[] {
+  const gates: CriteriaGate[] = [];
+  if (cfg?.edgeThreshold !== undefined && r.edge !== undefined) {
+    gates.push({
+      label: "Net edge ≥ küszöb",
+      passed: r.edge >= cfg.edgeThreshold,
+      actual: `${r.edge >= 0 ? "+" : ""}${(r.edge * 100).toFixed(2)}%`,
+      required: `≥ ${(cfg.edgeThreshold * 100).toFixed(1)}%`,
+    });
+  }
+  if (cfg?.maxNotionalUSD !== undefined && r.notionalUSD !== undefined) {
+    gates.push({
+      label: "Notional ≤ cap",
+      passed: r.notionalUSD <= cfg.maxNotionalUSD,
+      actual: `$${r.notionalUSD.toFixed(0)}`,
+      required: `≤ $${cfg.maxNotionalUSD.toFixed(0)}`,
+    });
+  }
+  if (cfg?.maxLeverage !== undefined && r.leverage !== undefined) {
+    gates.push({
+      label: "Leverage ≤ cap",
+      passed: r.leverage <= cfg.maxLeverage,
+      actual: `${r.leverage}×`,
+      required: `≤ ${cfg.maxLeverage}×`,
+    });
+  }
+  return gates;
+}
+
+interface ArbRowCriteriaIn {
+  spreadAnnualized?: number;
+  spreadHourly?: number;
+  openInterestM?: number;
+}
+interface ArbCfgCriteriaIn {
+  minAnnualized?: number;
+  minOpenInterestM?: number;
+}
+export function arbEntryCriteria(
+  r: ArbRowCriteriaIn,
+  cfg?: ArbCfgCriteriaIn,
+): CriteriaGate[] {
+  const gates: CriteriaGate[] = [];
+  if (cfg?.minAnnualized !== undefined && r.spreadAnnualized !== undefined) {
+    gates.push({
+      label: "Annualised spread ≥ küszöb",
+      passed: r.spreadAnnualized >= cfg.minAnnualized,
+      actual: `${r.spreadAnnualized.toFixed(1)}%/yr`,
+      required: `≥ ${cfg.minAnnualized.toFixed(1)}%/yr`,
+    });
+  }
+  if (cfg?.minOpenInterestM !== undefined && r.openInterestM !== undefined) {
+    gates.push({
+      label: "Open interest ≥ küszöb",
+      passed: r.openInterestM >= cfg.minOpenInterestM,
+      actual: `$${r.openInterestM.toFixed(0)}M`,
+      required: `≥ $${cfg.minOpenInterestM.toFixed(0)}M`,
+      hint: "Likviditási garancia a leszálláshoz.",
+    });
+  }
+  return gates;
 }
 
 /* ─── Pending positions card (weather paper trades) ────── */

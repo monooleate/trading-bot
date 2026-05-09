@@ -10,9 +10,11 @@ import {
   ScanResultsCard,
   ScanResultRow,
   DroppedCard,
+  cryptoEntryCriteria,
   type ResultChip,
   type SignalArrow,
 } from "../shared/TraderResults";
+import { useTradeExport } from "../shared/useTradeExport";
 import type { LiveReadinessReport } from "../shared/LiveReadinessBadge";
 
 // Crypto Auto-Trader (BTC short markets, 5m / 15m up-down). All chrome —
@@ -120,6 +122,7 @@ export default function CryptoTrader() {
   const { status, refresh } = useAutoTraderStatus<SessionSummary>("crypto");
   const { loading, error, lastResult, run, setError } =
     useTraderAction<RunResult>("crypto");
+  const { exportTrades, exporting } = useTradeExport({ category: "crypto" });
   const [healthRefresh, setHealthRefresh] = useState(0);
 
   const session = (status?.session as SessionSummary) ?? lastResult?.session ?? null;
@@ -148,11 +151,17 @@ export default function CryptoTrader() {
 
   const controls: TraderControl[] = [
     { label: isRunning ? "Scanning..." : "Run Scan", kind: "primary",   onClick: () => doAction("run"),    disabled: isRunning },
-    { label: "Reset",                                kind: "secondary", onClick: () => doAction("reset"),  disabled: isRunning },
     { label: "Stop",                                 kind: "danger",    onClick: () => doAction("stop"),   disabled: isRunning, when: !session?.stopped },
     { label: "Resume",                               kind: "secondary", onClick: () => doAction("resume"), disabled: isRunning, when: !!session?.stopped },
     { label: "Refresh",                              kind: "secondary", onClick: refresh,                  disabled: isRunning },
   ];
+
+  const sessionSummary = session ? [
+    `Bankroll most: <b>$${session.bankrollCurrent.toFixed(2)}</b> (start: $${session.bankrollStart.toFixed(2)})`,
+    `Lezárt trade-ek: <b>${session.tradeCount}</b> · Session PnL: <b>${session.sessionPnL >= 0 ? "+" : ""}$${session.sessionPnL.toFixed(2)}</b>`,
+    `Nyitott pozíciók: <b>${session.openPositions}</b>`,
+    `Indult: <b>${new Date(session.startedAt).toLocaleString()}</b>`,
+  ] : undefined;
 
   return (
     <TraderShell
@@ -173,6 +182,14 @@ export default function CryptoTrader() {
       showCalibration
       calibrationCategory="crypto"
       refreshKey={healthRefresh}
+      reset={{
+        onReset: () => doAction("reset"),
+        sessionSummary,
+        disabled: isRunning,
+        categoryLabel: "Crypto Auto-Trader",
+      }}
+      onExportTrades={exportTrades}
+      exportingTrades={exporting}
     >
       {display && (display.results || display.reason) && (
         <ScanResultsCard
@@ -222,6 +239,8 @@ export default function CryptoTrader() {
                 }))
               : [];
 
+            const criteria = cryptoEntryCriteria(r, display.config);
+
             const extra = r.action === "position_opened" && r.entry !== undefined && r.size !== undefined
               ? `$${r.size.toFixed(2)} @ ${(r.entry * 100).toFixed(0)}¢`
               : undefined;
@@ -235,6 +254,7 @@ export default function CryptoTrader() {
                 action={r.action}
                 chips={chips}
                 signals={signals}
+                criteria={criteria}
                 extra={extra}
                 pnl={pnlText}
                 pnlValue={r.pnl}

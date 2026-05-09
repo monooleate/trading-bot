@@ -9,8 +9,10 @@ import TraderShell, {
 import {
   ScanResultsCard,
   ScanResultRow,
+  hlEntryCriteria,
   type ResultChip,
 } from "../shared/TraderResults";
+import { useTradeExport } from "../shared/useTradeExport";
 import type { LiveReadinessReport } from "../shared/LiveReadinessBadge";
 
 // Hyperliquid Perp Trader (BTC / ETH / SOL on Hyperliquid testnet by default).
@@ -50,6 +52,7 @@ export default function HyperliquidTrader() {
   const { status, refresh } = useAutoTraderStatus<HlSessionSummary>("hyperliquid");
   const { loading, error, lastResult, run, setError } =
     useTraderAction<HlRunResult>("hyperliquid");
+  const { exportTrades, exporting } = useTradeExport({ category: "hyperliquid" });
   const [healthRefresh, setHealthRefresh] = useState(0);
 
   const session = (status?.session as HlSessionSummary) ?? lastResult?.session ?? null;
@@ -91,11 +94,17 @@ export default function HyperliquidTrader() {
 
   const controls: TraderControl[] = [
     { label: isRunning ? "Running..." : "Run Scan", kind: "primary",   onClick: () => doAction("run"),    disabled: isRunning },
-    { label: "Reset",                               kind: "secondary", onClick: () => doAction("reset"),  disabled: isRunning },
     { label: "Resume",                              kind: "secondary", onClick: () => doAction("resume"), disabled: isRunning, when: isCooldownOrStopped },
     { label: "Stop",                                kind: "danger",    onClick: () => doAction("stop"),   disabled: isRunning, when: !isCooldownOrStopped },
     { label: "Refresh",                             kind: "secondary", onClick: refresh,                  disabled: isRunning },
   ];
+
+  const sessionSummary = session ? [
+    `Bankroll most: <b>$${session.bankrollCurrent.toFixed(2)}</b> (start: $${session.bankrollStart.toFixed(2)})`,
+    `Lezárt trade-ek: <b>${session.tradeCount}</b> · Session PnL: <b>${session.sessionPnL >= 0 ? "+" : ""}$${session.sessionPnL.toFixed(2)}</b>`,
+    `Nyitott pozíciók: <b>${session.openPositions}</b> · Loss streak: <b>${session.consecutiveLosses}</b>`,
+    `Indult: <b>${new Date(session.startedAt).toLocaleString()}</b>`,
+  ] : undefined;
 
   return (
     <TraderShell
@@ -116,6 +125,14 @@ export default function HyperliquidTrader() {
       showCalibration
       calibrationCategory="hyperliquid"
       refreshKey={healthRefresh}
+      reset={{
+        onReset: () => doAction("reset"),
+        sessionSummary,
+        disabled: isRunning,
+        categoryLabel: "Hyperliquid Perp Trader",
+      }}
+      onExportTrades={exportTrades}
+      exportingTrades={exporting}
     >
       {display && display.results && display.results.length > 0 && (
         <ScanResultsCard
@@ -152,6 +169,7 @@ export default function HyperliquidTrader() {
             }
 
             const pnlText = r.pnl !== undefined ? `${r.pnl >= 0 ? "+" : ""}$${Number(r.pnl).toFixed(2)}` : undefined;
+            const criteria = hlEntryCriteria(r, undefined);
 
             return (
               <ScanResultRow
@@ -159,6 +177,7 @@ export default function HyperliquidTrader() {
                 title={r.coin}
                 action={r.action}
                 chips={chips}
+                criteria={criteria}
                 pnl={pnlText}
                 pnlValue={r.pnl}
                 reason={r.reason || r.error}

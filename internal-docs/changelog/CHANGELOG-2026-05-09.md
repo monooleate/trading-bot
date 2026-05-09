@@ -850,3 +850,106 @@ curl -X POST 'https://mj-trading.netlify.app/.netlify/functions/auto-trader-api'
   | python -c "import sys, json; d=json.load(sys.stdin); print(d['results'][0]['activeSignals'])"
 # Expected: > 0 (eddig 0)
 ```
+
+---
+
+## Auto-Trader UI: reset safety + trade export + per-row criteria gates
+
+### Háttér
+
+Üzemeltetői feedback: a "Reset" gomb minden egyes paper-tradenél azonnal kitörli az addigi sessiont. Most, hogy a 4 bot relatíve stabil és valós piaci kimeneteleken mér IC-t, a session.closedTrades **értékes adat** — nem szabad hogy egy véletlen kattintással elveszhessen. Másodszor: az operatőr a /trade/* oldalon csak a végső "skip / position_opened" akciót látta, de azt nem, hogy az adott markethez **melyik gate teljesült és melyik nem** (edge ≥ küszöb? kelly ≤ cap? mp band-ben? signals ≥ 2?).
+
+### Megoldás
+
+#### 1. Type-to-confirm Reset dialog (új `shared/ConfirmDialog.tsx`)
+
+A "Reset" gomb most "Reset…" lett, és modális dialógot nyit:
+
+- Cím + body: "Ez kitörli a jelenlegi sessiont (zárt és nyitott pozíciók, statisztikák). A művelet visszafordíthatatlan, ezért meg kell erősítened a kulcsszó begépelésével."
+- Bullet-list session summary HTML-támogatással (`<b>` tag a kiemelt értékekre): bankroll, lezárt trade-ek, session PnL, nyitott pozíciók, indulási idő.
+- Default-checked checkbox: **"Letöltöm a trade history JSON backup-ot reset előtt"** — ha bekapcsolva, az `onConfirm` először hívja az export-ot, csak utána a server-side resetet.
+- Type-to-confirm input: a "RESET" szót kell begépelni (case-sensitive) — a gomb addig disabled.
+- Esc-billentyű és backdrop-kattintás cancel; focus auto-jump az input-ra; minden interakció disabled `busy`-state alatt.
+
+A type-to-confirm a GitHub/Vercel destruktív flow-iból átemelt mintázat — a checkbox-pattern muscle-memóriával defeatelhető, a "gépeld be a műveletet" nem.
+
+#### 2. JSON trade export (új `shared/useTradeExport.ts` hook)
+
+Új standalone "💾 Export Trades" gomb minden bot oldalon. Hív `/.netlify/functions/edge-tracker?mode=paper&category=…&days=all`, becsomagol egy self-describing JSON envelope-ba:
+
+```json
+{
+  "$schema": "edgecalc-trade-export/v1",
+  "category": "crypto",
+  "mode": "paper",
+  "days": "all",
+  "exportedAt": "2026-05-09T18:32:14.000Z",
+  "summary": { ... computeSummary() output ... },
+  "signalIC": [ ... per-signal IC ... ],
+  "trades": [ ... ClosedTrade[] ... ],
+  "sourceNote": "Snapshot pulled from /.netlify/functions/edge-tracker. ..."
+}
+```
+
+Letöltési fájlnév: `trades-{category}-{mode}-{YYYY-MM-DD_HH-mm-ss}.json`. JSON-t választottam CSV helyett: a trade payload nested signal data-t tartalmaz (signalBreakdown, OB imbalance, etc.), CSV-ben elveszne.
+
+Az export-ot a Reset dialog is használja: ha a backup-checkbox be van pipálva, a reset POST előtt lefut a download. Ha az export error-ral elhasal, akkor is folytatódik a reset (mert az operatőr **kifejezetten** rákattintott a Reset gombra) — ez tudatos terv, nem akarunk silent block-ot.
+
+#### 3. Per-row criteria gates
+
+Új `CriteriaGate` típus + `CriteriaSummary` komponens a `TraderResults.tsx`-ben. Minden scan-row mostantól egy "X/Y gates ✓" chip-pel zárul, ami **hover-re** (vagy keyboard `:focus`-szal) kibont egy kis popover-t a teljes pass/fail bontással:
+
+```
+Belépési kritériumok • 4 / 5 teljesült
+✓  Net edge ≥ küszöb              +13.0%   ≥ 4.0%
+✓  Market price entry-band-ben     54¢      [10¢, 90¢]
+✗  Kelly méret ≤ cap               9.2%     ≤ 8.0%
+✓  Aktív signal források           3/5      ≥ 2
+✓  Order book imbalance gate       OB ↑     UP / NEUTRAL
+```
+
+Tone color-coded:
+- minden gate ✓ → zöld chip
+- legalább 1 ✗ → narancs chip
+- minden ✗ → piros chip
+
+A chip class `cursor: help`, billentyűzettel is fókuszálható (`tabIndex={0}`), és a popover CSS-only — nincs JS click handler, ami még a render-után se zavar a perf-be.
+
+Per-bot mapper függvények a `TraderResults`-ban (közös helyen, hogy egy gate hozzáadása minden boton azonnal megjelenjen):
+
+- `cryptoEntryCriteria(row, config)` → 5 gate (edge, mp band, kelly cap, active signals, OB imbalance)
+- `weatherEntryCriteria(row, config)` → 3 gate (edge ≥ küszöb, edge ≤ cap, confidence ≥ küszöb)
+- `hlEntryCriteria(row, cfg?)` → up to 3 gate (edge, notional cap, leverage cap) — cfg most még undefined, mert a HL backend nem szállít cfg-t a response-ban. Amikor szállít majd, automatikusan jelennek meg.
+- `arbEntryCriteria(row, cfg?)` → up to 2 gate (annualized spread, OI). Hasonló, kész a hookoláshoz.
+
+### Érintett fájlok
+
+```
+új: src/components/shared/ConfirmDialog.tsx       (type-to-confirm dialog)
+új: src/components/shared/useTradeExport.ts       (JSON envelope + download)
+átírva: src/components/shared/TraderShell.tsx     (reset slot + export slot)
+átírva: src/components/shared/TraderResults.tsx   (CriteriaSummary + 4 mapper)
+átírva: src/components/shared/traderShellStyles.ts (criteria popover CSS)
+átírva: src/components/trader/CryptoTrader.tsx
+átírva: src/components/trader/WeatherTrader.tsx
+átírva: src/components/trader/HyperliquidTrader.tsx
+átírva: src/components/trader/FundingArbPanel.tsx
+```
+
+A 4 bot panel mostantól **nem** ad hozzá Reset gombot a `controls` arrayhez — a TraderShell maga rendereli, mert a confirm-dialog + backup-flow közös. Csak a `reset.onReset` callback-et meg a `sessionSummary` bullet listet adják át.
+
+### Mit jelent ez gyakorlatban
+
+- **Reset többé nem véletlen-elérhető.** A muscle-memóriás Reset-Reset-OK megszűnt; a "RESET" szó begépelése + a dialog elolvasása break-eli az autopilot-ot.
+- **Trade adatok mindig menthetők.** Egy kattintás bárhonnan (Reset előtt vagy szabadon) → portable JSON backup. Több hónap múlva is olvasható, mert self-describing schema mezővel jön.
+- **A "miért lépett be / miért skippelt" mostantól látható.** Hover bármelyik scan-row-ra → minden entry-gate aktuális értéke + küszöb a popoverben. Nincs többé "miért vetted ezt 60% prob-mal és 4% edge-dzsel?" típusú kérdés — látod a 5/5 ✓-t és tudod.
+
+### Backend érintettség
+
+Nincs. A reset továbbra is `handleReset()`-et hív (server-side), ami `resetSession()` + `saveSession()` — változatlanul. A snapshot mindig az edge-tracker `?days=all` query-ből jön, ami a Blobs-ben tárolt `closedTrades`-t olvassa. Ha jövőben akarunk **server-side** auto-archive-ot is (a Reset POST-ban automatikusan timestamp-elt blobs key-re mentés), az +1 backend patch — de a mostani kliensoldali backup már védi az adatokat.
+
+### Future-proof
+
+- Új gate hozzáadása: 1 sor a megfelelő `*EntryCriteria` mapper-be, és minden boton + minden új boton azonnal megjelenik.
+- Új bot kategóriához új mapper írása: ~20 LOC. A `<ScanResultRow criteria={…} />` API generikus.
+- A ConfirmDialog reusable: ha jövőben egy `Stop` is destruktív lesz, ugyanezzel a komponenssel gateolható (csak `confirm-word="STOP"` és más body).

@@ -9,9 +9,11 @@ import {
   ScanResultRow,
   PendingPositionsCard,
   DroppedCard,
+  weatherEntryCriteria,
   type ResultChip,
   type PendingPositionLite,
 } from "../shared/TraderResults";
+import { useTradeExport } from "../shared/useTradeExport";
 import type { LiveReadinessReport } from "../shared/LiveReadinessBadge";
 
 // Weather Auto-Trader (Polymarket high-temp markets, paper-only on Netlify).
@@ -67,6 +69,7 @@ export default function WeatherTrader() {
   const { status, refresh } = useAutoTraderStatus<any>("weather");
   const { loading, error, lastResult, run, setError } =
     useTraderAction<RunResult>("weather");
+  const { exportTrades, exporting } = useTradeExport({ category: "weather" });
   const [healthRefresh, setHealthRefresh] = useState(0);
 
   const rs = status?.runStatus;
@@ -83,11 +86,17 @@ export default function WeatherTrader() {
   }, [run, refresh, setError]);
 
   const controls: TraderControl[] = [
-    { label: isRunning ? "Scanning..." : "Scan Weather Markets", kind: "primary",   onClick: () => doAction("run"),       disabled: isRunning },
-    { label: "⟳ Reconcile pending",                              kind: "info",      onClick: () => doAction("reconcile"), disabled: isRunning, title: "Force a settlement pass on pending paper positions" },
-    { label: "Reset",                                            kind: "secondary", onClick: () => doAction("reset"),     disabled: isRunning },
-    { label: "Stop",                                             kind: "danger",    onClick: () => doAction("stop"),      disabled: isRunning },
+    { label: isRunning ? "Scanning..." : "Scan Weather Markets", kind: "primary", onClick: () => doAction("run"),       disabled: isRunning },
+    { label: "⟳ Reconcile pending",                              kind: "info",    onClick: () => doAction("reconcile"), disabled: isRunning, title: "Force a settlement pass on pending paper positions" },
+    { label: "Stop",                                             kind: "danger",  onClick: () => doAction("stop"),      disabled: isRunning },
   ];
+
+  const session: any = (status?.session as any) ?? lastResult?.session ?? null;
+  const sessionSummary = session ? [
+    `Lezárt trade-ek: <b>${session.tradeCount ?? 0}</b>`,
+    `Pending pozíciók: <b>${pending?.count ?? 0}</b>`,
+    `Indult: <b>${session.startedAt ? new Date(session.startedAt).toLocaleString() : "—"}</b>`,
+  ] : undefined;
 
   return (
     <TraderShell
@@ -106,6 +115,14 @@ export default function WeatherTrader() {
       showCalibration
       calibrationCategory="weather"
       refreshKey={healthRefresh}
+      reset={{
+        onReset: () => doAction("reset"),
+        sessionSummary,
+        disabled: isRunning,
+        categoryLabel: "Weather Auto-Trader",
+      }}
+      onExportTrades={exportTrades}
+      exportingTrades={exporting}
     >
       {pending && pending.count > 0 && (
         <PendingPositionsCard
@@ -177,6 +194,8 @@ export default function WeatherTrader() {
               ? `$${(+r.size).toFixed(2)} @ ${(r.entry * 100).toFixed(0)}¢`
               : undefined;
 
+            const criteria = weatherEntryCriteria(r, display.config);
+
             return (
               <ScanResultRow
                 key={`${r.market || r.slug || "row"}-${i}`}
@@ -185,6 +204,7 @@ export default function WeatherTrader() {
                 prefix={r.city ? r.city.charAt(0).toUpperCase() + r.city.slice(1) : undefined}
                 action={r.action}
                 chips={chips}
+                criteria={criteria}
                 extra={extra}
                 reason={r.reason || r.error}
                 isErrorReason={!!r.error}

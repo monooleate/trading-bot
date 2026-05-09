@@ -14,6 +14,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import CalibrationHealthBadge from "./CalibrationHealthBadge";
 import LiveReadinessBadge, { type LiveReadinessReport } from "./LiveReadinessBadge";
+import ConfirmDialog from "./ConfirmDialog";
 import { traderShellCSS } from "./traderShellStyles";
 
 type CalibrationCategory =
@@ -71,6 +72,25 @@ export interface TraderShellProps {
   liveReadinessReport?: LiveReadinessReport | null;
   /** Bump to force both badges to re-fetch. */
   refreshKey?: number;
+  /** Reset action — when provided, TraderShell renders the Reset button
+   *  itself, gated by a type-to-confirm dialog with optional backup
+   *  download. Per-bot panels should NOT add Reset to `controls`. */
+  reset?: {
+    onReset:        () => void | Promise<void>;
+    /** Bullet list of "what you're about to wipe" — usually trade count,
+     *  PnL, started date. Rendered inside the dialog. */
+    sessionSummary?: string[];
+    /** Disable when another action is running. */
+    disabled?: boolean;
+    /** Optional category label for the dialog title — e.g. "Crypto". */
+    categoryLabel?: string;
+  };
+  /** Export Trades — when provided, TraderShell renders a "💾 Export Trades"
+   *  button that calls this. Typical implementation downloads JSON pulled
+   *  from the edge-tracker endpoint. */
+  onExportTrades?: () => void | Promise<void>;
+  /** Reflects the in-flight state of an export. */
+  exportingTrades?: boolean;
   children?: React.ReactNode;
 }
 
@@ -100,6 +120,9 @@ export default function TraderShell({
   liveReadinessCategory,
   liveReadinessReport,
   refreshKey,
+  reset,
+  onExportTrades,
+  exportingTrades,
   children,
 }: TraderShellProps) {
   // Re-render once a second so the relative timestamp ages locally without
@@ -109,6 +132,29 @@ export default function TraderShell({
     const t = setInterval(() => setTick((x) => x + 1), 1000);
     return () => clearInterval(t);
   }, []);
+
+  // Reset confirmation dialog state — kept here so per-bot panels never
+  // have to wire a modal up themselves.
+  const [resetOpen, setResetOpen] = useState(false);
+  const [resetBackup, setResetBackup] = useState(true);
+  const [resetBusy, setResetBusy] = useState(false);
+
+  const handleResetConfirm = useCallback(async () => {
+    if (!reset) return;
+    setResetBusy(true);
+    try {
+      // Honour the "download backup before reset" checkbox by exporting
+      // first. If the export throws we still proceed — the user explicitly
+      // confirmed reset.
+      if (resetBackup && onExportTrades) {
+        try { await onExportTrades(); } catch { /* don't block reset */ }
+      }
+      await reset.onReset();
+      setResetOpen(false);
+    } finally {
+      setResetBusy(false);
+    }
+  }, [reset, resetBackup, onExportTrades]);
 
   const ageSec = lastRunAt
     ? Math.floor((Date.now() - new Date(lastRunAt).getTime()) / 1000)
@@ -199,11 +245,52 @@ export default function TraderShell({
             {c.label}
           </button>
         ))}
+        {reset && (
+          <button
+            className="ts-btn ts-btn-secondary"
+            onClick={() => setResetOpen(true)}
+            disabled={reset.disabled}
+            title="Wipe the current paper/live session — gated by a type-to-confirm dialog"
+          >
+            Reset…
+          </button>
+        )}
+        {onExportTrades && (
+          <button
+            className="ts-btn ts-btn-info"
+            onClick={() => onExportTrades()}
+            disabled={exportingTrades}
+            title="Download a JSON snapshot of every closed trade in this session"
+          >
+            {exportingTrades ? "Exporting…" : "💾 Export Trades"}
+          </button>
+        )}
       </div>
 
       {error && <div className="ts-error">{error}</div>}
 
       {children}
+
+      {reset && (
+        <ConfirmDialog
+          open={resetOpen}
+          tone="danger"
+          title={`Session reset — ${reset.categoryLabel ?? "this bot"}`}
+          body="Ez kitörli a jelenlegi sessiont (zárt és nyitott pozíciók, statisztikák). A művelet visszafordíthatatlan, ezért meg kell erősítened a kulcsszó begépelésével."
+          details={reset.sessionSummary}
+          confirmWord="RESET"
+          confirmLabel="Reset session"
+          cancelLabel="Mégse"
+          checkbox={onExportTrades ? {
+            label: "Letöltöm a trade history JSON backup-ot reset előtt",
+            checked: resetBackup,
+            onChange: setResetBackup,
+          } : undefined}
+          busy={resetBusy}
+          onConfirm={handleResetConfirm}
+          onCancel={() => setResetOpen(false)}
+        />
+      )}
     </div>
   );
 }

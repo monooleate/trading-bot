@@ -156,6 +156,75 @@ export const traderShellCSS = `
 .ts-chip-info    { color: var(--accent2); border-color: var(--accent2); }
 .ts-chip-outline { background: transparent; }
 
+/* ─── Criteria gate chip + hover popover ───────────────── */
+.ts-crit {
+  position: relative;
+  display: inline-flex; align-items: center;
+  cursor: help; outline: none;
+}
+.ts-crit-chip {
+  font-family: var(--mono); font-size: 0.6rem;
+  padding: 1px 7px; border-radius: 3px;
+  background: var(--surface2); border: 1px solid var(--border);
+  color: var(--text); white-space: nowrap;
+  letter-spacing: 0.04em;
+}
+.ts-crit-pos .ts-crit-chip  { color: var(--accent);  border-color: var(--accent); }
+.ts-crit-warn .ts-crit-chip { color: var(--warn);    border-color: var(--warn); }
+.ts-crit-neg .ts-crit-chip  { color: var(--danger);  border-color: var(--danger); }
+
+.ts-crit-popover {
+  position: absolute;
+  bottom: calc(100% + 8px); left: 0;
+  z-index: 50;
+  min-width: 280px; max-width: 360px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  box-shadow: 0 12px 32px rgba(0,0,0,0.45);
+  opacity: 0; visibility: hidden;
+  transform: translateY(4px);
+  transition: opacity 0.12s ease-out, transform 0.12s ease-out, visibility 0s linear 0.12s;
+  pointer-events: none;
+}
+.ts-crit:hover .ts-crit-popover,
+.ts-crit:focus .ts-crit-popover,
+.ts-crit:focus-within .ts-crit-popover {
+  opacity: 1; visibility: visible; transform: translateY(0);
+  transition-delay: 0s;
+  pointer-events: auto;
+}
+.ts-crit-pos .ts-crit-popover  { border-color: var(--accent); }
+.ts-crit-warn .ts-crit-popover { border-color: var(--warn); }
+.ts-crit-neg .ts-crit-popover  { border-color: var(--danger); }
+.ts-crit-popover-head {
+  font-family: var(--mono); font-size: 0.6rem;
+  color: var(--muted); text-transform: uppercase;
+  letter-spacing: 0.06em;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px; margin-bottom: 6px;
+}
+.ts-crit-row {
+  display: grid;
+  grid-template-columns: 16px 1fr auto auto;
+  gap: 7px; align-items: center;
+  font-family: var(--mono); font-size: 0.62rem;
+  padding: 3px 0;
+  color: var(--text);
+}
+.ts-crit-row + .ts-crit-row { border-top: 1px solid var(--border); }
+.ts-crit-mark { font-weight: 700; }
+.ts-crit-pass .ts-crit-mark { color: var(--accent); }
+.ts-crit-fail .ts-crit-mark { color: var(--danger); }
+.ts-crit-label  { color: var(--text); }
+.ts-crit-actual { color: var(--text); font-weight: 600; text-align: right; }
+.ts-crit-req    { color: var(--muted); text-align: right; font-size: 0.58rem; }
+
+@media (max-width: 600px) {
+  .ts-crit-popover { left: auto; right: 0; min-width: 240px; }
+}
+
 .ts-row-signals { display: flex; gap: 6px; flex-wrap: wrap; }
 .ts-sig {
   font-size: 0.6rem; color: var(--accent2);

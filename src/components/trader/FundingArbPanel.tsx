@@ -11,10 +11,12 @@ import {
   ScanResultRow,
   OpenPositionsCard,
   OpportunitiesCard,
+  arbEntryCriteria,
   type ResultChip,
   type OpenPositionRow,
   type OpportunityRowLite,
 } from "../shared/TraderResults";
+import { useTradeExport } from "../shared/useTradeExport";
 import type { LiveReadinessReport } from "../shared/LiveReadinessBadge";
 
 // Funding-Rate Arbitrage layer (delta-neutral: short HL perp + long Binance
@@ -79,6 +81,7 @@ export default function FundingArbPanel() {
   const { status, refresh } = useAutoTraderStatus<ArbSessionSummary>("hyperliquid", "arb");
   const { loading, error, lastResult, run, setError } =
     useTraderAction<ArbRunResult>("hyperliquid", "arb");
+  const { exportTrades, exporting } = useTradeExport({ category: "funding-arb" });
   const [healthRefresh, setHealthRefresh] = useState(0);
 
   const session = (status?.session as ArbSessionSummary) ?? lastResult?.session ?? null;
@@ -109,11 +112,17 @@ export default function FundingArbPanel() {
 
   const controls: TraderControl[] = [
     { label: isRunning ? "Running..." : "Scan + Run", kind: "primary",   onClick: () => doAction("run"),    disabled: isRunning },
-    { label: "Reset",                                 kind: "secondary", onClick: () => doAction("reset"),  disabled: isRunning },
     { label: "Resume",                                kind: "secondary", onClick: () => doAction("resume"), disabled: isRunning, when: !!session?.stopped },
     { label: "Stop",                                  kind: "danger",    onClick: () => doAction("stop"),   disabled: isRunning, when: !session?.stopped },
     { label: "Refresh",                               kind: "secondary", onClick: refresh,                  disabled: isRunning },
   ];
+
+  const sessionSummary = session ? [
+    `Open positions: <b>${session.openPositions}</b> · Deployed: <b>$${session.deployedCapital.toFixed(0)}</b>`,
+    `Today funding: <b>${session.totalFundingToday >= 0 ? "+" : ""}$${session.totalFundingToday.toFixed(2)}</b>`,
+    `All-time funding: <b>${session.totalFundingAllTime >= 0 ? "+" : ""}$${session.totalFundingAllTime.toFixed(2)}</b>`,
+    `Indult: <b>${new Date(session.startedAt).toLocaleString()}</b>`,
+  ] : undefined;
 
   const openRows: OpenPositionRow[] = (session?.openDetails ?? []).map((p) => ({
     coin:       p.coin,
@@ -152,6 +161,14 @@ export default function FundingArbPanel() {
       showCalibration
       calibrationCategory="funding-arb"
       refreshKey={healthRefresh}
+      reset={{
+        onReset: () => doAction("reset"),
+        sessionSummary,
+        disabled: isRunning,
+        categoryLabel: "Funding Rate Arbitrage",
+      }}
+      onExportTrades={exportTrades}
+      exportingTrades={exporting}
     >
       <OpenPositionsCard title="Open Positions" rows={openRows} />
       <OpportunitiesCard title="Top Spreads (last scan)" rows={oppRows} />
@@ -168,6 +185,7 @@ export default function FundingArbPanel() {
             if (r.spreadHourly !== undefined)     chips.push({ label: `${Number(r.spreadHourly).toFixed(4)}%/h`, title: "Hourly funding spread" });
 
             const pnlText = r.netPnl !== undefined ? `${r.netPnl >= 0 ? "+" : ""}$${Number(r.netPnl).toFixed(2)}` : undefined;
+            const criteria = arbEntryCriteria(r, undefined);
 
             return (
               <ScanResultRow
@@ -175,6 +193,7 @@ export default function FundingArbPanel() {
                 title={r.coin}
                 action={r.action}
                 chips={chips}
+                criteria={criteria}
                 pnl={pnlText}
                 pnlValue={r.netPnl}
                 reason={r.reason || r.error}

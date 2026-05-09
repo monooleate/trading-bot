@@ -351,6 +351,38 @@ netlify deploy --prod --dir=dist
 
 ## AKTUÁLIS ÁLLAPOT (2026-05-09) – Claude Code folytatáshoz
 
+### Ötödik session (2026-05-09) – Auto-Trader UX: reset safety + trade export + per-row criteria gates
+
+3 üzemeltető-orientált feature minden bot oldalra:
+
+1. **Type-to-confirm Reset dialog** (új `shared/ConfirmDialog.tsx`).
+   A "Reset" gomb most `Reset…` lett és modális dialógot nyit:
+   - Session summary bullet list (bankroll, trade count, PnL, open positions, started)
+   - Default-checked checkbox: "Letöltöm a JSON backup-ot reset előtt"
+   - Type-to-confirm: a "RESET" szó begépelése kell (case-sensitive)
+   - Esc + backdrop-click cancel; auto-focus; busy-state disabled
+   - Backup checkbox bekapcsolva: a reset POST előtt lefut az export
+2. **JSON trade export** (új `shared/useTradeExport.ts` hook).
+   - Új standalone "💾 Export Trades" gomb minden boton
+   - Hív `/.netlify/functions/edge-tracker?mode=paper&category=…&days=all`
+   - Self-describing JSON envelope (`$schema`, `category`, `mode`, `exportedAt`, `summary`, `signalIC`, `trades`, `sourceNote`)
+   - Letöltési fájlnév: `trades-{category}-{mode}-{ISO-ts}.json`
+3. **Per-row entry-criteria gates** (új `CriteriaSummary` + 4 mapper a `TraderResults`-ban).
+   - Minden scan-row egy "X/Y gates ✓" chip-et kap
+   - Hover/focus → CSS-only popover a teljes pass/fail bontással
+   - Per-bot mapper: `cryptoEntryCriteria` (5 gate), `weatherEntryCriteria` (3 gate), `hlEntryCriteria` (3 gate), `arbEntryCriteria` (2 gate)
+
+A 4 bot panel **nem** add hozzá Reset-et a `controls` arrayhez — a TraderShell maga rendereli, mert a confirm-dialog + backup-flow közös. A Reset slot + Export slot tisztán deklaratív callback-ek.
+
+Részletes leírás: `internal-docs/changelog/CHANGELOG-2026-05-09.md`
+"Auto-Trader UI: reset safety + trade export + per-row criteria gates" szekciója.
+
+### Hova nyúlj legközelebb (UX)
+
+- **Új entry-gate hozzáadása**: 1 sor a megfelelő `*EntryCriteria` mapper-be a `TraderResults.tsx`-ben, és minden boton + minden jövőbeli boton azonnal megjelenik a popover-ben.
+- **Server-side auto-archive Reset-nél**: a kliensoldali backup már védi az adatokat, de ha akarjuk a server-oldali sticky archive-ot is (timestamp-elt Blobs key minden Reset-nél), az 1 patch a `handleReset()`-be — a snapshot infra már megvan a v1→v2 migration-höz.
+- **Stop is gateolható**: a ConfirmDialog reusable, ha jövőben egy "Stop" is destruktívnak számít (pl. nyitott pozíciók close-olása), ugyanezzel a komponenssel "STOP" szóval gateolható.
+
 ### Negyedik session (2026-05-09) – HL split: 1 doboz → 2 doboz + API audit
 
 A `/trade/hyperliquid/` egy "Hyperliquid Perp" doboz alá rejtett **két
