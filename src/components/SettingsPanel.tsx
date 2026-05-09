@@ -173,8 +173,16 @@ export default function SettingsPanel({ category, title, subtitle }: SettingsPan
   }
 
   // Filter schema by category if requested, then group by spec.group
+  // Auto-trader categories also see the cross-trader "common" fields
+  // (e.g. live-readiness gates), so the operator can tune the
+  // live-trade lockout from any per-venue settings tab. Manual venues
+  // (bybit / binance / polymarket-manual) don't have an auto-trader,
+  // so the common gates wouldn't apply — those tabs stay focused.
+  const isAutoTraderCategory = category === "crypto" || category === "weather" || category === "hyperliquid";
   const visibleEntries = Object.entries(data.schema).filter(([, spec]) =>
-    category ? spec.category === category : true,
+    category
+      ? spec.category === category || (isAutoTraderCategory && spec.category === "common")
+      : true,
   );
 
   if (visibleEntries.length === 0) {
@@ -291,8 +299,11 @@ export default function SettingsPanel({ category, title, subtitle }: SettingsPan
 }
 
 function ReadOnlyView({ data, category }: { data: ServerResponse; category?: string }) {
+  const isAutoTraderCategory = category === "crypto" || category === "weather" || category === "hyperliquid";
   const visible = Object.entries(data.schema).filter(([, spec]) =>
-    category ? spec.category === category : true,
+    category
+      ? spec.category === category || (isAutoTraderCategory && spec.category === "common")
+      : true,
   );
   const order: string[] = [];
   const grouped: Record<string, [string, FieldSpec][]> = {};
