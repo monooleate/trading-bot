@@ -186,14 +186,18 @@ async function runCryptoTrader(
 
   // Pull live overrides from the trader-settings store so paper-mode
   // tuning takes effect on the next cron tick without a redeploy.
-  const config  = await getEffectiveTraderConfig();
+  const baseConfig = await getEffectiveTraderConfig();
+  // Mutable copy: the live-readiness gate below may flip paperMode back
+  // to true if the session hasn't met validation thresholds yet.
+  const config: typeof baseConfig = { ...baseConfig };
   const btcExit = await getEffectiveBtcExitConfig();
-  // P1.3 OB-imbalance thresholds + paper-resolver / market-finder knobs
-  // (all override-able via /trader-settings without a redeploy)
+  // P1.3 OB-imbalance thresholds + paper-resolver / market-finder knobs +
+  // live-readiness thresholds (all override-able via /trader-settings).
   let obUp = 1.8, obDown = 0.55;
   let paperFallbackAfterMs = 30 * 60 * 1000;
   let paperBrownianSigma   = 0.45;
   let btcMinPriceBand      = 0.10;
+  const readyOv: Record<string, number> = {};
   try {
     const mod: any = await import("../trader-settings.mts");
     const ov = await mod.loadRuntimeOverrides();
@@ -202,14 +206,56 @@ async function runCryptoTrader(
     if (typeof ov.paperFallbackAfterMs  === "number") paperFallbackAfterMs = ov.paperFallbackAfterMs;
     if (typeof ov.paperBrownianSigma    === "number") paperBrownianSigma   = ov.paperBrownianSigma;
     if (typeof ov.btcMinPriceBand       === "number") btcMinPriceBand      = ov.btcMinPriceBand;
+    for (const k of ["liveReadyMinTrades", "liveReadyMinWinRate", "liveReadyMinIC", "liveReadyMaxCalibDev", "liveReadyMinSharpe", "liveReadyMaxDrawdownPct"]) {
+      if (typeof ov[k] === "number") readyOv[k] = ov[k];
+    }
   } catch {}
   let session = await loadSession(config.paperMode, DEFAULT_BANKROLL);
 
+  // ─── Live-readiness gate ─────────────────────────────────
+  // Even if PAPER_MODE=false is configured, the bot will not place real
+  // money trades until the paper track record passes every applicable gate
+  // (trade count, IC, calibration deviation, sharpe, drawdown, sim version,
+  // session not stopped). When the gate trips we flip paperMode back to
+  // true for this tick and fire a Telegram alarm once per session.
+  const cryptoReadiness = computeLiveReadiness({
+    category: "crypto",
+    session,
+    simVersionExpected: PAPER_SIM_VERSION,
+    thresholds: {
+      minTrades:         readyOv.liveReadyMinTrades,
+      minWinRate:        readyOv.liveReadyMinWinRate,
+      minIC:             readyOv.liveReadyMinIC,
+      maxCalibrationDev: readyOv.liveReadyMaxCalibDev,
+      minSharpe:         readyOv.liveReadyMinSharpe,
+      maxDrawdownPct:    readyOv.liveReadyMaxDrawdownPct,
+    } as any,
+  });
+  const cryptoForce = shouldForcePaper(config.paperMode, cryptoReadiness);
+  if (cryptoForce.forcePaper) {
+    config.paperMode = true;
+    if (!session.calibrationAlertSentAt) {
+      log("ERROR", true, { liveBlocked: true, category: "crypto", reason: cryptoForce.reason });
+      const failed = cryptoReadiness.gates.filter((g) => g.applicable && !g.passed).map((g) => g.label);
+      await alertLiveBlocked("crypto", cryptoForce.reason!, failed);
+      session = { ...session, calibrationAlertSentAt: new Date().toISOString() };
+      await saveSession(session);
+    }
+  }
+
   // Helper: persists the final result snapshot into the run-state store and
   // returns the HTTP response. Every early return below funnels through this
-  // so the UI's "last run" pill always reflects what just happened.
+  // so the UI's "last run" pill always reflects what just happened. Also
+  // embeds liveReadiness + the effective paperMode so the UI can render the
+  // readiness badge from any of the cron tick payloads.
   const finish = async (payload: any, status = 200) => {
-    const enriched = { ...payload, source, finishedAt: new Date().toISOString() };
+    const enriched = {
+      ...payload,
+      source,
+      finishedAt: new Date().toISOString(),
+      paperMode: config.paperMode,
+      liveReadiness: cryptoReadiness,
+    };
     await markRunFinish(enriched).catch(() => {});
     return jsonResponse(enriched, status);
   };
@@ -477,6 +523,29 @@ async function getStatus(config: ReturnType<typeof getTraderConfig>, category: s
     session: sessionSummary(session),
     recentLogs: getLogBuffer().slice(-20),
   };
+
+  // Live-readiness gate verdict — surfaced for every category so each
+  // trader page can render a uniform "READY / NOT READY" badge.
+  let readyOv: any = {};
+  try {
+    const mod: any = await import("../trader-settings.mts");
+    readyOv = (await mod.loadRuntimeOverrides()) ?? {};
+  } catch {}
+  const thresholds = {
+    minTrades:         readyOv.liveReadyMinTrades,
+    minWinRate:        readyOv.liveReadyMinWinRate,
+    minIC:             readyOv.liveReadyMinIC,
+    maxCalibrationDev: readyOv.liveReadyMaxCalibDev,
+    minSharpe:         readyOv.liveReadyMinSharpe,
+    maxDrawdownPct:    readyOv.liveReadyMaxDrawdownPct,
+  } as any;
+  base.liveReadiness = computeLiveReadiness({
+    category: category as any,
+    session,
+    simVersionExpected: category === "crypto" ? PAPER_SIM_VERSION : null,
+    thresholds,
+  });
+
   // Surface weather-specific live status: lastRun timestamp, currently-
   // scanning flag, and the most recent run summary. Powers the UI badge.
   if (category === "weather") {

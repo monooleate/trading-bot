@@ -11,7 +11,8 @@
 // Public entry: runHyperliquidTrader(config) returns a JSON-ready summary.
 
 import { log } from "../shared/logger.mts";
-import { alertError } from "../shared/telegram.mts";
+import { alertError, alertLiveBlocked } from "../shared/telegram.mts";
+import { computeLiveReadiness, shouldForcePaper, type LiveReadinessReport } from "../shared/live-readiness.mts";
 import { getHlConfig } from "./config.mts";
 import { getHlSignalForCoin } from "./signal-source.mts";
 import { getCurrentPrice } from "./hl-client.mts";
@@ -71,15 +72,70 @@ async function runHyperliquidTraderInner(
   configOverride: HlTraderConfig | undefined,
   _source: "manual" | "cron",
 ): Promise<any> {
-  const config  = configOverride ?? getHlConfig();
+  const baseConfig = configOverride ?? getHlConfig();
+  // Mutable clone so the live-readiness gate can flip paperMode back to
+  // true when the paper track record hasn't met validation thresholds.
+  const config: HlTraderConfig = { ...baseConfig };
   let   session = await loadHlSession(config.paperMode);
+
+  // Live-readiness gate: convert HlClosedTrade → generic ClosedTrade for
+  // computeLiveReadiness, then force paper if the gate fails.
+  let liveReadiness: LiveReadinessReport | null = null;
+  try {
+    const tradesAsGeneric = session.closedTrades.map((t) => ({
+      market:     t.coin,
+      direction:  t.direction === "LONG" ? "YES" as const : "NO" as const,
+      entryPrice: t.entryPrice,
+      exitPrice:  t.exitPrice,
+      shares:     t.sizeCoins,
+      pnl:        t.pnlUSDC,
+      pnlPct:     t.pnlPct,
+      openedAt:   t.openedAt,
+      closedAt:   t.closedAt,
+      category:   "hyperliquid" as any,
+      predictedProb: t.predictedProb,
+      edgeAtEntry:   t.edgeAtEntry,
+      signalBreakdown: t.signalBreakdown ?? null,
+    }));
+    let readyOv: any = {};
+    try {
+      const mod: any = await import("../../trader-settings.mts");
+      readyOv = (await mod.loadRuntimeOverrides()) ?? {};
+    } catch {}
+    liveReadiness = computeLiveReadiness({
+      category: "hyperliquid",
+      session: {
+        closedTrades: [],
+        stopped: session.stopped,
+        stoppedReason: session.stoppedReason,
+        bankrollStart: session.bankrollStart,
+      } as any,
+      trades: tradesAsGeneric,
+      simVersionExpected: null,
+      thresholds: {
+        minTrades:         readyOv.liveReadyMinTrades,
+        minWinRate:        readyOv.liveReadyMinWinRate,
+        minSharpe:         readyOv.liveReadyMinSharpe,
+        maxDrawdownPct:    readyOv.liveReadyMaxDrawdownPct,
+      } as any,
+    });
+    const force = shouldForcePaper(config.paperMode, liveReadiness);
+    if (force.forcePaper) {
+      log("ERROR", true, { liveBlocked: true, category: "hyperliquid", reason: force.reason });
+      const failed = liveReadiness.gates.filter((g) => g.applicable && !g.passed).map((g) => g.label);
+      await alertLiveBlocked("hyperliquid", force.reason!, failed);
+      config.paperMode = true;
+    }
+  } catch (err: any) {
+    log("ERROR", true, { category: "hyperliquid", liveReadinessError: err?.message });
+  }
 
   // Session-level short-circuits
   if (session.stopped) {
-    return { ok: true, action: "skipped", reason: `Session stopped: ${session.stoppedReason}`, session: summarize(session) };
+    return { ok: true, action: "skipped", reason: `Session stopped: ${session.stoppedReason}`, session: summarize(session), liveReadiness };
   }
   if (session.pausedUntil && new Date(session.pausedUntil).getTime() > Date.now()) {
-    return { ok: true, action: "skipped", reason: `Paused until ${session.pausedUntil}`, session: summarize(session) };
+    return { ok: true, action: "skipped", reason: `Paused until ${session.pausedUntil}`, session: summarize(session), liveReadiness };
   }
 
   // ── Resolve any open paper positions FIRST. This replaces the old
@@ -234,6 +290,7 @@ async function runHyperliquidTraderInner(
     coinsScanned: SCAN_COINS.length,
     results,
     session: summarize(session),
+    liveReadiness,
   };
 }
 
@@ -242,6 +299,51 @@ export async function getHlStatus(): Promise<any> {
   const config  = getHlConfig();
   const session = await loadHlSession(config.paperMode);
   const runStatus = await getHlRunStatus();
+
+  // Compute live-readiness for the UI badge using the same converter the
+  // run loop uses, so the verdict is identical between status polls and
+  // post-run payloads.
+  let liveReadiness: LiveReadinessReport | null = null;
+  try {
+    const tradesAsGeneric = session.closedTrades.map((t) => ({
+      market:     t.coin,
+      direction:  t.direction === "LONG" ? "YES" as const : "NO" as const,
+      entryPrice: t.entryPrice,
+      exitPrice:  t.exitPrice,
+      shares:     t.sizeCoins,
+      pnl:        t.pnlUSDC,
+      pnlPct:     t.pnlPct,
+      openedAt:   t.openedAt,
+      closedAt:   t.closedAt,
+      category:   "hyperliquid" as any,
+      predictedProb: t.predictedProb,
+      edgeAtEntry:   t.edgeAtEntry,
+      signalBreakdown: t.signalBreakdown ?? null,
+    }));
+    let readyOv: any = {};
+    try {
+      const mod: any = await import("../../trader-settings.mts");
+      readyOv = (await mod.loadRuntimeOverrides()) ?? {};
+    } catch {}
+    liveReadiness = computeLiveReadiness({
+      category: "hyperliquid",
+      session: {
+        closedTrades: [],
+        stopped: session.stopped,
+        stoppedReason: session.stoppedReason,
+        bankrollStart: session.bankrollStart,
+      } as any,
+      trades: tradesAsGeneric,
+      simVersionExpected: null,
+      thresholds: {
+        minTrades:         readyOv.liveReadyMinTrades,
+        minWinRate:        readyOv.liveReadyMinWinRate,
+        minSharpe:         readyOv.liveReadyMinSharpe,
+        maxDrawdownPct:    readyOv.liveReadyMaxDrawdownPct,
+      } as any,
+    });
+  } catch {}
+
   return {
     ok: true,
     action: "status",
@@ -250,6 +352,7 @@ export async function getHlStatus(): Promise<any> {
     runStatus,
     // HL is wired into auto-trader-multi-cron */3 * * * *, always-on.
     cronEnabled: true,
+    liveReadiness,
   };
 }
 

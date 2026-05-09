@@ -1,6 +1,7 @@
 import { getStore } from "@netlify/blobs";
 import { log } from "../shared/logger.mts";
-import { alertError } from "../shared/telegram.mts";
+import { alertError, alertLiveBlocked } from "../shared/telegram.mts";
+import { computeLiveReadiness, shouldForcePaper, type LiveReadinessReport } from "../shared/live-readiness.mts";
 import { findWeatherMarketsDetailed } from "./market-finder.mts";
 import type { WeatherMarket, DroppedEvent } from "./market-finder.mts";
 import { getStation, getSeason } from "./station-config.mts";
@@ -141,8 +142,44 @@ export async function runWeatherTrader(
   return { ...result, source, startedAt, finishedAt: new Date().toISOString() };
 }
 
-async function runWeatherTraderInner(config: WeatherConfig) {
+async function runWeatherTraderInner(configIn: WeatherConfig) {
+  // Mutable clone so the live-readiness gate can flip paperMode back to
+  // true if the paper track record hasn't yet met validation thresholds.
+  const config: WeatherConfig = { ...configIn };
   const session = await loadSession(config.paperMode, DEFAULT_BANKROLL, "weather");
+
+  // Live-readiness gate: weather is prediction-driven (forecast-vs-bucket
+  // probability), so the IC / calibration gates apply. Closed trades are
+  // already in generic ClosedTrade shape since the weather reconciler
+  // writes through the shared session-manager.
+  let liveReadiness: LiveReadinessReport | null = null;
+  try {
+    let readyOv: any = {};
+    try {
+      const mod: any = await import("../../trader-settings.mts");
+      readyOv = (await mod.loadRuntimeOverrides()) ?? {};
+    } catch {}
+    liveReadiness = computeLiveReadiness({
+      category: "weather",
+      session,
+      simVersionExpected: null,
+      thresholds: {
+        minTrades:         readyOv.liveReadyMinTrades,
+        minWinRate:        readyOv.liveReadyMinWinRate,
+        minIC:             readyOv.liveReadyMinIC,
+        maxCalibrationDev: readyOv.liveReadyMaxCalibDev,
+        minSharpe:         readyOv.liveReadyMinSharpe,
+        maxDrawdownPct:    readyOv.liveReadyMaxDrawdownPct,
+      } as any,
+    });
+    const force = shouldForcePaper(config.paperMode, liveReadiness);
+    if (force.forcePaper) {
+      log("ERROR", true, { liveBlocked: true, category: "weather", reason: force.reason });
+      const failed = liveReadiness.gates.filter((g) => g.applicable && !g.passed).map((g) => g.label);
+      await alertLiveBlocked("weather", force.reason!, failed);
+      config.paperMode = true;
+    }
+  } catch {}
 
   if (session.stopped) {
     return {
@@ -150,6 +187,7 @@ async function runWeatherTraderInner(config: WeatherConfig) {
       action: "skipped",
       reason: `Session stopped: ${session.stoppedReason}`,
       session: summarize(session),
+      liveReadiness,
     };
   }
 
@@ -162,6 +200,7 @@ async function runWeatherTraderInner(config: WeatherConfig) {
       reason: "Near model update boundary, waiting",
       modelLag,
       session: summarize(session),
+      liveReadiness,
     };
   }
 
@@ -174,6 +213,7 @@ async function runWeatherTraderInner(config: WeatherConfig) {
       reason: "No active weather temperature markets found",
       droppedEvents: dropped.slice(0, 20),
       session: summarize(session),
+      liveReadiness,
     };
   }
 
@@ -353,6 +393,7 @@ async function runWeatherTraderInner(config: WeatherConfig) {
       useEnsemble:     config.useEnsemble,
     },
     session: summarize(updatedSession),
+    liveReadiness,
   };
 }
 

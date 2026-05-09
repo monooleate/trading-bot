@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect } from "react";
+import LiveReadinessBadge from "../shared/LiveReadinessBadge";
 
 const FN = "/.netlify/functions/auto-trader-api";
 
@@ -94,6 +95,8 @@ export default function FundingArbPanel() {
       <div className="fa-sub">
         Delta-neutral carry • SHORT Hyperliquid perp + LONG Binance spot
       </div>
+
+      <LiveReadinessBadge category="funding-arb" />
 
       {session && (
         <div className="fa-stats">

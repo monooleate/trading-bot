@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import CalibrationHealthBadge from "../shared/CalibrationHealthBadge";
+import LiveReadinessBadge from "../shared/LiveReadinessBadge";
 
 const FN = "/.netlify/functions/auto-trader-api";
 
@@ -229,6 +230,12 @@ export default function CryptoTrader() {
           </div>
         </div>
       </div>
+
+      {/* Live-readiness — multi-gate verdict from /auto-trader-api status.
+          When red, the cron loop is force-flipped to PAPER even if
+          PAPER_MODE=false is configured, so live trading is structurally
+          gated until every threshold is met. */}
+      <LiveReadinessBadge category="crypto" refreshKey={healthRefresh} />
 
       {/* Calibration health — paper signal verdict, fetched from edge-tracker.
           Lives at the top so the operator sees noise/calibrated status before

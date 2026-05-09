@@ -320,5 +320,101 @@ src/components/trader/CryptoTrader.tsx                           rewrite: status
 
 - **Per-tick TP/SL polling paper módban**: jelenleg a paper position holding-to-end vagy Brownian-fallback útján zár. Élesben a `order-lifecycle` poll-olja a YES árat és TP/SL-en zár. A paper-be is lehetne CLOB midprice polling 30s-onként, hogy a TP/SL profile éles és paper között 1:1 legyen. Most még nem szükséges (real-resolution az igazi mérce).
 - **`auto-trader-multi-cron` `?source=cron` passzolása** — ha még nem teszi, hozzáadni hogy a runStatus.source pontosan tükrözze a cron-eredetű futásokat is.
+
+---
+
+## Egységes live-readiness gate (mind a 4 traderre)
+
+A felhasználó kérése: "minden bot szimulálja a kereskedést paper-ben, és csak akkor menjen élesbe ha a sim valid". Ezért:
+
+### 1. `auto-trader/shared/live-readiness.mts` — single source of truth
+
+Új modul. `computeLiveReadiness(args)` minden trader category-ben ugyanazt a 7 gate-et ellenőrzi a session.closedTrades alapján:
+
+| Gate              | Default     | Crypto | Weather | HL  | Funding-arb |
+|-------------------|-------------|--------|---------|-----|-------------|
+| Trade count       | ≥ 30        | ✓      | ✓       | ✓   | ✓           |
+| Win rate          | ≥ 50%       | ✓      | ✓       | ✓   | ✓           |
+| Max \|IC\|        | ≥ 5%        | ✓      | ✓       | —   | —           |
+| Calibration dev   | < 7%        | ✓      | ✓       | —   | —           |
+| Sharpe ratio      | ≥ 0.5       | ✓      | ✓       | ✓   | ✓           |
+| Max drawdown      | < 25%       | ✓      | ✓       | ✓   | ✓           |
+| Sim version       | == current  | ✓      | —       | —   | —           |
+| Session active    | not stopped | ✓      | ✓       | ✓   | ✓           |
+
+A funding-arb rate-driven (nem prediction-driven), így az IC + calibration gates N/A. A többi 4 gate ott is alkalmazandó.
+
+`shouldForcePaper(configuredPaperMode, readiness)` az enforcement helper: ha `paperMode=false` és `readiness.ready=false`, akkor `{ forcePaper: true, reason: ... }`.
+
+### 2. Cron-path enforcement minden traderben
+
+Mind a 4 cron loop (`runCryptoTrader`, `runWeatherTraderInner`, `runHyperliquidTraderInner`, `runFundingArbLoop`) elején lefut a gate. Ha `shouldForcePaper.forcePaper === true`:
+
+- `config.paperMode = true` (mutable clone) — strukturálisan lehetetlenné teszi a live trade-et a tickben
+- `alertLiveBlocked(category, reason, failedGates)` Telegram alarm
+- `log(ERROR, { liveBlocked: true })` audit-trailre
+- A futás ennek ellenére folytatódik paper-ben, így a paper PnL továbbra is gyűlik
+
+### 3. Status response + UI
+
+Új `getStatus`-ban (auto-trader/index.mts) minden category-re a `liveReadiness` payload visszamegy. HL-nek és funding-arb-nak külön getter (mert saját session shape-jük van — generic `ClosedTrade`-re konvertálnak inline).
+
+### 4. `src/components/shared/LiveReadinessBadge.tsx` — közös UI
+
+Két variant: `full` (gate-rows) és `compact` (egysoros verdict). Minden trader landing oldalon (Crypto, Weather, HL, FundingArb) megjelenik. Színkódok:
+
+- 🟢 LIVE-READY (zöld) — minden alkalmazandó gate átment
+- 🟠 PAPER ONLY (narancs) — legalább egy gate failed → live trading auto-suspended
+
+Self-fetcheli a `/auto-trader-api?action=status&category=…`-ot. Refresh-key bumpolódik minden Run/Reset/Stop akció után.
+
+### 5. Settings — egységes konfigurálható thresholds
+
+Új `category: "common"` SCHEMA fields a `trader-settings.mts`-ben, "Live readiness" group:
+
+| Key                       | Default | Min | Max | Unit  |
+|---------------------------|---------|-----|-----|-------|
+| `liveReadyMinTrades`      | 30      | 10  | 300 | n     |
+| `liveReadyMinWinRate`     | 0.50    | 0.30 | 0.80 | frac |
+| `liveReadyMinIC`          | 0.05    | 0.01 | 0.30 | frac |
+| `liveReadyMaxCalibDev`    | 0.07    | 0.01 | 0.30 | frac |
+| `liveReadyMinSharpe`      | 0.5     | 0   | 5.0 | ratio |
+| `liveReadyMaxDrawdownPct` | 25      | 5   | 80  | pct   |
+
+Egy globális tuning surface — minden trader ezt olvassa.
+
+### 6. Telegram
+
+Új helper: `alertLiveBlocked(category, reason, failedGates)`. Egyszer/session küld (a calibrationAlertSentAt flag már ott volt).
+
+### Érintett fájlok
+
+```
+netlify/functions/auto-trader/shared/live-readiness.mts          ÚJ közös modul
+netlify/functions/auto-trader/shared/telegram.mts                + alertLiveBlocked
+netlify/functions/auto-trader/index.mts                          crypto gate + getStatus liveReadiness
+netlify/functions/auto-trader/weather/index.mts                  weather gate + early returns
+netlify/functions/auto-trader/hyperliquid/index.mts              HL gate + getHlStatus liveReadiness
+netlify/functions/auto-trader/hyperliquid/funding-arb/index.mts  funding-arb gate (rate-driven, IC kihagyva)
+netlify/functions/trader-settings.mts                            6 új "common" knob
+src/components/shared/LiveReadinessBadge.tsx                     ÚJ közös UI komponens (full + compact variant)
+src/components/trader/CryptoTrader.tsx                           badge a header alatt
+src/components/trader/WeatherTrader.tsx                          badge
+src/components/trader/HyperliquidTrader.tsx                      badge
+src/components/trader/FundingArbPanel.tsx                        badge
+```
+
+### Mit jelent ez gyakorlatban
+
+A user nem tud véletlenül élesre menni paper-validálás nélkül. Akármi is a `PAPER_MODE` env, ha a session.closedTrades nem tölti be a 7 gate-et, a cron loop minden tick-en visszaállítja paper-be. Ez **strukturális garancia** — nem UI-szintű figyelmeztetés.
+
+A 4 paper sim már független a saját predikciótól (audit eredménye):
+
+- **Crypto**: real Polymarket settlement + Brownian-bridge fallback (Bernoulli(marketPriceAtEntry) null)
+- **Weather**: real Polymarket settlement + METAR daily-max fallback
+- **Hyperliquid**: live HL markPrice TP/SL crossing
+- **Funding-arb**: real funding spreads (rate-driven by design)
+
+Tehát az IC/Sharpe/win-rate/drawdown gates **valós piaci kimenetelekre** alapulnak.
 - **IC kalibráció:** ha 50+ valós paper trade után a IC értékek tényleg ≥0.05-re jönnek fel, akkor a `signal-combiner` IC weightingjét újrahangolni az új mérési értékekre.
 - **Edge-decay alarm:** ha az IC eleinte jó volt majd 0-ra esett, az is alarm-érték (signal degradálódik). Most még nincs benne.

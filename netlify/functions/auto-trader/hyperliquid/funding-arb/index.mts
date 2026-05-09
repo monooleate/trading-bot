@@ -11,7 +11,8 @@
 //      respecting position count, per-coin uniqueness, and capital cap.
 
 import { log } from "../../shared/logger.mts";
-import { alertError } from "../../shared/telegram.mts";
+import { alertError, alertLiveBlocked } from "../../shared/telegram.mts";
+import { computeLiveReadiness, shouldForcePaper, type LiveReadinessReport } from "../../shared/live-readiness.mts";
 import { loadHlSession } from "../session-manager.mts";
 import type { HlCoin } from "../types.mts";
 import { scanFundings } from "./fr-scanner.mts";
@@ -36,11 +37,64 @@ import type { ArbSessionState, ArbPosition } from "./types.mts";
 const ARB_COINS: HlCoin[] = ["BTC", "ETH", "SOL", "XRP", "AVAX"];
 
 export async function runFundingArbLoop(): Promise<any> {
-  const config = getFrArbConfig();
+  const baseConfig = getFrArbConfig();
+  // Mutable clone so the live-readiness gate can flip paperMode back to
+  // true if the paper track record hasn't yet met validation thresholds.
+  const config: typeof baseConfig = { ...baseConfig };
   let session  = await loadArbSession(config.paperMode);
 
+  // Live-readiness gate: funding-arb is rate-driven (not prediction-driven),
+  // so IC / calibration gates are N/A. We still enforce trade count, sharpe,
+  // drawdown, sim version, and session-active gates.
+  let liveReadiness: LiveReadinessReport | null = null;
+  try {
+    const closedTrades = (session.positions ?? [])
+      .filter((p) => p.closedAt && (p.closeFundingNet ?? null) !== null)
+      .map((p) => ({
+        market:     p.coin,
+        direction:  "NO" as const,                  // SHORT leg by convention
+        entryPrice: p.hlEntryPrice ?? 0,
+        exitPrice:  0,
+        shares:     p.sizeCoins ?? 0,
+        pnl:        p.closeFundingNet ?? 0,
+        pnlPct:     p.sizeUSDC > 0 ? ((p.closeFundingNet ?? 0) / p.sizeUSDC) * 100 : 0,
+        openedAt:   p.openedAt,
+        closedAt:   p.closedAt!,
+        category:   "funding-arb" as any,
+      }));
+    let readyOv: any = {};
+    try {
+      const mod: any = await import("../../../trader-settings.mts");
+      readyOv = (await mod.loadRuntimeOverrides()) ?? {};
+    } catch {}
+    liveReadiness = computeLiveReadiness({
+      category: "funding-arb",
+      session: {
+        closedTrades: [],
+        stopped: session.stopped,
+        stoppedReason: session.stoppedReason,
+        bankrollStart: 100,
+      } as any,
+      trades: closedTrades,
+      simVersionExpected: null,
+      thresholds: {
+        minTrades:         readyOv.liveReadyMinTrades,
+        minWinRate:        readyOv.liveReadyMinWinRate,
+        minSharpe:         readyOv.liveReadyMinSharpe,
+        maxDrawdownPct:    readyOv.liveReadyMaxDrawdownPct,
+      } as any,
+    });
+    const force = shouldForcePaper(config.paperMode, liveReadiness);
+    if (force.forcePaper) {
+      log("ERROR", true, { liveBlocked: true, category: "funding-arb", reason: force.reason });
+      const failed = liveReadiness.gates.filter((g) => g.applicable && !g.passed).map((g) => g.label);
+      await alertLiveBlocked("funding-arb", force.reason!, failed);
+      config.paperMode = true;
+    }
+  } catch {}
+
   if (session.stopped) {
-    return { ok: true, action: "skipped", reason: `Arb session stopped: ${session.stoppedReason}`, session: summarize(session) };
+    return { ok: true, action: "skipped", reason: `Arb session stopped: ${session.stoppedReason}`, session: summarize(session), liveReadiness };
   }
 
   // 1. Accrue funding across open positions
@@ -159,6 +213,7 @@ export async function runFundingArbLoop(): Promise<any> {
       results,
       opportunities: topSnapshot,
       session:      summarize(session),
+      liveReadiness,
     };
   } catch (err: any) {
     log("ERROR", config.paperMode, { venue: "hyperliquid-arb", error: err.message });

@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react";
+import LiveReadinessBadge from "../shared/LiveReadinessBadge";
 
 const FN = "/.netlify/functions/auto-trader-api";
 
@@ -141,6 +142,8 @@ export default function HyperliquidTrader() {
           </div>
         </div>
       </div>
+
+      <LiveReadinessBadge category="hyperliquid" />
 
       <div className="hl-sub">
         Perp execution engine • BTC / ETH / SOL • signals reused from Polymarket combiner

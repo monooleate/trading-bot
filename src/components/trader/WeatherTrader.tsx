@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react";
+import LiveReadinessBadge from "../shared/LiveReadinessBadge";
 
 const FN = "/.netlify/functions/auto-trader-api";
 
@@ -171,6 +172,8 @@ export default function WeatherTrader() {
           </div>
         </div>
       </div>
+
+      <LiveReadinessBadge category="weather" />
 
       <div className="wt-info">
         Edge sources: GFS/ECMWF/NOAA blend, 31-member ensemble (opt-in), DEB per-city weights, METAR Fahrenheit rounding
