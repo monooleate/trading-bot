@@ -129,22 +129,54 @@ async function fetchBTCMarkets() {
 }
 
 // ─── CLOB midpoint lekérés ────────────────────────────────────────────────────
+// Gamma `/markets` does NOT return a `tokens` array — only `clobTokenIds` as
+// a JSON-encoded string (verified via the official Polymarket Python SDK and
+// the live API). The previous `m.tokens` reference always returned an empty
+// list, leaving `mids` empty and falling back to a 0.5 default — silently
+// breaking the IV calculation. Parse the documented field instead.
+function extractTokenIds(m: any): { yes: string | null; no: string | null } {
+  if (m.clobTokenIds) {
+    try {
+      const ids = typeof m.clobTokenIds === "string"
+        ? JSON.parse(m.clobTokenIds)
+        : m.clobTokenIds;
+      if (Array.isArray(ids) && ids.length >= 2) {
+        return { yes: String(ids[0]), no: String(ids[1]) };
+      }
+    } catch { /* fall through */ }
+  }
+  // Forward-compatible fallback if Gamma ever surfaces a `tokens` array.
+  if (Array.isArray(m.tokens) && m.tokens.length >= 2) {
+    const yesT = m.tokens.find((t: any) => /^(yes|up)$/i.test(t.outcome || ""));
+    const noT  = m.tokens.find((t: any) => /^(no|down)$/i.test(t.outcome || ""));
+    return {
+      yes: yesT?.token_id || m.tokens[0]?.token_id || null,
+      no:  noT?.token_id  || m.tokens[1]?.token_id || null,
+    };
+  }
+  return { yes: null, no: null };
+}
+
 async function fetchMidpoints(markets: any[]): Promise<Map<string, number>> {
   const mids = new Map<string, number>();
+  const allTokenIds: string[] = [];
+  for (const m of markets) {
+    const { yes, no } = extractTokenIds(m);
+    if (yes) allTokenIds.push(yes);
+    if (no)  allTokenIds.push(no);
+  }
   await Promise.allSettled(
-    markets.flatMap((m: any) =>
-      (m.tokens || []).map(async (t: any) => {
-        const tid = t.token_id || t.tokenId;
-        if (!tid) return;
-        try {
-          const r = await fetch(`${CLOB_API}/midpoint?token_id=${tid}`, {
-            signal: AbortSignal.timeout(4000),
-          });
-          const d = await r.json() as any;
-          mids.set(tid, parseFloat(d.mid || 0));
-        } catch {}
-      })
-    )
+    allTokenIds.map(async (tid) => {
+      try {
+        const r = await fetch(`${CLOB_API}/midpoint?token_id=${tid}`, {
+          signal: AbortSignal.timeout(4000),
+        });
+        if (!r.ok) return;
+        const d = await r.json() as any;
+        const mid = parseFloat(d.mid || 0);
+        if (Number.isFinite(mid) && mid > 0) mids.set(tid, mid);
+      } catch {}
+    })
   );
   return mids;
 }
@@ -210,16 +242,25 @@ export default async function handler(req: Request, _ctx: Context) {
     const mids = btcMarkets.length > 0 ? await fetchMidpoints(btcMarkets) : new Map();
 
     const markets = btcMarkets.map((m: any) => {
-      const tokens = (m.tokens || []).map((t: any) => {
-        const tid = t.token_id || t.tokenId;
-        return { outcome: t.outcome, token_id: tid, mid: mids.get(tid) ?? 0 };
-      });
+      // Use the same clobTokenIds-first extractor as fetchMidpoints. If CLOB
+      // midpoint is missing, fall back to Gamma's stored `outcomePrices`.
+      const ids = extractTokenIds(m);
+      const yesMid = ids.yes ? mids.get(ids.yes) : undefined;
+      const noMid  = ids.no  ? mids.get(ids.no)  : undefined;
 
-      const yes = tokens.find((t: any) => t.outcome?.toUpperCase() === "YES" || t.outcome?.toUpperCase() === "UP");
-      const no  = tokens.find((t: any) => t.outcome?.toUpperCase() === "NO"  || t.outcome?.toUpperCase() === "DOWN");
+      let storedYes = 0.5, storedNo = 0.5;
+      try {
+        const op = typeof m.outcomePrices === "string"
+          ? JSON.parse(m.outcomePrices)
+          : m.outcomePrices;
+        if (Array.isArray(op) && op.length >= 2) {
+          storedYes = parseFloat(op[0]);
+          storedNo  = parseFloat(op[1]);
+        }
+      } catch {}
 
-      const yesPrice = yes?.mid ?? 0.5;
-      const noPrice  = no?.mid  ?? 0.5;
+      const yesPrice = Number.isFinite(yesMid as number) ? (yesMid as number) : storedYes;
+      const noPrice  = Number.isFinite(noMid  as number) ? (noMid  as number) : storedNo;
 
       // Remaining time estimation (15m kontraktnál max 15 perc van hátra)
       const endDate = m.endDate || m.end_date_iso || "";

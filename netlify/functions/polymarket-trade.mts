@@ -77,6 +77,26 @@ export default async function handler(req: Request, ctx: Context) {
           const op = typeof m.outcomePrices === "string" ? JSON.parse(m.outcomePrices) : m.outcomePrices;
           if (Array.isArray(op)) yp = parseFloat(op[0]);
         } catch {}
+        // Gamma /markets returns `clobTokenIds` (JSON-encoded string), not a
+        // `tokens` array — the previous `(m.tokens || []).map` always
+        // produced an empty list, which broke trade execution downstream.
+        let tokens: { outcome: string; token_id: string }[] = [];
+        try {
+          if (m.clobTokenIds) {
+            const ids = typeof m.clobTokenIds === "string" ? JSON.parse(m.clobTokenIds) : m.clobTokenIds;
+            if (Array.isArray(ids) && ids.length >= 2 && ids[0] && ids[1]) {
+              tokens = [
+                { outcome: "YES", token_id: String(ids[0]) },
+                { outcome: "NO",  token_id: String(ids[1]) },
+              ];
+            }
+          } else if (Array.isArray(m.tokens) && m.tokens.length > 0) {
+            tokens = m.tokens.map((t: any) => ({
+              outcome:  String(t.outcome || ""),
+              token_id: String(t.token_id || ""),
+            }));
+          }
+        } catch {}
         return {
           question:   m.question,
           slug:       m.slug,
@@ -84,7 +104,7 @@ export default async function handler(req: Request, ctx: Context) {
           no_price:   Math.round((1 - yp) * 10000) / 10000,
           volume_24h: parseFloat(m.volume24hr || 0),
           end_date:   m.endDate,
-          tokens:     (m.tokens || []).map((t: any) => ({ outcome: t.outcome, token_id: t.token_id })),
+          tokens,
           url: `https://polymarket.com/event/${m.slug}`,
         };
       });

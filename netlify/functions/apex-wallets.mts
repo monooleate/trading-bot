@@ -660,7 +660,11 @@ export default async function handler(req: Request, _ctx: Context) {
       if (needLookup.length > 0) {
         await Promise.allSettled(needLookup.map(async (c) => {
           try {
-            const res = await fetch(`${GAMMA_API}/markets?condition_id=${c.market}`, {
+            // Gamma's `condition_id` (singular) param is silently ignored
+            // and returns the top-volume market instead of the requested one
+            // — verified against the live API. The documented filter is
+            // `condition_ids` (plural).
+            const res = await fetch(`${GAMMA_API}/markets?condition_ids=${encodeURIComponent(c.market)}`, {
               signal: AbortSignal.timeout(4000),
             });
             if (!res.ok) return;

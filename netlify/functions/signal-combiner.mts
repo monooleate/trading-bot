@@ -56,9 +56,121 @@ interface MarketInfo {
   closed:           boolean;
 }
 
+// ─── Helpers shared by both resolution paths ─────────────────────────────────
+
+// Parse the YES / NO clob token IDs from a Gamma market object. The Gamma
+// API consistently returns `clobTokenIds` as a JSON-encoded string (e.g.
+// '["123…", "456…"]') and does NOT include a top-level `tokens` array on the
+// markets endpoint — even though the legacy code path expected one. We keep
+// the `tokens` fallback for forward compatibility in case the API ever
+// surfaces it, but in practice every modern Polymarket market goes through
+// the clobTokenIds JSON-string branch.
+function parseTokenIds(m: any): { yesTokenId: string; noTokenId: string } | null {
+  // Preferred path — clobTokenIds is the documented field.
+  if (m.clobTokenIds) {
+    try {
+      const ids = typeof m.clobTokenIds === "string"
+        ? JSON.parse(m.clobTokenIds)
+        : m.clobTokenIds;
+      if (Array.isArray(ids) && ids.length >= 2 && ids[0] && ids[1]) {
+        return { yesTokenId: String(ids[0]), noTokenId: String(ids[1]) };
+      }
+    } catch { /* fall through */ }
+  }
+  // Forward-compatible fallback — if Gamma ever returns a tokens array.
+  if (Array.isArray(m.tokens) && m.tokens.length >= 2) {
+    const yes = m.tokens.find((t: any) => (t.outcome || "").toUpperCase() === "YES");
+    const no  = m.tokens.find((t: any) => (t.outcome || "").toUpperCase() === "NO");
+    const a = yes?.token_id ?? m.tokens[0]?.token_id;
+    const b = no?.token_id  ?? m.tokens[1]?.token_id;
+    if (a && b) return { yesTokenId: String(a), noTokenId: String(b) };
+  }
+  return null;
+}
+
+function parseYesNoPrices(m: any): { yp: number; np: number } {
+  try {
+    const op = typeof m.outcomePrices === "string"
+      ? JSON.parse(m.outcomePrices)
+      : m.outcomePrices;
+    if (Array.isArray(op) && op.length >= 2) {
+      const yp = parseFloat(op[0]);
+      const np = parseFloat(op[1]);
+      if (Number.isFinite(yp) && Number.isFinite(np)) return { yp, np };
+    }
+  } catch { /* fall through */ }
+  return { yp: 0.5, np: 0.5 };
+}
+
+// Resolve a market by its market slug (e.g. "bitcoin-above-80k-on-may-9").
+// Returns null if no live market matches. The Gamma `/markets?slug=` endpoint
+// returns an array; the market object also carries an `events` array whose
+// first entry yields the event slug for URL building.
+async function resolveByMarketSlug(slug: string): Promise<MarketInfo | null> {
+  try {
+    const r = await fetch(
+      `${GAMMA}/markets?slug=${encodeURIComponent(slug)}&limit=1`,
+      { signal: AbortSignal.timeout(6000) },
+    );
+    if (!r.ok) return null;
+    const data: any = await r.json();
+    const list: any[] = Array.isArray(data) ? data : [];
+    const m = list[0];
+    if (!m) return null;
+    if (m.closed === true) return null;
+    if (m.endDate && new Date(m.endDate).getTime() < Date.now()) return null;
+
+    const tokens = parseTokenIds(m);
+    if (!tokens) return null;
+    const { yp, np } = parseYesNoPrices(m);
+
+    const eventSlug = Array.isArray(m.events) && m.events[0]?.slug
+      ? String(m.events[0].slug)
+      : "";
+    const eventDescription = Array.isArray(m.events) && m.events[0]?.description
+      ? String(m.events[0].description)
+      : "";
+    const tags = (Array.isArray(m.events) && m.events[0]?.tags) || m.tags || [];
+    const catRaw = Array.isArray(tags) && tags[0]
+      ? ((typeof tags[0] === "object" ? tags[0].label : tags[0]) || "").toString()
+      : "";
+
+    const marketSlug = String(m.slug || slug);
+    return {
+      question:         String(m.question || m.title || ""),
+      slug:             marketSlug,
+      conditionId:      String(m.conditionId || m.id || ""),
+      yesTokenId:       tokens.yesTokenId,
+      noTokenId:        tokens.noTokenId,
+      yesPrice:         yp,
+      noPrice:          np,
+      volume24h:        parseFloat(m.volume24hr || m.volume || "0") || 0,
+      endDate:          String(m.endDate || ""),
+      url: eventSlug
+        ? `https://polymarket.com/event/${eventSlug}/${marketSlug}`
+        : `https://polymarket.com/market/${marketSlug}`,
+      rules:            String(m.description || eventDescription || ""),
+      resolutionSource: String(m.resolutionSource || ""),
+      category:         catRaw,
+      closed:           !!m.closed,
+    };
+  } catch { return null; }
+}
+
 // ─── Resolve market from slug or auto-pick top volume ─────────────────────────
 async function resolveMarket(slug?: string): Promise<MarketInfo | null> {
   try {
+    // FAST PATH — try market-slug lookup first. The auto-trader's signal
+    // aggregator passes a *market* slug (e.g. "bitcoin-above-80k-on-may-9"),
+    // not an event slug; the legacy events lookup below would return 0
+    // hits for those and the function used to 404. The /markets?slug=
+    // endpoint resolves the exact market in one call and exposes the
+    // parent event slug for URL building.
+    if (slug) {
+      const fast = await resolveByMarketSlug(slug);
+      if (fast) return fast;
+    }
+
     // Use events API for correct event_slug → URL mapping
     const eventsUrl = slug
       ? `${GAMMA}/events?slug=${encodeURIComponent(slug.replace(/-\d+$/, ""))}&limit=5`
@@ -420,19 +532,25 @@ async function getMomentumSignal(market: MarketInfo): Promise<{ prob: number | n
       if (midRes.ok) { const d = await midRes.json() as any; currentMid = parseFloat(d.mid || market.yesPrice); }
     } catch {}
 
-    // Get price history — try CLOB prices-history, fallback to Gamma timeseries
+    // Get a "past price" reference from Gamma's stored snapshot. Note: the
+    // path-style `/markets/{id}` endpoint accepts only numeric ids — a slug
+    // there returns "validation error: id is invalid" — so we go through
+    // `?slug=` which yields an array.
     let pastPrice = market.yesPrice;
     try {
-      // Gamma market history endpoint
       const histRes = await fetch(
-        `${GAMMA}/markets/${market.slug}?limit=1`,
+        `${GAMMA}/markets?slug=${encodeURIComponent(market.slug)}&limit=1`,
         { signal: AbortSignal.timeout(4000) },
       );
       if (histRes.ok) {
-        const hist = await histRes.json() as any;
-        // Use the market's stored price as "past" reference
-        const op = typeof hist.outcomePrices === "string" ? JSON.parse(hist.outcomePrices) : hist.outcomePrices;
-        if (Array.isArray(op)) pastPrice = parseFloat(op[0]);
+        const histArr: any = await histRes.json();
+        const hist = Array.isArray(histArr) ? histArr[0] : null;
+        if (hist) {
+          const op = typeof hist.outcomePrices === "string"
+            ? JSON.parse(hist.outcomePrices)
+            : hist.outcomePrices;
+          if (Array.isArray(op) && op.length > 0) pastPrice = parseFloat(op[0]);
+        }
       }
     } catch {}
 

@@ -82,16 +82,25 @@ export default async function handler(req: Request, context: Context) {
           return (typeof tags[0] === "object" ? tags[0].label : tags[0] || "egyéb").toLowerCase();
         })();
 
-        // Parse clobTokenIds for CLOB order book
+        // Parse clobTokenIds for CLOB order book. Gamma `/events` markets
+        // don't carry a `tokens` array — only `clobTokenIds` (JSON-encoded
+        // string). The forward-compatible `tokens` branch is kept defensively
+        // in case Polymarket adds it later.
         let tokens: { outcome: string; token_id: string }[] = [];
         try {
-          if (m.tokens && Array.isArray(m.tokens) && m.tokens.length > 0) {
-            tokens = m.tokens.map((t: any) => ({ outcome: t.outcome || "", token_id: t.token_id || "" }));
-          } else if (m.clobTokenIds) {
+          if (m.clobTokenIds) {
             const ids = typeof m.clobTokenIds === "string" ? JSON.parse(m.clobTokenIds) : m.clobTokenIds;
-            if (Array.isArray(ids) && ids.length >= 2) {
-              tokens = [{ outcome: "YES", token_id: ids[0] }, { outcome: "NO", token_id: ids[1] }];
+            if (Array.isArray(ids) && ids.length >= 2 && ids[0] && ids[1]) {
+              tokens = [
+                { outcome: "YES", token_id: String(ids[0]) },
+                { outcome: "NO",  token_id: String(ids[1]) },
+              ];
             }
+          } else if (Array.isArray(m.tokens) && m.tokens.length > 0) {
+            tokens = m.tokens.map((t: any) => ({
+              outcome:  String(t.outcome || ""),
+              token_id: String(t.token_id || ""),
+            }));
           }
         } catch {}
 

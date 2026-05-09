@@ -555,3 +555,124 @@ forwardolja a badge-be, így a `LiveReadinessBadge` extra fetch-et nem indít.
 `useAutoTraderStatus` + a megfelelő cards-szel. Új feature (pl. pozíció-
 részletek modal, edge sparkline) egyetlen helyen kerül be és minden bot
 megkapja.
+
+---
+
+## Polymarket Gamma API hívások megerősítése (atomgyilag biztos paraméterek)
+
+### Kontextus
+
+Élő smoke-test mutatta, hogy a crypto auto-trader Run Scan minden tickkor
+"Too few active signals: 0 < 2" reasonnel skipel — soha nem nyit pozíciót.
+Ez ahhoz a következményhez vezet, hogy a paper IC sosem mérhető és a
+live readiness gate (30+ trade) soha nem fog billenni. A nyomozás a
+Gamma API hívások paraméter-szintű hibáit mutatta ki.
+
+A hivatalos Polymarket Gamma docs (`docs.polymarket.com/developers/gamma-markets-api`)
+és a hivatalos Python SDK (`Polymarket/agents` repo) + élő API-cross-check
+alapján dokumentált tények:
+
+- **`tag` (string) NEM létezik** — a paraméter csendben ignoráltatik, és
+  a kérés top-by-volume eredményt ad bármi tagre. A doksi szerint
+  `tag_id` (numeric) a helyes filter (crypto = `tag_id=21`).
+- **`condition_id` (singular) NEM létezik** — szintén silent-ignored,
+  a top-volume market jön vissza. A helyes `condition_ids` (plural).
+- **`tokens` mező NEM jön vissza** sem a `/markets`, sem a `/events`
+  válaszában. Csak `clobTokenIds` JSON-encoded string. A SDK is így olvassa.
+- **`/markets/{id}` path-style** csak NUMERIC id-vel működik — slug-gal
+  `validation error: id is invalid`-ot ad. A helyes lookup `/markets?slug=`
+  query-vel, ami array-t ad.
+- **`/events?slug=`** event slug-ot vár; a market slug-gal NEM talál.
+  A helyes market lookup `/markets?slug={market_slug}`.
+
+### Javítások
+
+#### 1. `auto-trader/crypto/btc-market-finder.mts`
+- **`tag=crypto`** → **`tag_id=21`** (override-able env-vel:
+  `POLYMARKET_CRYPTO_TAG_ID`).
+- Az url új formája:
+  `events?tag_id=21&active=true&closed=false&limit=30&order=volume24hr&ascending=false`.
+- Pre-fix nélkül a market-finder alkalomszerűen NBA / NFL eseményeket is
+  felvett volna, amelyeket csak a szöveg-alapú `isBtcUpDown` szűrő dobott el.
+  Empirikusan: 11 BTC piacból 1 esett a [10%, 90%] band-be — most már stabil.
+
+#### 2. `signal-combiner.mts` — `resolveMarket`
+- Új **fast path**: market-slug-first `/markets?slug={slug}` lookup. A
+  Gamma válasz `events: [{slug}]` mezőjéből az event slug kinyerhető URL-hez.
+- Régi event-slug lookup VÁLTOZATLAN backward compat miatt — ha valaki
+  event slug-ot ad át, az is működik.
+- Új `parseTokenIds` és `parseYesNoPrices` shared helperek a defensive
+  parsing-hoz (clobTokenIds elsődleges, tokens fallback forward-compat).
+
+A signal-aggregator előtt minden BTC up/down market `Market not found`
+404-et kapott (mert a market slug → event slug remap nem működött), és
+az aggregator fallback `fetchIndividualSignals`-be esett, ami `signal_score`
+mezőre hivatkozott amit egyik signal endpoint sem ad — emiatt **mindig
+0 active signal**, mindig `finalProb=0.5`, mindig skip. A primary path
+visszaállítása megoldja a teljes pipeline-t.
+
+#### 3. `signal-combiner.mts` — Momentum signal
+`/markets/{slug}?limit=1` (path-style) sosem működött — csak numeric id-vel.
+Cseréljük `/markets?slug={slug}&limit=1` query-re és array deserialize-ra.
+
+#### 4. `apex-wallets.mts` — consensus market name lookup
+`condition_id=` (singular) → `condition_ids=` (plural). A korábbi forma
+silent-ignored volt, és **a top-volume marketet adta vissza minden
+consensus-piachoz**, ami azt jelenti hogy a Tab 8 Apex Consensus piac
+nevek **rosszak voltak**. (A kód sajátja egyébként is fallback-elt a
+question-mentes esetre, de a wrong-market hibás title-t inject-elt.)
+
+#### 5. `vol-divergence.mts` — CLOB midpoint pipeline
+- `m.tokens || []` → `extractTokenIds(m)` shared helper, amely a
+  `clobTokenIds` JSON-encoded stringet parse-olja először.
+- A korábbi kód **mindig üres tokens listát** kapott, így a CLOB midpoint
+  fetch nem futott semmire, és minden Polymarket BTC piac IV-je 0.5/0.5
+  default-ra esett — ami a `fetchMidpoints` egész értelmét megsemmisítette.
+- Új fallback: ha a CLOB midpoint nincs (rate-limit / 404), Gamma stored
+  `outcomePrices`-ra esik, így minimum statikus piac-ár van.
+
+#### 6. `polymarket-proxy.mts` és `polymarket-trade.mts`
+A `(m.tokens || []).map(...)` referencia mindkét helyen üres listát adott
+(a `tokens` mező nem létezik a Gamma válaszban). Cseréljük `clobTokenIds`
+JSON-parse-ra, így a **Tab 1 piac listán a tokens helyesen jelennek meg**
+és a `polymarket-trade markets` action végre tényleg ad token_id-t a
+további CLOB hívásoknak (orderbook, midpoint, prices).
+
+### Hatás
+
+- Crypto auto-trader: a signal pipeline atomgyilag rendbe kerül. A
+  signal-combiner happy path-ja működik minden BTC up/down piacon, az
+  active_signals 0-ról 5-8 közé ugrik, és a netEdge számítás végre
+  reális. Live readiness gate-felszabadulás 30+ paper trade után
+  kalibráció szerint (eddig el sem indult a számláló).
+- Apex Consensus (Tab 8): a piac nevek helyesek lesznek a következő
+  invalidálás után (`apex-wallets.mts` 10 perces cache).
+- Vol Divergence (Tab 6): a Polymarket IV oldal helyesen mér.
+- Polymarket Proxy (Tab 1) és Trade Panel (Tab 5): tokenek helyesen
+  jönnek a UI-nak — eddig a token_id mező üres volt minden piacon.
+
+### Érintett fájlok
+
+```
+módosítva: netlify/functions/auto-trader/crypto/btc-market-finder.mts (tag → tag_id)
+módosítva: netlify/functions/signal-combiner.mts (resolveMarket fast path + Momentum)
+módosítva: netlify/functions/apex-wallets.mts (condition_ids plural)
+módosítva: netlify/functions/vol-divergence.mts (clobTokenIds + fallback)
+módosítva: netlify/functions/polymarket-proxy.mts (clobTokenIds parse)
+módosítva: netlify/functions/polymarket-trade.mts (clobTokenIds parse)
+```
+
+### Smoke test (deploy után)
+
+```bash
+# 1. signal-combiner happy path most már működik market slug-on:
+curl 'https://mj-trading.netlify.app/.netlify/functions/signal-combiner?slug=bitcoin-above-80k-on-may-9' \
+  | python -c "import sys, json; d=json.load(sys.stdin); print('ok=', d.get('ok'), '| active=', d.get('active_signals'))"
+# Expected: ok=True, active=5..8 (eddig 'Market not found')
+
+# 2. crypto auto-trader Run Scan:
+curl -X POST 'https://mj-trading.netlify.app/.netlify/functions/auto-trader-api' \
+  -H 'Content-Type: application/json' -d '{"action":"run","category":"crypto"}' \
+  | python -c "import sys, json; d=json.load(sys.stdin); print(d['results'][0]['activeSignals'])"
+# Expected: > 0 (eddig 0)
+```

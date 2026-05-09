@@ -92,12 +92,20 @@ function parseYesPrice(m: GammaMarket): number {
 // $0.01 entry described in paper-pnl-analysis.md.
 const MIN_PRICE_BAND = parseFloat(process.env.BTC_MIN_PRICE_BAND || "0.10");
 
+// Polymarket Gamma `tag_id` for the crypto vertical (verified empirically:
+// `tag=crypto` is silently ignored by the API and returns NBA/NFL events; the
+// documented filter is `tag_id`). Override-able if Polymarket renumbers tags.
+const CRYPTO_TAG_ID = parseInt(process.env.POLYMARKET_CRYPTO_TAG_ID || "21", 10);
+
 export async function findBtcMarkets(
   minOpenInterest: number = 500,
   minPriceBand: number = MIN_PRICE_BAND,
 ): Promise<MarketInfo[]> {
-  // Fetch crypto events from Gamma API
-  const url = `${GAMMA_API}/events?tag=crypto&limit=30&order=volume24hr&ascending=false&active=true`;
+  // Fetch crypto events from Gamma API. Note: `tag` (string) is NOT a valid
+  // Gamma filter — it returns 200 OK but ignores the param, mixing in NBA/NFL
+  // events. The documented param is `tag_id` (numeric). `closed=false` is
+  // also pinned defensively even though it is the default.
+  const url = `${GAMMA_API}/events?tag_id=${CRYPTO_TAG_ID}&active=true&closed=false&limit=30&order=volume24hr&ascending=false`;
   const res = await fetch(url, {
     headers: { Accept: "application/json", "User-Agent": "EdgeCalc-AutoTrader/1.0" },
     signal: AbortSignal.timeout(8000),
