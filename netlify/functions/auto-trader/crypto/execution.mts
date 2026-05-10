@@ -265,3 +265,40 @@ export async function checkOrderStatus(
     return "PENDING";
   }
 }
+
+// ─── Fill detail (live mode only) ─────────────────────────
+//
+// CLOB's getOrder returns `size_matched` (filled USDC notional for BUY) and
+// the original limit `price`. For marketable limit orders the effective
+// fill price is usually within one tick of the limit, but on a crossed
+// book a BUY can fill at a *better* (lower) price than its limit. We can't
+// get a per-trade VWAP without `getOrderTrades`, but using `size_matched`
+// at least makes partial fills reflect accurately. When the API doesn't
+// return the expected fields we fall back to the placement values upstream.
+
+export interface FillDetail {
+  filledUsdc: number;
+  fillPrice:  number;
+  rawStatus:  string;
+}
+
+export async function fetchOrderFillDetail(orderId: string): Promise<FillDetail | null> {
+  try {
+    const client = await getClient();
+    const order: any = await client.getOrder(orderId);
+    if (!order) return null;
+    // Polymarket CLOB field naming varies — accept several common spellings.
+    const filledUsdc =
+      Number(order.size_matched ?? order.sizeMatched ?? order.executedSize ?? order.filledSize ?? NaN);
+    const fillPrice = Number(order.price ?? order.fillPrice ?? order.avgPrice ?? NaN);
+    if (!Number.isFinite(filledUsdc) || filledUsdc <= 0) return null;
+    if (!Number.isFinite(fillPrice) || fillPrice <= 0) return null;
+    return {
+      filledUsdc,
+      fillPrice,
+      rawStatus: String(order.status ?? "UNKNOWN"),
+    };
+  } catch {
+    return null;
+  }
+}

@@ -1,4 +1,4 @@
-import { placeSellOrder, getBestBid, checkOrderStatus } from "./execution.mts";
+import { placeSellOrder, getBestBid, checkOrderStatus, fetchOrderFillDetail } from "./execution.mts";
 import { log } from "../shared/logger.mts";
 import { getBtcExitConfig } from "../shared/config.mts";
 import type { MarketInfo, Position, ClosedTrade, OrderRecord } from "../shared/types.mts";
@@ -85,19 +85,30 @@ export async function handleBuyLifecycle(
     const status = await checkOrderStatus(buyOrder.orderId, paperMode);
 
     if (status === "FILLED") {
+      // Fetch real fill detail so partial fills + better-than-limit fills
+      // are reflected in the session state. Falls back to the placement
+      // values if the CLOB API doesn't return the expected fields.
+      const detail   = await fetchOrderFillDetail(buyOrder.orderId);
+      const fillUsdc = detail?.filledUsdc ?? buyOrder.size;
+      const fillPx   = detail?.fillPrice  ?? buyOrder.price;
+      const shares   = fillUsdc / fillPx;
+
       log("ORDER_FILLED", paperMode, {
         orderId: buyOrder.orderId,
-        filledShares: buyOrder.size / buyOrder.price,
+        filledShares: shares,
+        fillPrice:    fillPx,
+        filledUsdc:   fillUsdc,
+        usedDetail:   !!detail,
       });
 
       return {
-        market: market.slug,
-        tokenId: buyOrder.tokenId,
+        market:    market.slug,
+        tokenId:   buyOrder.tokenId,
         direction: buyOrder.direction,
-        shares: buyOrder.size / buyOrder.price,
-        avgEntry: buyOrder.price,
-        costBasis: buyOrder.size,
-        openedAt: buyOrder.placedAt,
+        shares,
+        avgEntry:  fillPx,
+        costBasis: fillUsdc,
+        openedAt:  buyOrder.placedAt,
         buyOrderId: buyOrder.orderId,
       };
     }

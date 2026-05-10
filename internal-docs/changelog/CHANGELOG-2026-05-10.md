@@ -1208,3 +1208,86 @@ src/components/trader/WeatherTrader.tsx                                 rational
 src/components/trader/HyperliquidTrader.tsx                             rationale wiring
 src/components/trader/FundingArbPanel.tsx                               rationale wiring
 ```
+
+---
+
+# 2026-05-10 (d) — Weather bot: 3 kritikus settlement/execution bug javítva
+
+## Audit
+
+Az `internal-docs/math/weather/README.md` audit 3 kritikus + 4 figyelendő
+hibát tárt fel a weather pipeline-ban. Ez a patch a 3 kritikust javítja:
+
+### 13.1 — Bucket conditionId mismatch (mis-settlement)
+
+**Bug.** A `WeatherMarket.conditionId = evt.markets?.[0]?.conditionId`
+mindig a sub-market #0 id-ját mentette. A reconciler ezt a (rossz) id-t
+kérdezte le minden bucket-re. Empirikus bizonyíték: a Hong Kong May-10
+event 6 buckete 6 különböző conditionId-vel rendelkezik.
+
+Következmény (paper mód): a nem-#0 bucket-en nyitott YES bet mindig
+"loss"-ként, NO bet mindig "win"-ként könyvelődött, függetlenül a tényleges
+kimeneteltől.
+
+**Fix.** A `TemperatureBucket` típus kapott egy `conditionId: string`
+mezőt; a `parseBucketsFromEvent()` `m.conditionId`-ből tölti minden
+sub-marketnek. A `weather/index.mts:position.conditionId` mostantól
+`match.bucket.conditionId`-ból jön.
+
+### 13.2 — NO direction-höz nincs tokenId
+
+**Bug.** `toMarketInfo()` `clobTokenIds: [tokenId, ""]`-t adott — csak
+a YES tokenId, a NO oldali üres. NO irányú bet esetén a CLOB üres
+tokenId-vel ment volna élesben (REJECTED), paper módban silently
+"FILLED" hamis tokenId-vel.
+
+**Fix.** A `TemperatureBucket` kapott egy `noTokenId: string` mezőt
+(`clobIds[1]`). `toMarketInfo()` mostantól `[bucket.tokenId,
+bucket.noTokenId]`-t ad át. A `position.tokenId` is direction-correct:
+YES → `bucket.tokenId`, NO → `bucket.noTokenId`.
+
+### 13.3 — `negRisk: false` flag a CLOB hívásban
+
+**Bug.** Weather event-ek negRisk csoportok, de a `crypto/execution.mts`
+hard-coded `negRisk: false`-szal hívta a CLOB-ot. Routing-hiba élesben.
+
+**Fix.** `placeBuyOrder()` kapott egy `isNegRisk: boolean = false`
+opcionális paramétert. Weather hívás `true`-val megy. Crypto változatlan.
+
+## Hatás
+
+- **Paper PnL mostantól helyes**: a Polymarket-resolution útvonal a
+  matched bucket valós kimenetét adja vissza, nem az #0 bucket-ét.
+- **Live mód unblocking**: NO direction trade-ek nem REJECTED-ek többé.
+- **Élesedés még nem ajánlott**: a live-readiness gate `simVersionExpected:
+  null` weather-en, és kalibráció jelenleg nincs (lásd 13.5 a math doc-ban).
+
+A fix előtti paper closed trade-ek a buggy resolverrel keletkeztek; a
+következő paper sessionben (manual reset után, ha akarod) tiszta adatra
+számolódik majd a kalibráció.
+
+## Érintett fájlok
+
+```
+netlify/functions/auto-trader/weather/market-finder.mts                 +conditionId, +noTokenId per bucket
+netlify/functions/auto-trader/weather/index.mts                         toMarketInfo(market, bucket); position uses bucket.conditionId; +negRisk=true
+netlify/functions/auto-trader/crypto/execution.mts                      placeBuyOrder: +isNegRisk=false param
+internal-docs/math/weather/README.md                                    full math + audit doc (új fájl)
+```
+
+## Hova nyúlj legközelebb (weather)
+
+- **Manual reset** (Settings → Reset session, "RESET" begépelés). A buggy
+  resolverrel keletkezett régi closed trade-ek archiválódnak, és a
+  következő cron tick után a fix-elt resolution lép életbe.
+- **13.4 év-defaulting**: a `parseDateFromSlug` cross-year boundary-n
+  silently dropolja a "january-3" (év nélkül) slug-okat decemberben.
+- **13.5 σ kalibráció**: a Gauss σ (1.0 / 1.5°C) nem mért, hanem hardcoded.
+  Per-város residual-rolling-window kellene a DEB mintájára.
+- **13.6 simVersion gate**: weather-en `simVersionExpected: null`. Ha a
+  paper-resolution semantikája megint változik, az old trade-ek nem
+  archiválódnak automatikusan.
+- **13.7 DEB feedback Polymarket settle-ből**: a Polymarket settled
+  trade-eknél is futtassuk a `fetchMetarDailyMax()`-t **csak a DEB
+  sample-höz** (PnL-t a Polymarket adja).
+

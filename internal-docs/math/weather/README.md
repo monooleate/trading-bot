@@ -417,7 +417,9 @@ A reconciler **csak** akkor hívja a `recordDebSample()`-t, ha `actualMaxC` isme
 
 ## 13. Talált hibák (2026-05-10 audit)
 
-### 13.1 🔴 KRITIKUS — Bucket conditionId mismatch (mis-settlement)
+### 13.1 ✅ JAVÍTVA (2026-05-10) — Bucket conditionId mismatch (mis-settlement)
+
+> **Fix kommittelve.** `TemperatureBucket.conditionId` per-bucket mentve, és a `position.conditionId` a `match.bucket.conditionId`-ot használja, nem az event-szintűt.
 
 **Hely:** `weather/market-finder.mts:255`
 ```typescript
@@ -462,7 +464,9 @@ A reconciler `fetchPolymarketResolution(pos.conditionId)` **a rossz bucket-et** 
 
 **Hatás:** **Az összes eddigi paper closed trade érvénytelen** — manual reset kell a fix után.
 
-### 13.2 🔴 KRITIKUS — NO direction-höz nincs tokenId (live order REJECTED)
+### 13.2 ✅ JAVÍTVA (2026-05-10) — NO direction-höz nincs tokenId (live order REJECTED)
+
+> **Fix kommittelve.** `TemperatureBucket.noTokenId` per-bucket mentve. `toMarketInfo()` `[bucket.tokenId, bucket.noTokenId]`-t ad át. A `position.tokenId` a direction szerint választódik (YES → bucket.tokenId, NO → bucket.noTokenId).
 
 **Hely:** `weather/index.mts:117-132`
 ```typescript
@@ -484,7 +488,9 @@ const tokenId = direction === "YES" ? market.clobTokenIds[0] : market.clobTokenI
 
 **Javítás:** `parseBucketsFromEvent` mentse el a NO tokenId-t is (`clobIds[1]`), és `toMarketInfo()` adjon vissza `[bucket.tokenId, bucket.noTokenId]`-t.
 
-### 13.3 🔴 KRITIKUS — `negRisk: false` flag a CLOB hívásban
+### 13.3 ✅ JAVÍTVA (2026-05-10) — `negRisk: false` flag a CLOB hívásban
+
+> **Fix kommittelve.** `placeBuyOrder()` kapott egy `isNegRisk = false` opcionális paramétert. A weather oldali hívás `true`-val megy. A crypto bot változatlanul `false`-szal hív.
 
 **Hely:** `crypto/execution.mts:107`
 ```typescript
