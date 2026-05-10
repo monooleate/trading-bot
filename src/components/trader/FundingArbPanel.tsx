@@ -77,7 +77,7 @@ function ageString(iso: string): string {
   return `${Math.floor(h / 24)}d ${h % 24}h`;
 }
 
-export default function FundingArbPanel() {
+export default function FundingArbPanel({ bankroll }: { bankroll?: number }) {
   const { status, refresh } = useAutoTraderStatus<ArbSessionSummary>("hyperliquid", "arb");
   const { loading, error, lastResult, run, setError } =
     useTraderAction<ArbRunResult>("hyperliquid", "arb");
@@ -93,10 +93,16 @@ export default function FundingArbPanel() {
 
   const doAction = useCallback(async (action: string) => {
     setError(null);
-    const r = await run(action);
+    // F-Arb session has no bankroll of its own — capital is drawn from the
+    // shared HL session. arbReset() applies the override to the HL session
+    // ONLY when no perp positions are open; otherwise it logs a skip reason.
+    const extras = action === "reset" && typeof bankroll === "number"
+      ? { bankroll }
+      : undefined;
+    const r = await run(action, extras);
     if (r) setHealthRefresh((n) => n + 1);
     refresh();
-  }, [run, refresh, setError]);
+  }, [run, refresh, setError, bankroll]);
 
   const stats: TraderStat[] = session ? [
     { label: "Open",     value: String(session.openPositions) },
@@ -122,7 +128,10 @@ export default function FundingArbPanel() {
     `Today funding: <b>${session.totalFundingToday >= 0 ? "+" : ""}$${session.totalFundingToday.toFixed(2)}</b>`,
     `All-time funding: <b>${session.totalFundingAllTime >= 0 ? "+" : ""}$${session.totalFundingAllTime.toFixed(2)}</b>`,
     `Indult: <b>${new Date(session.startedAt).toLocaleString()}</b>`,
-  ] : undefined;
+    typeof bankroll === "number"
+      ? `Új shared bankroll (HL session): <b>$${bankroll.toFixed(2)}</b> — csak akkor érvényesül, ha nincs nyitott HL perp pozíció.`
+      : "",
+  ].filter(Boolean) : undefined;
 
   const openRows: OpenPositionRow[] = (session?.openDetails ?? []).map((p) => ({
     coin:       p.coin,

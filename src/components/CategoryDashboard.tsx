@@ -47,39 +47,39 @@ const CATEGORY_TABS: Record<string, [string, string][]> = {
   ],
 };
 
-function renderCryptoTab(tab: string) {
+function renderCryptoTab(tab: string, bankroll: number) {
   switch (tab) {
-    case "autotrader":   return <CryptoTrader />;
+    case "autotrader":   return <CryptoTrader bankroll={bankroll} />;
     case "edge-tracker": return <EdgeTrackerPanel defaultCategory="crypto" />;
     case "settings":     return <SettingsPanel category="crypto" title="Crypto Auto-Trader paraméterek" subtitle="BTC short markets · runtime override · Netlify Blobs" />;
-    default:             return <CryptoTrader />;
+    default:             return <CryptoTrader bankroll={bankroll} />;
   }
 }
 
-function renderWeatherTab(tab: string) {
+function renderWeatherTab(tab: string, bankroll: number) {
   switch (tab) {
-    case "autotrader":   return <WeatherTrader />;
+    case "autotrader":   return <WeatherTrader bankroll={bankroll} />;
     case "edge-tracker": return <EdgeTrackerPanel defaultCategory="weather" />;
     case "settings":     return <SettingsPanel category="weather" title="Weather Trader paraméterek" subtitle="Hőmérséklet piacok · GFS ensemble · station fix" />;
-    default:             return <WeatherTrader />;
+    default:             return <WeatherTrader bankroll={bankroll} />;
   }
 }
 
-function renderHyperliquidTab(tab: string) {
+function renderHyperliquidTab(tab: string, bankroll: number) {
   switch (tab) {
-    case "autotrader":   return <HyperliquidTrader />;
+    case "autotrader":   return <HyperliquidTrader bankroll={bankroll} />;
     case "edge-tracker": return <EdgeTrackerPanel defaultCategory="hyperliquid" />;
     case "settings":     return <SettingsPanel category="hyperliquid" title="Hyperliquid Perp paraméterek" subtitle="Directional perp execution · paper-only Netlify-on" />;
-    default:             return <HyperliquidTrader />;
+    default:             return <HyperliquidTrader bankroll={bankroll} />;
   }
 }
 
-function renderFundingArbTab(tab: string) {
+function renderFundingArbTab(tab: string, bankroll: number) {
   switch (tab) {
-    case "autotrader":   return <FundingArbPanel />;
+    case "autotrader":   return <FundingArbPanel bankroll={bankroll} />;
     case "edge-tracker": return <EdgeTrackerPanel defaultCategory="funding-arb" />;
     case "settings":     return <SettingsPanel category="hyperliquid" title="Funding Arb paraméterek" subtitle="Delta-neutral carry · SHORT HL perp + LONG Binance spot" />;
-    default:             return <FundingArbPanel />;
+    default:             return <FundingArbPanel bankroll={bankroll} />;
   }
 }
 
@@ -110,16 +110,16 @@ function renderPolymarketManualTab(tab: string) {
 export default function CategoryDashboard({ category }: { category: string }) {
   const tabs = CATEGORY_TABS[category] || CATEGORY_TABS.crypto;
 
-  const render = (tab: string) => {
+  const render = (tab: string, bankroll: number) => {
     switch (category) {
-      case "crypto":             return renderCryptoTab(tab);
-      case "weather":            return renderWeatherTab(tab);
-      case "hyperliquid":        return renderHyperliquidTab(tab);
-      case "funding-arb":        return renderFundingArbTab(tab);
+      case "crypto":             return renderCryptoTab(tab, bankroll);
+      case "weather":            return renderWeatherTab(tab, bankroll);
+      case "hyperliquid":        return renderHyperliquidTab(tab, bankroll);
+      case "funding-arb":        return renderFundingArbTab(tab, bankroll);
       case "bybit":              return renderBybitTab(tab);
       case "binance":            return renderBinanceTab(tab);
       case "polymarket-manual":  return renderPolymarketManualTab(tab);
-      default:                   return renderCryptoTab(tab);
+      default:                   return renderCryptoTab(tab, bankroll);
     }
   };
 
@@ -129,7 +129,7 @@ export default function CategoryDashboard({ category }: { category: string }) {
       title={`Bejelentkezés — ${category}`}
       subtitle="Trader vezérléshez (indítás, megállítás, reset, paraméter mentés) belépés kell. Read-only nézet alább."
     >
-      <DashboardShell tabs={tabs} defaultTab={defaultTab}>{(tab) => render(tab)}</DashboardShell>
+      <DashboardShell tabs={tabs} defaultTab={defaultTab}>{(tab, bankroll) => render(tab, bankroll)}</DashboardShell>
     </AuthGate>
   );
 }

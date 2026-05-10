@@ -43,7 +43,9 @@
       "Bash(curl -s -X POST \"http://localhost:8888/.netlify/functions/auto-trader-api\" -H \"Content-Type: application/json\" -d '{\"action\":\"run\",\"category\":\"weather\"}')",
       "Bash(node --input-type=module -e ':*)",
       "Bash(curl -s \"http://localhost:8888/trade/crypto/\")",
-      "Bash(curl -s -X POST \"http://localhost:8888/.netlify/functions/auto-trader-api\" -H \"Content-Type: application/json\" -d '{\"action\":\"reset\"}')"
+      "Bash(curl -s -X POST \"http://localhost:8888/.netlify/functions/auto-trader-api\" -H \"Content-Type: application/json\" -d '{\"action\":\"reset\"}')",
+      "Bash(curl -fsSL -X POST \"https://api.hyperliquid.xyz/info\" -H \"Content-Type: application/json\" -d '{\"type\":\"meta\"}')",
+      "Read(//c/Users/ASUSLA~1/AppData/Local/Temp/**)"
     ]
   }
 }

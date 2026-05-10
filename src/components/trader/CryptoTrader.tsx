@@ -17,6 +17,7 @@ import {
   type SignalArrow,
   type PendingPositionLite,
   type OpenPositionRow,
+  type OpenPositionRationale,
 } from "../shared/TraderResults";
 import { useTradeExport } from "../shared/useTradeExport";
 import type { LiveReadinessReport } from "../shared/LiveReadinessBadge";
@@ -141,7 +142,7 @@ function pct(v: number | undefined, digits = 1): string {
   return `${(v * 100).toFixed(digits)}%`;
 }
 
-export default function CryptoTrader() {
+export default function CryptoTrader({ bankroll }: { bankroll?: number }) {
   const { status, refresh } = useAutoTraderStatus<SessionSummary>("crypto");
   const { loading, error, lastResult, run, setError } =
     useTraderAction<RunResult>("crypto");
@@ -167,14 +168,20 @@ export default function CryptoTrader() {
     endDate: string | null;
     marketPriceAtEntry: number | null;
     predictedProb: number | null;
+    entryDecision: OpenPositionRationale | null;
   }>;
 
   const doAction = useCallback(async (action: string) => {
     setError(null);
-    const r = await run(action);
+    // Reset takes the dashboard's current bankroll input as the new starting
+    // bankroll. Other actions don't carry it (they don't mutate sizing).
+    const extras = action === "reset" && typeof bankroll === "number"
+      ? { bankroll }
+      : undefined;
+    const r = await run(action, extras);
     if (r) setHealthRefresh((n) => n + 1);
     refresh();
-  }, [run, refresh, setError]);
+  }, [run, refresh, setError, bankroll]);
 
   const stats: TraderStat[] = session ? [
     { label: "Bankroll",    value: `$${session.bankrollCurrent.toFixed(2)}` },
@@ -199,7 +206,10 @@ export default function CryptoTrader() {
     `Lezárt trade-ek: <b>${session.tradeCount}</b> · Session PnL: <b>${session.sessionPnL >= 0 ? "+" : ""}$${session.sessionPnL.toFixed(2)}</b>`,
     `Nyitott pozíciók: <b>${session.openPositions}</b>`,
     `Indult: <b>${new Date(session.startedAt).toLocaleString()}</b>`,
-  ] : undefined;
+    typeof bankroll === "number"
+      ? `Új starting bankroll a reset után: <b>$${bankroll.toFixed(2)}</b> (a fejléc Bankroll mezőjéből)`
+      : "",
+  ].filter(Boolean) : undefined;
 
   return (
     <TraderShell
@@ -252,6 +262,10 @@ export default function CryptoTrader() {
                 ? `pred ${(p.predictedProb * 100).toFixed(0)}%`
                 : undefined,
               ageText:   endsText,
+              // Pass the frozen-at-entry rationale so the row toggles open
+              // a "Why?" panel. `null` (older position without snapshot)
+              // still toggles, but renders the placeholder message.
+              rationale: p.entryDecision ?? null,
             };
           })}
         />

@@ -80,13 +80,19 @@ export async function loadSession(
             JSON.stringify({ archivedAt: new Date().toISOString(), session: parsed }),
           );
         } catch {}
+        // Persist the fresh v-current session back to the session key so
+        // subsequent loads don't re-archive the same v2 blob on every poll.
+        const fresh = defaultSession(defaultBankroll, paperMode);
+        try {
+          await store.set(sessionKey(paperMode, category), JSON.stringify(fresh));
+        } catch {}
         log("SESSION_START", paperMode, {
           reason: "auto_reset_simversion",
           fromVersion: v,
           toVersion: PAPER_SIM_VERSION,
           archivedTradeCount: parsed.closedTrades?.length ?? 0,
         });
-        return defaultSession(defaultBankroll, paperMode);
+        return fresh;
       }
       // Backfill simVersion for sessions written before the field existed.
       if (parsed.simVersion === undefined) {

@@ -351,6 +351,144 @@ netlify deploy --prod --dir=dist
 
 ## AKTUÁLIS ÁLLAPOT (2026-05-10) – Claude Code folytatáshoz
 
+### Tizedik session (2026-05-10) – Stale-UI bugfix: 3 fantom weather-trade + simVersion auto-reset persistence
+
+A live `mj-trading.netlify.app/trade/weather/` Tab 1-en 3 sor mutatott
+"traded" akciót (Shanghai/Paris/London), miközben a stats kártya és a
+LiveReadinessBadge "Trade count" gate egyaránt 0/30-at jelzett. A homepage
+dashboard pedig "1 trade + 3 open" weather-en. Két különálló bug együttese:
+
+**Bug #1 — `loadSession()` nem persistálja a v3 resetet**
+
+`auto-trader/crypto/session-manager.mts:76-89` — amikor a v2→v3 auto-archive
+triggerel, csak az archive key-be ír, a fő session key-t nem írja felül.
+Következmény: minden 5s-os UI status poll újra-archíválja ugyanazt a v2
+blob-ot (8 perc alatt 19 db `auto_reset_simversion` event). A
+`multi-status.mts` (homepage) közvetlenül a fő blob-ot olvassa, ezért az
+"1 closed trade + 3 open positions" 2026-05-08 óta jelen volt fantom
+adatként.
+
+**Bug #2 — `runStatus.lastResult` nem invalidálódik simVersion bump-on**
+
+A `weather-runtime` Blobs store független a session blob-tól. Az utolsó
+`runWeatherTrader()` 2026-05-10 07:29Z-kor futott v2-vel és 3 pozíciót
+nyitott; azóta nem futott újra. A `lastResult.results` továbbra is a 3
+fantomot tartalmazta, és a UI ezt rendererelte a `ScanResultsCard`-ban.
+
+**Két fix:**
+
+1. `crypto/session-manager.mts:76-95` — fresh default session most a
+   session key-be is kiíródik, nem csak az archive-ba. Egy `await
+   store.set(sessionKey(...), JSON.stringify(fresh))` hozzáadás.
+2. `weather/index.mts:51-93` (`getWeatherRunStatus`) + `crypto/run-state.
+   mts:47-83` (`getCryptoRunStatus`) — mindkettő ellenőrzi most a
+   `lastResult?.session?.simVersion ?? lastResult?.liveReadiness?.summary?.
+   simVersion`-t, és ha < `PAPER_SIM_VERSION`, lenullázza a lastResult-ot
+   + persistálja a cleanup-ot.
+
+**Hatás a deploy után:**
+
+- Első UI poll: a 3 "traded" sor eltűnik a `/trade/weather/` Tab 1-ről.
+- Az első `auto-trader-api?action=status&category=weather` hívás után a
+  v2 blob v3-ra íródik, és innen a homepage `multi-status` is "0 trade /
+  0 open"-t fog mutatni weather-en.
+- Az "1 trade" a homepage-ről nem "helyreáll" hanem **0-ra megy** — ez a
+  helyes érték a v3 paradigmában (lásd `2026-05-10 (a)` szekció: a v2
+  trade-ek mind eltört Brownian-sim artifaktok voltak, a CHANGELOG-2026-
+  05-10.md "(a)" részletezi a 88.9% WR fake adat empirikus bizonyítékát).
+- A spam-ciklus megszűnik: nincs több `auto_reset_simversion` event a
+  status pollok között.
+
+**Weather bot health audit (Explore sub-agent):**
+
+| Modul                       | Státusz     |
+|-----------------------------|-------------|
+| forecast-engine             | PASS        |
+| ensemble-forecast           | PASS        |
+| decision-engine             | PASS (9/9 config field) |
+| market-finder               | PASS (8 új város mapped) |
+| polymarket-resolver         | PASS (`&closed=true` query) |
+| reconciler + metar-fetcher  | PASS (°F rounding UMA quirk) |
+| weather cron                | PASS (toggle respected) |
+| reconciler cron             | PASS (always-on */15) |
+| live-readiness simVersion   | INTENTIONAL null (METAR-driven, nem sim-driven) |
+
+A weather bot **funkcionálisan helyesen fut** v3-ban. A bug pusztán
+prezentációs cache-probléma volt — a session és a settlement valós, csak
+a UI rajzolt elavult cache-ből.
+
+Részletes leírás: `internal-docs/changelog/CHANGELOG-2026-05-10.md`
+"2026-05-10 (c)" szekció.
+
+### Hova nyúlj legközelebb (session/runtime persistence)
+
+- A jövőbeni `simVersion` bump-oknál a fix mindkét oldalra kiterjed:
+  loadSession persistálja a fresh sessiont, és a runState getter-ek
+  törlik a stale lastResult-ot.
+- Ha HL vagy funding-arb is bevezet simVersion-t, a két `runState.mts`
+  mintáját kell követni (`hyperliquid/run-state.mts` és
+  `hyperliquid/funding-arb/run-state.mts` — most még nincs simVersion
+  gate, mert nem prediction-driven).
+
+### Kilencedik session (2026-05-10) – Bankroll input wired to backend reset
+
+**Bug:** A főoldali "Bankroll: $200" mező egyik bot oldalon (Crypto /
+Weather / Hyperliquid / Funding-Arb) sem volt funkcióban — pusztán
+`localStorage`-ba mentődött, a backend session bankrollját semmi nem
+frissítette. Minden reset a hardcoded szerveroldali konstansokat
+használta ($150/$100/$200/$200).
+
+**Két helyen szakadt el a wire:**
+1. `DashboardShell` átadta `(tab, bankroll)`-t, de `CategoryDashboard`
+   csak `(tab) => render(tab)`-ként hívta meg → a prop sosem érte el a
+   trader komponenst.
+2. A trader komponensek (CryptoTrader, …) nem fogadtak `bankroll` propot,
+   és a `doAction("reset")` sem küldte a body-ban.
+3. A backend reset endpointok (`handleReset` / `hlReset` / `arbReset`)
+   nem fogadtak `bankroll` paramétert.
+
+**Fix (3 réteg):**
+
+- **Backend** `auto-trader/index.mts`: POST body parser most már olvassa
+  a `bankroll` mezőt (finite + `[10, 1_000_000]` clamp), átadja
+  `handleReset(config, cat, bankroll?)`, `hlReset(bankroll?)`,
+  `arbReset(bankroll?)` hívásoknak.
+- **`hlReset`**: a meglévő `resetHlSession(paperMode, bankroll = DEFAULT)`
+  default param felé továbbítja.
+- **`arbReset`**: F-Arb sessionnek nincs saját bankrollja, a HL
+  sessionből húz. Ha az override jött ÉS nincs nyitott HL perp pozíció
+  → frissíti a HL session `bankrollStart` + `bankrollCurrent` mezőit
+  (HL trade history sértetlen marad). Ha vannak nyitott HL pozíciók →
+  silently skip + `bankrollSkippedReason` válaszmező.
+- **Frontend**: `CategoryDashboard.render*(tab, bankroll)`, 4 trader
+  komponens `bankroll?: number` prop, `doAction("reset")` mostantól
+  `extras = { bankroll }`-t küld. ConfirmDialog `sessionSummary` utolsó
+  sora előre mutatja az új starting bankrollt.
+- **`useTraderAction.run(action, extras?)`** kibővítve generikus
+  `Record<string, unknown>` extras paraméterrel — minden további
+  per-action body field ide kerülhet jövőben.
+
+Részletes leírás: `internal-docs/changelog/CHANGELOG-2026-05-10.md`
+"Bankroll input wired through to backend reset" szekciója.
+
+### Hova nyúlj legközelebb (bankroll)
+
+- A bankroll input továbbra is **közös** localStorage értékkel a 4 bot
+  között (`ec_bankroll` kulcs). Ha a user külön bankrollt akar
+  csinálni botonként, a `DashboardShell.tsx`-ben kategóriánként külön
+  kulcsot kell használni (pl. `ec_bankroll_${category}`).
+- **Mid-session bankroll change** nincs kezelve, csak Reset-tel.
+  Szándékos: Kelly sizing és session loss limit a `bankrollStart`
+  alapján van számolva, futás közben módosítani inkonzisztenssé tenné.
+  Ha mégis kell: új action (`update_bankroll`) ami csak
+  `bankrollCurrent`-et tolja el, `bankrollStart` érintetlenül marad.
+- **F-Arb reset most átírja a HL session bankrollját** csak ha HL üres.
+  Ha nem üres, a user az UI-on egy banner-ben kapja a reason-t — de
+  ezt jelenleg csak `bankrollSkippedReason` válaszmezőként küldi
+  vissza a backend, **a UI még nem rendereli**. Ha kell, a
+  `FundingArbPanel.tsx` `doAction` callbackjében a
+  `r.bankrollSkippedReason`-t egy alert / toast komponensbe kell tenni.
+
 ### Nyolcadik session (2026-05-10) – Auto-Trader Tab 1 visibility pass: blocker chips + open positions + weather stats parity
 
 A 4 bot Tab 1-én (Auto-Trader) ugyanaz a 3 láthatósági hiba volt:

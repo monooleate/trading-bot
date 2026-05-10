@@ -545,6 +545,36 @@ export function PendingPositionsCard(p: PendingPositionsCardProps) {
 
 /* ─── Open positions card ──────────────────────────────── */
 
+// Frozen-at-entry rationale payload, rendered by the expandable
+// "Why this trade?" panel on each open position row. Optional — positions
+// opened before the auto-trader started persisting the decision snapshot
+// (or non-crypto categories that don't fill it in) get a "no data" panel.
+export interface OpenPositionRationale {
+  decidedAt: string;
+  finalProb: number;
+  marketPrice: number;
+  grossEdge: number;
+  netEdge: number;
+  feePct: number;
+  direction: "YES" | "NO" | "LONG" | "SHORT";
+  kellyRaw: number;
+  kellyCapped: number;
+  kellyCap: number;
+  positionSizeUSDC: number;
+  entryPrice: number;
+  activeSignals: number;
+  signalBreakdown: {
+    funding_rate?: number | null;
+    orderflow?: number | null;
+    vol_divergence?: number | null;
+    apex_consensus?: number | null;
+    cond_prob?: number | null;
+  } | null;
+  obImbalance: { ratio: number; direction: "UP" | "DOWN" | "NEUTRAL" } | null;
+  gates: CriteriaGate[];
+  reason: string;
+}
+
 export interface OpenPositionRow {
   /** Primary key — coin / city / market title. */
   coin: string;
@@ -561,6 +591,122 @@ export interface OpenPositionRow {
   pnlValue?: number;
   /** "Age" or "ends in" label rendered last. */
   ageText: string;
+  /** Frozen entry decision snapshot — toggles the "Why?" panel when present.
+   *  Pass `null` (not undefined) to render the "no data, older position"
+   *  placeholder instead of suppressing the toggle entirely. */
+  rationale?: OpenPositionRationale | null;
+}
+
+const SIGNAL_LABELS: Array<[
+  "funding_rate" | "orderflow" | "vol_divergence" | "apex_consensus" | "cond_prob",
+  string,
+]> = [
+  ["funding_rate",   "FR"],
+  ["orderflow",      "VPIN"],
+  ["vol_divergence", "VOL"],
+  ["apex_consensus", "APEX"],
+  ["cond_prob",      "CP"],
+];
+
+function RationaleBlock({ r }: { r: OpenPositionRationale }) {
+  const dirNo = r.direction === "NO" || r.direction === "SHORT";
+  const passed = r.gates.filter((g) => g.passed).length;
+  const total  = r.gates.length;
+  const allPass = total > 0 && passed === total;
+  return (
+    <div className="ts-pos-why">
+      <div className="ts-pos-why-thesis">
+        <span className="ts-pos-why-label">Tézis</span>
+        <span className="ts-pos-why-thesis-text">
+          A modell szerint a YES esélye <strong>{(r.finalProb * 100).toFixed(1)}%</strong>,
+          a piac <strong>{(r.marketPrice * 100).toFixed(1)}%</strong>-ot árazott
+          → bot {dirNo ? <strong>NO</strong> : <strong>YES</strong>}-t vett
+          {" "}@<strong>{(r.entryPrice * 100).toFixed(0)}¢</strong>,
+          {" "}<strong>${r.positionSizeUSDC.toFixed(2)}</strong>-ért.
+        </span>
+      </div>
+
+      <div className="ts-pos-why-grid">
+        <div className="ts-pos-why-cell">
+          <span className="ts-pos-why-cell-label">Gross edge</span>
+          <span className="ts-pos-why-cell-val">{(r.grossEdge * 100).toFixed(2)}%</span>
+        </div>
+        <div className="ts-pos-why-cell">
+          <span className="ts-pos-why-cell-label">Net edge (− fees)</span>
+          <span className={`ts-pos-why-cell-val ${r.netEdge >= 0 ? "ts-pos-why-pos" : "ts-pos-why-neg"}`}>
+            {r.netEdge >= 0 ? "+" : ""}{(r.netEdge * 100).toFixed(2)}%
+          </span>
+        </div>
+        <div className="ts-pos-why-cell">
+          <span className="ts-pos-why-cell-label">Kelly raw → capped</span>
+          <span className="ts-pos-why-cell-val">
+            {(r.kellyRaw * 100).toFixed(2)}% → {(r.kellyCapped * 100).toFixed(2)}%
+            <span className="ts-pos-why-cell-sub"> · cap {(r.kellyCap * 100).toFixed(1)}%</span>
+          </span>
+        </div>
+        <div className="ts-pos-why-cell">
+          <span className="ts-pos-why-cell-label">Aktív signal-ok</span>
+          <span className="ts-pos-why-cell-val">{r.activeSignals}/5</span>
+        </div>
+      </div>
+
+      {r.signalBreakdown && (
+        <div className="ts-pos-why-signals">
+          <span className="ts-pos-why-label">Signal-bontás</span>
+          <div className="ts-pos-why-signals-row">
+            {SIGNAL_LABELS.map(([key, label]) => {
+              const v = r.signalBreakdown![key];
+              const off = v === null || v === undefined;
+              const arrow = off ? "·" : (v as number) > 0.5 ? "↑" : "↓";
+              const cls  = off ? "ts-pos-why-sig-off"
+                              : (v as number) > 0.5 ? "ts-pos-why-sig-up"
+                              : "ts-pos-why-sig-down";
+              return (
+                <span key={key} className={`ts-pos-why-sig ${cls}`}>
+                  {label}{arrow}
+                  {!off && <span className="ts-pos-why-sig-num">{((v as number) * 100).toFixed(0)}%</span>}
+                </span>
+              );
+            })}
+            {r.obImbalance && (
+              <span
+                className="ts-pos-why-sig ts-pos-why-sig-ob"
+                title={`Binance top-10 bid/ask depth ratio = ${r.obImbalance.ratio.toFixed(2)}`}
+              >
+                OB {r.obImbalance.direction === "UP" ? "↑" : r.obImbalance.direction === "DOWN" ? "↓" : "·"}
+                <span className="ts-pos-why-sig-num">{r.obImbalance.ratio.toFixed(2)}</span>
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
+      <div className="ts-pos-why-gates">
+        <span className="ts-pos-why-label">
+          Belépési gate-ek · <strong>{passed}/{total}</strong> {allPass ? "✓" : "—"}
+        </span>
+        <div className="ts-pos-why-gate-list">
+          {r.gates.map((g, idx) => (
+            <div
+              key={idx}
+              className={`ts-pos-why-gate ${g.passed ? "ts-pos-why-gate-pass" : "ts-pos-why-gate-fail"}`}
+              title={g.hint}
+            >
+              <span className="ts-pos-why-gate-mark">{g.passed ? "✓" : "✗"}</span>
+              <span className="ts-pos-why-gate-label">{g.label}</span>
+              <span className="ts-pos-why-gate-actual">{g.actual}</span>
+              <span className="ts-pos-why-gate-req">{g.required}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="ts-pos-why-meta">
+        <span>Decided: {new Date(r.decidedAt).toLocaleString()}</span>
+        <span>Reason: {r.reason}</span>
+      </div>
+    </div>
+  );
 }
 
 export function OpenPositionsCard({
@@ -574,42 +720,75 @@ export function OpenPositionsCard({
   return (
     <div className="ts-card">
       <h3 className="ts-card-head"><strong>{title}</strong></h3>
-      {rows.map((r, i) => (
-        <div key={i} className="ts-pos-row">
-          <span className="ts-pos-coin">{r.coin}</span>
-          {r.direction && (
+      {rows.map((r, i) => {
+        const hasRationaleSlot = r.rationale !== undefined; // null counts (older pos placeholder)
+        const r_ = r.rationale ?? null;
+        const summaryNode = (
+          <>
+            <span className="ts-pos-coin">{r.coin}</span>
+            {r.direction && (
+              <span
+                className={
+                  "ts-pending-dir " +
+                  (r.direction === "YES" || r.direction === "LONG"
+                    ? "ts-pending-dir-YES"
+                    : "ts-pending-dir-NO")
+                }
+              >
+                {r.direction}
+              </span>
+            )}
+            {r.entryText && <span className="ts-pos-spread">{r.entryText}</span>}
+            <span className="ts-pos-size">{r.sizeText}</span>
+            {r.spreadText && <span className="ts-pos-spread">{r.spreadText}</span>}
+            {r.pnlText !== undefined && (
+              <span
+                className="ts-pos-acc"
+                style={{
+                  color:
+                    r.pnlValue === undefined
+                      ? "var(--muted)"
+                      : r.pnlValue >= 0
+                      ? "var(--accent)"
+                      : "var(--danger)",
+                }}
+              >
+                {r.pnlText}
+              </span>
+            )}
             <span
-              className={
-                "ts-pending-dir " +
-                (r.direction === "YES" || r.direction === "LONG"
-                  ? "ts-pending-dir-YES"
-                  : "ts-pending-dir-NO")
-              }
+              className="ts-pos-age"
+              style={{ marginLeft: r.pnlText !== undefined ? undefined : "auto" }}
             >
-              {r.direction}
+              {r.ageText}
             </span>
-          )}
-          {r.entryText && <span className="ts-pos-spread">{r.entryText}</span>}
-          <span className="ts-pos-size">{r.sizeText}</span>
-          {r.spreadText && <span className="ts-pos-spread">{r.spreadText}</span>}
-          {r.pnlText !== undefined && (
-            <span
-              className="ts-pos-acc"
-              style={{
-                color:
-                  r.pnlValue === undefined
-                    ? "var(--muted)"
-                    : r.pnlValue >= 0
-                    ? "var(--accent)"
-                    : "var(--danger)",
-              }}
-            >
-              {r.pnlText}
-            </span>
-          )}
-          <span className="ts-pos-age" style={{ marginLeft: r.pnlText !== undefined ? undefined : "auto" }}>{r.ageText}</span>
-        </div>
-      ))}
+            {hasRationaleSlot && (
+              <span className="ts-pos-why-toggle" aria-hidden="true">Why?</span>
+            )}
+          </>
+        );
+
+        if (!hasRationaleSlot) {
+          return <div key={i} className="ts-pos-row">{summaryNode}</div>;
+        }
+
+        return (
+          <details key={i} className="ts-pos-details">
+            <summary className="ts-pos-row ts-pos-row-clickable">
+              {summaryNode}
+            </summary>
+            {r_ ? (
+              <RationaleBlock r={r_} />
+            ) : (
+              <div className="ts-pos-why ts-pos-why-empty">
+                Adat nem elérhető — ez a pozíció a döntés-snapshot bevezetése előtt nyílt.
+                A jövőbeli új trade-eken minden gate, edge és signal-érték fagyasztva
+                lesz a pozíción.
+              </div>
+            )}
+          </details>
+        );
+      })}
     </div>
   );
 }

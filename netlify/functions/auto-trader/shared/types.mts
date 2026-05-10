@@ -48,6 +48,17 @@ export interface AggregatedSignal {
 
 // ─── Decision types ───────────────────────────────────────
 
+// One pass/fail check evaluated by the decision-engine, surfaced in the
+// TradeDecision so the UI can render the same gate language at scan rows
+// AND on the saved open-position rationale popover.
+export interface DecisionGate {
+  label: string;
+  passed: boolean;
+  actual?: string;
+  required?: string;
+  hint?: string;
+}
+
 export interface TradeDecision {
   shouldTrade: boolean;
   direction: "YES" | "NO";
@@ -56,6 +67,39 @@ export interface TradeDecision {
   edge: number;
   kellyUsed: number;              // capped kelly fraction
   reason: string;
+  // Ordered gate list — every gate the engine evaluated. The first failing
+  // gate's reason matches `reason` above.
+  gates?: DecisionGate[];
+}
+
+// Frozen snapshot of every input the decision-engine considered at entry.
+// Saved on the Position so the UI can answer "why did the bot enter this?"
+// long after the original scan tick payload is gone.
+export interface EntryDecisionSnapshot {
+  decidedAt: string;              // ISO timestamp of the decision
+  // Probability + edge (the "thesis")
+  finalProb: number;              // signal-combiner output (YES probability)
+  marketPrice: number;            // YES market price at entry
+  grossEdge: number;              // |finalProb - marketPrice|
+  netEdge: number;                // grossEdge - roundtripFeePct
+  feePct: number;                 // roundtrip fee deducted
+  direction: "YES" | "NO";
+  // Sizing
+  kellyRaw: number;               // signal.kellyFraction (¼-Kelly from combiner)
+  kellyCapped: number;            // decision.kellyUsed (after maxKellyFraction cap)
+  kellyCap: number;               // config.maxKellyFraction
+  positionSizeUSDC: number;
+  entryPrice: number;
+  // Signal mix
+  activeSignals: number;          // count of non-null signals
+  signalBreakdown: SignalBreakdown | null;
+  obImbalance: {
+    ratio: number;
+    direction: "UP" | "DOWN" | "NEUTRAL";
+  } | null;
+  // Engine verdict
+  gates: DecisionGate[];          // every gate, in evaluation order
+  reason: string;                 // decision-engine reason string
 }
 
 // ─── Order / Position types ───────────────────────────────
@@ -94,6 +138,11 @@ export interface Position {
   predictedProb?: number;
   signalBreakdown?: SignalBreakdown | null;
   category?: Category;
+  // Full decision context captured at entry. Powers the "why did the bot
+  // enter this?" popover on the OpenPositionsCard. Optional for backward
+  // compat — positions opened before this field was introduced render a
+  // "no data" placeholder instead.
+  entryDecision?: EntryDecisionSnapshot;
   // Weather-only reconciliation context. Populated by the weather trader at
   // open and consumed by the weather reconciler cron, which queries actual
   // METAR observations and settles the position with real PnL (instead of

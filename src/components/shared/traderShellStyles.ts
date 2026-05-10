@@ -332,6 +332,116 @@ export const traderShellCSS = `
 .ts-opp-oi      { color: var(--muted); }
 .ts-opp-reason  { color: var(--muted); font-size: 0.6rem; flex-basis: 100%; opacity: 0.75; }
 
+/* ─── Open position rationale ("Why?" panel) ───────────── */
+.ts-pos-details { border-bottom: 1px solid var(--border); }
+.ts-pos-details:last-child { border-bottom: none; }
+.ts-pos-details > summary { list-style: none; cursor: pointer; }
+.ts-pos-details > summary::-webkit-details-marker { display: none; }
+.ts-pos-row-clickable {
+  display: flex; gap: 0.6rem; padding: 0.4rem 0;
+  font-family: var(--mono); font-size: 0.72rem;
+  flex-wrap: wrap; align-items: center;
+  border-bottom: none;
+}
+.ts-pos-row-clickable:hover { background: var(--surface2); }
+.ts-pos-why-toggle {
+  font-family: var(--mono); font-size: 0.6rem; color: var(--accent2);
+  margin-left: 0.5rem; padding: 1px 6px; border-radius: 3px;
+  background: var(--bg); border: 1px solid var(--border);
+  text-transform: uppercase; letter-spacing: .05em;
+}
+.ts-pos-why-toggle::before { content: "▸ "; color: var(--muted); }
+.ts-pos-details[open] .ts-pos-why-toggle::before { content: "▾ "; color: var(--accent); }
+.ts-pos-details[open] .ts-pos-why-toggle { color: var(--accent); border-color: var(--accent); }
+
+.ts-pos-why {
+  margin: 0.2rem 0 0.6rem;
+  padding: 0.75rem 0.85rem;
+  background: var(--surface2);
+  border-left: 3px solid var(--accent2);
+  border-radius: 0 4px 4px 0;
+  font-family: var(--mono); font-size: 0.68rem; color: var(--text);
+  display: flex; flex-direction: column; gap: 0.6rem;
+}
+.ts-pos-why-empty { color: var(--muted); font-style: italic; line-height: 1.45; }
+
+.ts-pos-why-label {
+  display: block; font-size: 0.55rem;
+  color: var(--muted); text-transform: uppercase;
+  letter-spacing: 0.08em; margin-bottom: 4px;
+}
+
+.ts-pos-why-thesis {
+  background: var(--bg); border: 1px solid var(--border);
+  padding: 0.5rem 0.6rem; border-radius: 4px; line-height: 1.55;
+}
+.ts-pos-why-thesis-text strong { color: var(--accent); }
+.ts-pos-why-thesis-text strong:not(:first-of-type) { color: var(--accent2); }
+
+.ts-pos-why-grid {
+  display: grid; gap: 0.4rem;
+  grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
+}
+.ts-pos-why-cell {
+  background: var(--bg); border: 1px solid var(--border);
+  padding: 0.4rem 0.55rem; border-radius: 4px;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.ts-pos-why-cell-label {
+  font-size: 0.52rem; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.06em;
+}
+.ts-pos-why-cell-val { font-size: 0.78rem; color: var(--text); font-weight: 600; }
+.ts-pos-why-cell-sub { font-size: 0.56rem; color: var(--muted); font-weight: 400; margin-left: 4px; }
+.ts-pos-why-pos { color: var(--accent); }
+.ts-pos-why-neg { color: var(--danger); }
+
+.ts-pos-why-signals-row {
+  display: flex; flex-wrap: wrap; gap: 0.4rem;
+}
+.ts-pos-why-sig {
+  background: var(--bg); border: 1px solid var(--border);
+  padding: 2px 7px; border-radius: 3px;
+  font-size: 0.62rem;
+  display: inline-flex; align-items: center; gap: 5px;
+}
+.ts-pos-why-sig-up   { color: var(--accent);  border-color: var(--accent); }
+.ts-pos-why-sig-down { color: var(--danger);  border-color: var(--danger); }
+.ts-pos-why-sig-off  { color: var(--muted); }
+.ts-pos-why-sig-ob   { color: var(--accent2); border-color: var(--accent2); }
+.ts-pos-why-sig-num  { color: var(--muted); font-size: 0.55rem; font-weight: 400; }
+
+.ts-pos-why-gate-list {
+  display: flex; flex-direction: column; gap: 3px;
+  background: var(--bg); border: 1px solid var(--border);
+  padding: 0.4rem 0.5rem; border-radius: 4px;
+}
+.ts-pos-why-gate {
+  display: grid;
+  grid-template-columns: 14px 1fr auto auto;
+  align-items: baseline; gap: 0.5rem;
+  font-size: 0.62rem; padding: 1px 0;
+}
+.ts-pos-why-gate-pass .ts-pos-why-gate-mark { color: var(--accent); }
+.ts-pos-why-gate-fail .ts-pos-why-gate-mark { color: var(--danger); }
+.ts-pos-why-gate-fail { background: rgba(241,53,53,0.06); border-radius: 3px; padding: 2px 4px; }
+.ts-pos-why-gate-mark { font-weight: 700; }
+.ts-pos-why-gate-label  { color: var(--text); }
+.ts-pos-why-gate-actual { color: var(--accent2); font-size: 0.58rem; white-space: nowrap; }
+.ts-pos-why-gate-req    { color: var(--muted); font-size: 0.58rem; white-space: nowrap; }
+
+.ts-pos-why-meta {
+  display: flex; flex-wrap: wrap; gap: 1rem;
+  font-size: 0.55rem; color: var(--muted);
+  border-top: 1px solid var(--border); padding-top: 0.4rem;
+}
+
+@media (max-width: 600px) {
+  .ts-pos-why-gate { grid-template-columns: 14px 1fr; }
+  .ts-pos-why-gate-actual,
+  .ts-pos-why-gate-req { grid-column: 2 / -1; padding-left: 4px; }
+}
+
 /* ─── Dropped (collapsible) ────────────────────────────── */
 .ts-dropped { margin-top: 0.75rem; font-family: var(--mono); font-size: 0.65rem; }
 .ts-dropped summary {

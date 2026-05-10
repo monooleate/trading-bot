@@ -375,9 +375,9 @@ export async function getHlStatus(): Promise<any> {
   };
 }
 
-export async function hlReset(): Promise<any> {
+export async function hlReset(bankrollOverride?: number): Promise<any> {
   const config  = getHlConfig();
-  const session = resetHlSession(config.paperMode);
+  const session = resetHlSession(config.paperMode, bankrollOverride);
   await saveHlSession(session);
   return { ok: true, action: "reset", category: "hyperliquid", session: summarize(session) };
 }

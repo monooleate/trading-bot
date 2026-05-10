@@ -6,6 +6,7 @@
 // session reset never wipes the run-state.
 
 import { getStore } from "@netlify/blobs";
+import { PAPER_SIM_VERSION } from "./session-manager.mts";
 
 const RUN_STORE = "crypto-runtime";
 const RUN_KEY   = "v1";
@@ -63,12 +64,23 @@ export async function getCryptoRunStatus(): Promise<{
   const ageSec = s.lastRunAt
     ? Math.floor((Date.now() - new Date(s.lastRunAt).getTime()) / 1000)
     : null;
+  // Drop lastResult if it was captured under an older paper-sim version.
+  // Those results reference positions that loadSession() has since
+  // archived, so surfacing them as the "current" run misleads the UI.
+  let lastResult = s.lastResult;
+  const snapshotSimV = lastResult?.session?.simVersion
+    ?? lastResult?.liveReadiness?.summary?.simVersion
+    ?? null;
+  if (typeof snapshotSimV === "number" && snapshotSimV < PAPER_SIM_VERSION) {
+    lastResult = null;
+    try { await saveRunState({ ...s, lastResult: null }); } catch {}
+  }
   return {
     isRunning,
     startedAt:  s.startedAt,
     lastRunAt:  s.lastRunAt,
     source:     s.source,
     ageSec,
-    lastResult: s.lastResult,
+    lastResult,
   };
 }

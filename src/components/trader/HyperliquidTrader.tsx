@@ -50,7 +50,7 @@ interface HlRunResult {
   source?: "manual" | "cron";
 }
 
-export default function HyperliquidTrader() {
+export default function HyperliquidTrader({ bankroll }: { bankroll?: number }) {
   const { status, refresh } = useAutoTraderStatus<HlSessionSummary>("hyperliquid");
   const { loading, error, lastResult, run, setError } =
     useTraderAction<HlRunResult>("hyperliquid");
@@ -87,10 +87,16 @@ export default function HyperliquidTrader() {
 
   const doAction = useCallback(async (action: string) => {
     setError(null);
-    const r = await run(action);
+    // Reset takes the dashboard bankroll input as the new starting bankroll.
+    // The funding-arb layer borrows this same pool — resetting HL with a new
+    // bankroll therefore also changes the F-Arb capital cap.
+    const extras = action === "reset" && typeof bankroll === "number"
+      ? { bankroll }
+      : undefined;
+    const r = await run(action, extras);
     if (r) setHealthRefresh((n) => n + 1);
     refresh();
-  }, [run, refresh, setError]);
+  }, [run, refresh, setError, bankroll]);
 
   const stats: TraderStat[] = session ? [
     { label: "Bankroll",    value: `$${session.bankrollCurrent.toFixed(2)}` },
@@ -127,7 +133,10 @@ export default function HyperliquidTrader() {
     `Lezárt trade-ek: <b>${session.tradeCount}</b> · Session PnL: <b>${session.sessionPnL >= 0 ? "+" : ""}$${session.sessionPnL.toFixed(2)}</b>`,
     `Nyitott pozíciók: <b>${session.openPositions}</b> · Loss streak: <b>${session.consecutiveLosses}</b>`,
     `Indult: <b>${new Date(session.startedAt).toLocaleString()}</b>`,
-  ] : undefined;
+    typeof bankroll === "number"
+      ? `Új starting bankroll a reset után: <b>$${bankroll.toFixed(2)}</b> (a fejléc Bankroll mezőjéből — Funding-Arb is ebből húz)`
+      : "",
+  ].filter(Boolean) : undefined;
 
   return (
     <TraderShell

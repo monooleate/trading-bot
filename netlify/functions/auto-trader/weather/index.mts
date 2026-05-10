@@ -15,6 +15,7 @@ import {
   loadSession,
   saveSession,
   addOpenPosition,
+  PAPER_SIM_VERSION,
 } from "../crypto/session-manager.mts";
 import type { MarketInfo, Position } from "../shared/types.mts";
 
@@ -67,13 +68,28 @@ export async function getWeatherRunStatus(): Promise<{
   const ageSec = s.lastRunAt
     ? Math.floor((Date.now() - new Date(s.lastRunAt).getTime()) / 1000)
     : null;
+  // Drop lastResult if the snapshot was taken under an older paper-sim
+  // version. Those results reference positions that have since been
+  // archived by loadSession()'s auto-reset, so showing them as the
+  // "current" run is misleading (UI showed 3 "traded" rows for a session
+  // that had been wiped).
+  let lastResult = s.lastResult;
+  const snapshotSimV = lastResult?.session?.simVersion
+    ?? lastResult?.liveReadiness?.summary?.simVersion
+    ?? null;
+  if (typeof snapshotSimV === "number" && snapshotSimV < PAPER_SIM_VERSION) {
+    lastResult = null;
+    // Persist the cleanup so the next poll doesn't re-evaluate the same
+    // stale snapshot.
+    try { await saveRunState({ ...s, lastResult: null }); } catch {}
+  }
   return {
     isRunning,
     startedAt:  s.startedAt,
     lastRunAt:  s.lastRunAt,
     source:     s.source,
     ageSec,
-    lastResult: s.lastResult,
+    lastResult,
   };
 }
 

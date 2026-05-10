@@ -69,7 +69,7 @@ function formatDuration(ms: number): string {
   return `in ${Math.floor(sec / 86400)}d ${Math.floor((sec % 86400) / 3600)}h`;
 }
 
-export default function WeatherTrader() {
+export default function WeatherTrader({ bankroll }: { bankroll?: number }) {
   const { status, refresh } = useAutoTraderStatus<any>("weather");
   const { loading, error, lastResult, run, setError } =
     useTraderAction<RunResult>("weather");
@@ -96,10 +96,14 @@ export default function WeatherTrader() {
 
   const doAction = useCallback(async (action: string) => {
     setError(null);
-    const r = await run(action);
+    // Reset takes the dashboard bankroll input as the new starting bankroll.
+    const extras = action === "reset" && typeof bankroll === "number"
+      ? { bankroll }
+      : undefined;
+    const r = await run(action, extras);
     if (r) setHealthRefresh((n) => n + 1);
     refresh();
-  }, [run, refresh, setError]);
+  }, [run, refresh, setError, bankroll]);
 
   const controls: TraderControl[] = [
     { label: isRunning ? "Scanning..." : "Scan Weather Markets", kind: "primary", onClick: () => doAction("run"),       disabled: isRunning },
@@ -125,7 +129,10 @@ export default function WeatherTrader() {
     `Lezárt trade-ek: <b>${session.tradeCount ?? 0}</b> · Session PnL: <b>${(session.sessionPnL ?? 0) >= 0 ? "+" : ""}$${(session.sessionPnL ?? 0).toFixed(2)}</b>`,
     `Nyitott pozíciók: <b>${session.openPositions ?? 0}</b> · Pending: <b>${pending?.count ?? 0}</b>`,
     `Indult: <b>${session.startedAt ? new Date(session.startedAt).toLocaleString() : "—"}</b>`,
-  ] : undefined;
+    typeof bankroll === "number"
+      ? `Új starting bankroll a reset után: <b>$${bankroll.toFixed(2)}</b> (a fejléc Bankroll mezőjéből)`
+      : "",
+  ].filter(Boolean) : undefined;
 
   return (
     <TraderShell

@@ -364,11 +364,14 @@ export function useTraderAction<R extends ActionResponseBase = ActionResponseBas
   const [error, setError] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<R | null>(null);
 
-  const run = useCallback(async (action: string): Promise<R | null> => {
+  const run = useCallback(async (
+    action: string,
+    extras?: Record<string, unknown>,
+  ): Promise<R | null> => {
     setLoading(true);
     setError(null);
     try {
-      const body: any = { action, category };
+      const body: any = { action, category, ...(extras || {}) };
       if (layer) body.layer = layer;
       const res = await fetch(FN, {
         method: "POST",

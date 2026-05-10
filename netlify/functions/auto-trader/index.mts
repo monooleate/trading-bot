@@ -39,7 +39,7 @@ import {
   resetSession,
 } from "./crypto/session-manager.mts";
 import { computeCalibrationHealth } from "../edge-tracker/statistics.mts";
-import type { SessionState, MarketInfo, SignalBreakdown, Position } from "./shared/types.mts";
+import type { SessionState, MarketInfo, SignalBreakdown, Position, EntryDecisionSnapshot } from "./shared/types.mts";
 import { runWeatherTrader, getWeatherRunStatus } from "./weather/index.mts";
 import { getWeatherConfig, getEffectiveWeatherConfig } from "./weather/decision-engine.mts";
 import { runWeatherReconciler, getPendingPositions } from "./weather/reconciler.mts";
@@ -72,12 +72,21 @@ export default async function handler(req: Request, _ctx: Context) {
     let action = "run";
     let category = "crypto";
     let layer = "directional";
+    // Optional starting bankroll for reset — caller supplies the dashboard
+    // input value here so reset mints a session with that bankroll instead
+    // of falling back to the per-bot DEFAULT_BANKROLL.
+    let bankrollOverride: number | undefined;
     if (req.method === "POST") {
       try {
         const body = await req.json();
         action = body.action || "run";
         category = body.category || "crypto";
         layer = body.layer || "directional";
+        if (typeof body.bankroll === "number" && Number.isFinite(body.bankroll)) {
+          // Clamp into a sane range so a typo can't mint a million-dollar
+          // session or a $0 one. Matches the min={10} on the dashboard input.
+          bankrollOverride = Math.max(10, Math.min(1_000_000, body.bankroll));
+        }
       } catch {
         action = "run";
       }
@@ -116,7 +125,7 @@ export default async function handler(req: Request, _ctx: Context) {
             return jsonResponse(await runFundingArbLoop(source));
           }
           case "status": return jsonResponse(await getArbStatus());
-          case "reset":  return jsonResponse(await arbReset());
+          case "reset":  return jsonResponse(await arbReset(bankrollOverride));
           case "stop":   return jsonResponse(await arbStop());
           case "resume": return jsonResponse(await arbResume());
           default:       return jsonResponse({ ok: false, error: `Unknown action: ${action}` }, 400);
@@ -133,7 +142,7 @@ export default async function handler(req: Request, _ctx: Context) {
           return jsonResponse(await runHyperliquidTrader(undefined, source));
         }
         case "status": return jsonResponse(await getHlStatus());
-        case "reset":  return jsonResponse(await hlReset());
+        case "reset":  return jsonResponse(await hlReset(bankrollOverride));
         case "stop":   return jsonResponse(await hlStop());
         case "resume": return jsonResponse(await hlResume());
         default:       return jsonResponse({ ok: false, error: `Unknown action: ${action}` }, 400);
@@ -160,7 +169,7 @@ export default async function handler(req: Request, _ctx: Context) {
       case "status":
         return await getStatus(config, cat);
       case "reset":
-        return await handleReset(config, cat);
+        return await handleReset(config, cat, bankrollOverride);
       case "stop":
         return await handleStop(config, cat);
       case "reconcile":
@@ -444,6 +453,30 @@ async function runCryptoTrader(
         continue;
       }
 
+      // Build the full decision snapshot so the UI can answer "why did the
+      // bot enter this?" later — every gate, the kelly math, the signal mix
+      // and the OB imbalance are all preserved on the position record.
+      const grossEdge = Math.abs(signal.finalProb - market.currentPrice);
+      const entryDecision: EntryDecisionSnapshot = {
+        decidedAt:        new Date().toISOString(),
+        finalProb:        signal.finalProb,
+        marketPrice:      market.currentPrice,
+        grossEdge,
+        netEdge:          decision.edge,
+        feePct:           config.roundtripFeePct,
+        direction:        decision.direction,
+        kellyRaw:         signal.kellyFraction,
+        kellyCapped:      decision.kellyUsed,
+        kellyCap:         config.maxKellyFraction,
+        positionSizeUSDC: decision.positionSizeUSDC,
+        entryPrice:       decision.entryPrice,
+        activeSignals:    signal.activeSignals,
+        signalBreakdown:  signal.signalBreakdown,
+        obImbalance:      signal.obImbalance ?? null,
+        gates:            decision.gates ?? [],
+        reason:           decision.reason,
+      };
+
       // Attach paper-resolver metadata so the next cron tick can close this
       // position using real Polymarket resolution data (or, after a stale
       // window, the finalProb-independent Brownian-bridge fallback).
@@ -455,6 +488,7 @@ async function runCryptoTrader(
         predictedProb:      signal.finalProb,
         signalBreakdown:    signal.signalBreakdown,
         category:           "crypto",
+        entryDecision,
       };
 
       // 7. Update session with open position
@@ -587,6 +621,7 @@ function getCryptoOpenActive(session: SessionState) {
       endDate:            p.endDate ?? null,
       marketPriceAtEntry: p.marketPriceAtEntry ?? null,
       predictedProb:      p.predictedProb ?? null,
+      entryDecision:      p.entryDecision ?? null,
     }))
     .sort((a, b) => (a.endDate ?? "").localeCompare(b.endDate ?? ""));
 }
@@ -653,8 +688,16 @@ function getCryptoPendingPositions(session: SessionState) {
 
 // ─── Reset session ────────────────────────────────────────
 
-async function handleReset(config: ReturnType<typeof getTraderConfig>, category: string = "crypto") {
-  const session = resetSession(DEFAULT_BANKROLL, config.paperMode);
+async function handleReset(
+  config: ReturnType<typeof getTraderConfig>,
+  category: string = "crypto",
+  bankrollOverride?: number,
+) {
+  // Per-category default: weather sessions historically started at $100,
+  // crypto at $150. The dashboard input wins when supplied.
+  const fallback = category === "weather" ? 100 : DEFAULT_BANKROLL;
+  const bankroll = bankrollOverride ?? fallback;
+  const session = resetSession(bankroll, config.paperMode);
   await saveSession(session, category);
   return jsonResponse({
     ok: true,

@@ -13,7 +13,7 @@
 import { log } from "../../shared/logger.mts";
 import { alertError, alertLiveBlocked } from "../../shared/telegram.mts";
 import { computeLiveReadiness, shouldForcePaper, type LiveReadinessReport } from "../../shared/live-readiness.mts";
-import { loadHlSession } from "../session-manager.mts";
+import { loadHlSession, saveHlSession } from "../session-manager.mts";
 import type { HlCoin } from "../types.mts";
 import { scanFundings } from "./fr-scanner.mts";
 import { detectArbOpportunity, rankOpportunities } from "./arb-detector.mts";
@@ -307,11 +307,38 @@ export async function getArbStatus(): Promise<any> {
   };
 }
 
-export async function arbReset(): Promise<any> {
+export async function arbReset(bankrollOverride?: number): Promise<any> {
   const config  = getFrArbConfig();
   const session = resetArbSession(config.paperMode);
   await saveArbSession(session);
-  return { ok: true, action: "reset", category: "hyperliquid-arb", session: summarize(session) };
+
+  // Funding-arb has no bankroll of its own — capital is drawn from the HL
+  // directional session's bankrollCurrent. When the dashboard supplies a new
+  // bankroll on reset, propagate it to the HL session ONLY if that session
+  // has no open positions (otherwise we'd corrupt PnL accounting). Open
+  // positions ⇒ silently keep the existing HL bankroll; the response flag
+  // lets the UI surface what happened.
+  let bankrollApplied: number | null = null;
+  let bankrollSkippedReason: string | null = null;
+  if (typeof bankrollOverride === "number" && Number.isFinite(bankrollOverride)) {
+    const hl = await loadHlSession(config.paperMode);
+    if (hl.openPositions.length === 0) {
+      const updated = { ...hl, bankrollStart: bankrollOverride, bankrollCurrent: bankrollOverride };
+      await saveHlSession(updated);
+      bankrollApplied = bankrollOverride;
+    } else {
+      bankrollSkippedReason = `HL session has ${hl.openPositions.length} open perp position(s); close them or reset Hyperliquid Perp first.`;
+    }
+  }
+
+  return {
+    ok: true,
+    action: "reset",
+    category: "hyperliquid-arb",
+    session: summarize(session),
+    bankrollApplied,
+    bankrollSkippedReason,
+  };
 }
 
 export async function arbStop(): Promise<any> {

@@ -478,3 +478,406 @@ src/components/trader/CryptoTrader.tsx           +OpenPositionsCard render
 src/components/trader/WeatherTrader.tsx          +stats grid, +alerts, +OpenPositionsCard
 src/components/trader/HyperliquidTrader.tsx      +OpenPositionsCard render
 ```
+
+---
+
+# 2026-05-10 (c) — Bankroll input wired through to backend reset
+
+## A bug
+
+A főoldali `Bankroll: $200` input mező **egyik bot oldalon sem volt
+funkcióban**. A user beírt egy számot, az `localStorage`-ba mentődött, de
+a backend session bankrollját semmi nem frissítette. Minden reset a
+hardcoded szerveroldali konstansokkal mintázott új sessiont:
+
+| Bot           | DEFAULT_BANKROLL | Forrás                                              |
+|---------------|------------------|-----------------------------------------------------|
+| Crypto        | $150             | `auto-trader/index.mts:61`                          |
+| Weather       | $100             | `auto-trader/weather/index.mts:21`                  |
+| Hyperliquid   | $200             | `auto-trader/hyperliquid/session-manager.mts:15`    |
+| Funding-Arb   | $200 (HL-shared) | `loadHlSession().bankrollCurrent`                    |
+
+Két ok:
+
+1. **DashboardShell** signature `children: (tab, bankroll) => ReactNode`
+   volt, de a `CategoryDashboard` csak `(tab) => render(tab)`-ként hívta
+   meg, így a bankroll prop sosem jutott el a trader komponensekhez.
+2. A trader komponensek (CryptoTrader, WeatherTrader, …) nem fogadtak
+   `bankroll` propot, és a `doAction("reset")` sem küldött bankroll-t a
+   POST body-ban.
+3. A backend reset endpointok (`handleReset`, `hlReset`, `arbReset`)
+   nem fogadtak `bankroll` paramétert — mindig a hardcoded defaultot
+   használták.
+
+## Fix
+
+**Backend (`netlify/functions/auto-trader/index.mts`):**
+- A POST body parser már a `bankroll` mezőt is olvassa, finite-check +
+  `[10, 1_000_000]` clamp.
+- `handleReset(config, category, bankrollOverride?)`: ha van override,
+  azt használja, különben kategória-specifikus default ($100 weather /
+  $150 crypto).
+- A dispatcher átadja a `bankrollOverride`-t mind `handleReset(...)`,
+  mind `hlReset(...)`, mind `arbReset(...)` hívásnál.
+
+**`netlify/functions/auto-trader/hyperliquid/index.mts`:**
+- `hlReset(bankrollOverride?)` — átadja a `resetHlSession(paperMode,
+  bankroll)` függvénynek (a default param már létezett).
+
+**`netlify/functions/auto-trader/hyperliquid/funding-arb/index.mts`:**
+- `arbReset(bankrollOverride?)`: F-Arb sessionnek nincs saját bankrollja,
+  a HL session `bankrollCurrent`-ből húz. Ha az override jött:
+  - **HL sessionben nincs nyitott pozíció** → frissíti a HL session
+    `bankrollStart` és `bankrollCurrent` mezőit (a HL trade history
+    érintetlen marad).
+  - **Van nyitott HL pozíció** → silently ignore-olja a bankroll
+    változást (különben a PnL accounting elromlana).
+- Response payload: `bankrollApplied: number | null`,
+  `bankrollSkippedReason: string | null` — UI tudja használni.
+
+**Frontend:**
+- `DashboardShell.tsx`: `children(tab, bankroll)` — most már átadja a
+  bankrollt.
+- `CategoryDashboard.tsx`: minden `render*Tab(tab, bankroll)`,
+  trader komponensek `<CryptoTrader bankroll={bankroll} />` formában.
+- 4 trader komponens (`CryptoTrader`, `WeatherTrader`, `HyperliquidTrader`,
+  `FundingArbPanel`):
+  - `bankroll?: number` prop fogadás.
+  - `doAction("reset")` mostantól `extras = { bankroll }`-t küld.
+  - `sessionSummary`-ban új sor: "Új starting bankroll a reset után:
+    $X (a fejléc Bankroll mezőjéből)" — a ConfirmDialog ezt jeleníti
+    meg, így a user a "RESET" gépelése előtt látja, hogy mire fog
+    átállni.
+- `useTraderAction.run(action, extras?)` kibővítve egy generikus
+  `Record<string, unknown>` extras paraméterrel — minden további
+  per-action body field ide kerülhet a jövőben.
+
+## Mit nem változtattam
+
+- A bankroll input továbbra is `localStorage`-ban perzisztál — nem külön
+  per-bot, hanem közös. Ez OK, mert:
+  - Crypto / Weather / HL: külön session, mindegyiknek külön reset →
+    a user beírja amit akar és külön reset-eli mindet.
+  - F-Arb: HL-lel megosztott pool, jelzem a confirm dialogban.
+- A bankroll change MID-SESSION nincs kezelve — csak Reset-tel lehet.
+  Ez szándékos: a Kelly sizing és a session loss limit % a `bankrollStart`
+  alapján van számolva, futás közben módosítva ezeket inkonzisztenssé
+  tenné.
+- Az F-Arb reset nem reset-eli a HL sessiont (csak a bankroll mezőt
+  frissíti, ha biztonságos) — F-Arb és HL külön sessionök.
+
+## Ellenőrzés
+
+```bash
+# Crypto bot, $300 bankrollra reset
+curl -X POST https://mj-trading.netlify.app/.netlify/functions/auto-trader-api \
+  -H "Content-Type: application/json" \
+  --cookie "auth=<JWT>" \
+  -d '{"action":"reset","category":"crypto","bankroll":300}'
+
+→ { "ok": true, "session": { "bankrollStart": 300, "bankrollCurrent": 300, ... } }
+
+# F-Arb reset $500 bankrollra (HL üres):
+curl -X POST ... -d '{"action":"reset","category":"hyperliquid","layer":"arb","bankroll":500}'
+→ { "ok": true, "bankrollApplied": 500, "bankrollSkippedReason": null, ... }
+
+# F-Arb reset $500-ra, de HL-ben van 1 nyitott BTC perp:
+→ { "ok": true, "bankrollApplied": null,
+    "bankrollSkippedReason": "HL session has 1 open perp position(s); ..." }
+```
+
+## Érintett fájlok
+
+```
+netlify/functions/auto-trader/index.mts                          parse + dispatch
+netlify/functions/auto-trader/hyperliquid/index.mts              hlReset(bankroll?)
+netlify/functions/auto-trader/hyperliquid/funding-arb/index.mts  arbReset(bankroll?) + HL-update
+src/components/shared/DashboardShell.tsx                         (already passed bankroll)
+src/components/CategoryDashboard.tsx                             render*(tab, bankroll)
+src/components/shared/TraderShell.tsx                            run(action, extras?)
+src/components/trader/CryptoTrader.tsx                           +bankroll prop, reset extras
+src/components/trader/WeatherTrader.tsx                          +bankroll prop, reset extras
+src/components/trader/HyperliquidTrader.tsx                      +bankroll prop, reset extras
+src/components/trader/FundingArbPanel.tsx                        +bankroll prop, reset extras
+```
+
+---
+
+# 2026-05-10 (c) — Stale UI: 3 fantom-trade a /trade/weather/ scan results-ben
+
+## A jelenség
+
+A live `mj-trading.netlify.app/trade/weather/` Tab 1-en 3 sor jelent meg
+"traded" akcióval (Shanghai 24°C, Paris 18°C, London 15°C, mind NO entry),
+de a **stats kártyán Trades=0** és a **LiveReadinessBadge "Trade count" gate
+0/30**. A 3 trade tehát a UI-on van, de sem a session-ben, sem a live
+readiness statisztikájában nem szerepel.
+
+A felhasználó észrevette: "azt írja, hogy három traded van, de közben a
+live trades 0. ez bug?"
+
+## A két ok
+
+### Ok #1 — `loadSession()` nem írja vissza a v3 resetet
+
+`crypto/session-manager.mts:76-89` — amikor a `loadSession()` v2-es session-t
+detektál és auto-archive-ot triggerel, a régi session-t **archive key**-be
+írja (`auto-trader-session-archive-paper-v2-weather`), de a fő **session
+key**-t (`auto-trader-session-weather`) NEM írja felül a fresh v3-mal.
+Csak in-memory tér vissza:
+
+```typescript
+if (paperMode && v < PAPER_SIM_VERSION) {
+  await store.set(archiveKey(...), JSON.stringify({ session: parsed })); // ✓ archive ír
+  log("SESSION_START", ...);
+  return defaultSession(...);                                              // ✗ nem persistál
+}
+```
+
+Következmény: a fő blob **továbbra is v2 marad**. A következő `loadSession()`
+hívás (5s-enként a UI status pollok miatt) ugyanazt a v2 blob-ot olvassa,
+újra archíválja, majd újra a v3 default-tal tér vissza. A logban ez 19
+darab `auto_reset_simversion / archivedTradeCount: 1` event 8 perc alatt.
+
+A `multi-status.mts` (homepage dashboard) viszont **közvetlenül a fő
+blob-ot olvassa**, nem hívja a `loadSession()`-t. Ezért lát "1 closed
+trade + 3 open positions" weather-en már 2026-05-08 óta — a v2 session,
+amit a deploy-kor archíválni kellett volna, valójában soha nem
+archíválódott persistensen.
+
+### Ok #2 — `runStatus.lastResult` nem invalidálódik simVersion bump-on
+
+A `weather/index.mts` `weather-runtime` Blobs store-ja külön a session
+blob-tól. A `runWeatherTrader()` minden futás után frissíti
+(`saveRunState({ lastResult: result, ... })`). Az utolsó tényleges run
+**2026-05-10 07:29Z**-kor futott le (még simVersion 2-vel), és 3 pozíciót
+nyitott (`action: "traded"`). Azóta nem futott újra (cron OFF, manual
+trigger sem). Tehát a `lastResult.results` továbbra is a 3 v2-béli
+trade-et tartalmazza, miközben a session-ben már semmi nincs.
+
+A UI a `lastResult.results`-ot rendereli a `ScanResultsCard`-ban. Innen
+a 3 fantom sor.
+
+## A két fix
+
+### Fix A — persist a v3 reset
+
+`netlify/functions/auto-trader/crypto/session-manager.mts:76-95` — a fresh
+default session-t most a session key-be is kiírja, nem csak az archive-ba.
+Ezzel az auto-reset egyszer fut le, nem végtelen ciklusban.
+
+```typescript
+const fresh = defaultSession(defaultBankroll, paperMode);
+try {
+  await store.set(sessionKey(paperMode, category), JSON.stringify(fresh));
+} catch {}
+log("SESSION_START", ..., { reason: "auto_reset_simversion", ... });
+return fresh;
+```
+
+Ez automatikusan érinti **minden 4 botot, mind paper-, mind live-oldalt**,
+mert a `session-manager.mts` a központi session loader (crypto, weather
+egyaránt használja, és a generic shape miatt HL/funding-arb is, ha
+egyszer migrálódnak ide).
+
+A multi-status (homepage) ezután már a frissített v3 blob-ot olvassa,
+azaz a weather-re `closedTrades: 0, openPositions: 0`-t fog visszaadni
+azonnal a deploy + első UI poll után.
+
+### Fix B — drop stale lastResult ha simVersion mismatch
+
+`netlify/functions/auto-trader/weather/index.mts:51-93`
+(`getWeatherRunStatus`) és `auto-trader/crypto/run-state.mts:47-83`
+(`getCryptoRunStatus`) — mindkettő ellenőrzi most:
+
+```typescript
+const snapshotSimV = lastResult?.session?.simVersion
+                  ?? lastResult?.liveReadiness?.summary?.simVersion
+                  ?? null;
+if (typeof snapshotSimV === "number" && snapshotSimV < PAPER_SIM_VERSION) {
+  lastResult = null;
+  await saveRunState({ ...s, lastResult: null });   // perzisztens cleanup
+}
+```
+
+A `lastResult.session` nem tartalmazta közvetlenül a `simVersion` field-et
+(a `summarize()` nem írta bele), de a `lastResult.liveReadiness.summary.
+simVersion` mindig jelen van — ezért a fallback olvasási sorrend.
+
+A `saveRunState` cleanup azt is biztosítja, hogy a következő pollok már
+ne folytassák ugyanazt az összehasonlítást — egyszer fut, utána a blob
+tisztán nullázott.
+
+## Mit lát a felhasználó a deploy után
+
+1. **Első UI poll** (5s-en belül): a weather oldalon a 3 "traded" row
+   eltűnik, mert a `getWeatherRunStatus` lenullázza a stale lastResult-ot.
+2. **Stats kártya**: változatlanul 0 trade / 0 open (mint eddig — ez már
+   helyes volt).
+3. **Homepage breakdown**: az első weather status poll után (manuális
+   navigáció vagy 5s polling) a v2 blob v3-ra íródik. Innen a multi-status
+   weather-re 0 closed / 0 open-t ad vissza. **Az "1 trade" és "3 open"
+   értékek eltűnnek a homepage-ről** — ez a helyes érték a v3 paradigmában,
+   mert a v2 trade egy eltört Brownian-sim artifact volt (lásd `2026-05-10
+   (a)` szekció).
+4. **Logok**: a `auto_reset_simversion` event-ek megszűnnek a status
+   pollok közben — egy darab fut le csak, az is csak az első érintett
+   bot első poll-jakor.
+
+## Mit nem változtattam
+
+- **HL és funding-arb session loader**: külön fájlokban élnek
+  (`hyperliquid-session-v1` és `hyperliquid-arb-session-v1` Blobs
+  store-okban), saját `loadSession`-jük van. Egyik sem implementál
+  simVersion auto-archive logikát (mert nem prediction-driven), így a
+  fix #1 ott nem alkalmazandó. A fix #2 sem szükséges: ezeknek nincs
+  per-version cseréje.
+- **A v2 archive**: nem írom felül. A `auto-trader-session-archive-paper-
+  v2-weather` blob-ban marad az 1 closed + 3 open pozíció forensic
+  célokra (lásd a CLAUDE.md-ben hivatkozott v3 paradigma).
+
+## Files
+
+```
+netlify/functions/auto-trader/crypto/session-manager.mts     persist v3 reset
+netlify/functions/auto-trader/weather/index.mts              import PAPER_SIM_VERSION + strip stale lastResult
+netlify/functions/auto-trader/crypto/run-state.mts           import PAPER_SIM_VERSION + strip stale lastResult
+```
+
+## Weather bot egészségi audit (this session)
+
+A javítás után a teljes weather pipeline-t végigellenőriztük (Explore
+sub-agent). Összefoglaló:
+
+| Modul                       | Státusz     | Megjegyzés                                                  |
+|-----------------------------|-------------|-------------------------------------------------------------|
+| forecast-engine.mts         | PASS        | applyCityOffset toggle, target-date filter, ensemble OK     |
+| ensemble-forecast.mts       | PASS        | 31-member, DEB weights, stddev-driven confidence            |
+| decision-engine.mts         | PASS        | maxEdgeCap 0.40, ¼-Kelly + 15% cap, 9/9 config field        |
+| market-finder.mts           | PASS        | 8 új város mapped + dropped event diagnosztika              |
+| polymarket-resolver.mts     | PASS        | `&closed=true` query, {0,1} snap                            |
+| reconciler.mts              | PASS        | Polymarket → METAR 6h fallback, °F rounding (UMA quirk)     |
+| metar-fetcher.mts           | PASS        | T-group parse, station-local date filter                    |
+| auto-trader-weather-cron    | PASS        | weatherCronEnabled toggle respected, default OFF            |
+| reconciler-cron             | PASS        | always-on, */15, paperMode hardcoded                        |
+| live-readiness simVersion   | INTENTIONAL | weather METAR-driven, nem sim-driven → null gate helyes     |
+
+A weather bot **funkcionálisan kifogástalanul fut** a v3-ban. A jelen
+session-ben javított stale-UI bug pusztán prezentációs probléma volt:
+a session és a settlement valós, de a UI elavult cache-ből rajzolt.
+
+---
+
+# 2026-05-10 (c) — Crypto bot entry decision visibility + Kelly=0 hard-skip
+
+## Probléma (élő paper validáció)
+
+A `mj-trading.netlify.app/trade/crypto/` 3 nyitott pozíciójának
+felülvizsgálata során kiderült:
+
+1. A signal-combiner kelly.full=0/kelly.quarter=0 értéket adott
+   (recommendation = WAIT, "jelzések nem konvergálnak", IR=0.145), de
+   a `decision-engine.mts:104-105` `Math.max(1, bankrollUSDC * kellyCapped)`
+   sora $1-es minimum size-zal akkor is nyitott pozíciót, ha a Kelly
+   éppen 0. **Konkrét eset:** 3 BTC paper trade ment ki $1-en kelly=0
+   mellett, mert csak az edge ≥ 15% küszöbön mértük a konvergenciát,
+   de a combiner saját Kelly verdiktjét ignoráltuk.
+2. A felhasználó az UI-on csak a végeredményt látta (entry, méret, pred);
+   nem volt mód utólag megnézni mire alapult a döntés (gross/net edge,
+   raw signal-ok, OB imbalance, gate-ek).
+
+## Backend változások
+
+### `shared/types.mts`
+- Új típus: `DecisionGate` (label, passed, actual, required, hint).
+- Új típus: `EntryDecisionSnapshot` — frozen-at-entry kontextus minden
+  signal-szel, Kelly-bontással, OB imbalance-szel és a teljes gate-listával.
+- `Position.entryDecision?: EntryDecisionSnapshot` — opcionálisan tárolja
+  a snapshotot a Blobs `auto-trader-state`-ben (back-compat: régebbi
+  pozíciók `undefined`-dal töltődnek).
+- `TradeDecision.gates?: DecisionGate[]` — a decision-engine visszaadja
+  ami megegyezik a snapshot-tal.
+
+### `crypto/decision-engine.mts` — teljes átírás (gate-list + Kelly=0 gate)
+- Minden gate-et explicit `gates.push({...})`-szel ad hozzá az ordered
+  listához (early exit esetén is).
+- **Új gate (P2.1): "Kelly conviction (combiner)"** — `signal.kellyFraction > 0`.
+  Ha 0 → `noResult("Signal-combiner Kelly=0 → no conviction")`.
+  Hatás: ha az 5-8 raw signal-ból a combiner azt mondja "nincs edge"
+  (kelly = 0 a 0.5 finalProb miatt, vagy a Fundamental Law IR-je
+  alacsony), a bot nem nyit minimum-size $1 pozíciót se.
+- A többi gate ugyanaz mint régen: session loss, active≥2, cooldown,
+  open interest, entry-window, OB imbalance konvergencia, net edge ≥
+  threshold, Kelly cap.
+
+### `auto-trader/index.mts`
+- `placeBuyOrder` után `entryDecision: EntryDecisionSnapshot` build és
+  `paperPosition.entryDecision = entryDecision`. Minden új paper trade-en
+  fagyasztva van: `decidedAt`, `finalProb`, `marketPrice`,
+  `gross/netEdge`, `feePct`, `direction`, `kellyRaw/Capped/Cap`,
+  `positionSizeUSDC`, `entryPrice`, `activeSignals`, `signalBreakdown`,
+  `obImbalance`, `gates[]`, `reason`.
+- `getCryptoOpenActive()` exposeolja az `entryDecision` mezőt a status
+  payload `openDetails[]`-ben.
+
+## Frontend változások
+
+### `shared/TraderResults.tsx`
+- Új típus: `OpenPositionRationale` (== `EntryDecisionSnapshot` UI-side).
+- `OpenPositionRow.rationale?: OpenPositionRationale | null` — ha mező
+  jelen van (akár null!), a sor `<details>`-elemmé alakul, expandable.
+- Új belső komponens: `RationaleBlock` — render egy zöld accent-bordered
+  panelt: tézis-mondat (modell vs piac, irány, méret), 4-cellás grid
+  (gross edge / net edge / kelly raw→capped / aktív signal-ok), signal-
+  bontás nyíl-chip-ekkel (FR/VPIN/VOL/APEX/CP + OB), gate-lista pass/fail
+  jelölésekkel, és meta sorral (decidedAt + reason).
+- `null` rationale (régebbi pozíció) → muted "Adat nem elérhető..."
+  placeholder a panelben.
+
+### `shared/traderShellStyles.ts`
+- 100+ sor új CSS: `.ts-pos-details`, `.ts-pos-why-toggle` (chevron-os
+  Why? chip), `.ts-pos-why` panel (accent2 bal-szegély), grid-cellák,
+  signal-chip-ek (up/down/off/ob), gate-list (pass-zöld pipa, fail-piros
+  háttér), responsive grid 600px alatt.
+
+### `trader/CryptoTrader.tsx`
+- Importálja az `OpenPositionRationale` típust.
+- `openDetails` típusa bővítve `entryDecision: OpenPositionRationale | null`.
+- A row mappelésnél `rationale: p.entryDecision ?? null`.
+
+## Mit oldottunk meg / mit nem
+
+| Probléma                                              | Állapot |
+|-------------------------------------------------------|---------|
+| Kelly=0 mellett $1 minimum size override              | ✅ FIX  |
+| UI: "miért nyitotta a bot ezt?"                       | ✅ FIX  |
+| Daily markets-en az entry-window gate idle            | unchanged (külön ticket) |
+| Combined prob ~0.5-nél mechanikusan generált edge     | részben (Kelly=0 most blokkol) |
+| 3 régi pozíció paper PnL                              | unchanged (v3 garantálja, real Polymarket close-ra vár) |
+
+## Tesztelési protokoll (deploy után)
+
+1. A 3 jelenleg nyitott pozíció (`bitcoin-up-or-down-on-may-10-2026`,
+   `bitcoin-above-80k/82k-on-may-11`) entryDecision nélkül létezik —
+   a "Why?" toggle muted placeholdert mutat.
+2. Az új cron tick (\*/3) az új gate-szettet futtatja: ha a combiner
+   még mindig kelly=0-t ad, az új trade-ek **nem nyílnak**, a sor
+   "skip: Signal-combiner Kelly=0 → no conviction" lesz.
+3. Ha a combiner ad végre kelly>0-t (más BTC piac, jobb signal mix),
+   az új trade entryDecision-nel mentődik → a "Why?" panel teljesen
+   feltöltött.
+
+## Hova nyúlj legközelebb
+
+- **Egyéb bot ugyanezt kapja**: a `OpenPositionsCard.rationale` props
+  generikus, csak a backend (weather-meta, HL signal-mix) építi fel
+  ugyanezt a snapshot shape-et. ~30 sor copy a weather/HL trader-ekbe,
+  minden további bot azonnal megkapja a "Why?" panelt.
+- **Closed trades**: a `ClosedTrade` is megérdemli ugyanezt a frozen
+  rationale-t (most csak `signalBreakdown` van benne). Edge tracker
+  per-trade view-ban szintén megjelenne.
+- **Daily markets entry-window**: a `parseDurationMs` jelenleg csak
+  "X minute/hour" patternt fog. Ha akarjuk, a daily piacokra ráillesztünk
+  egy "morning-window" gate-et (open ~16:00 UTC előző nap → entry-window
+  pl. 08:00–14:00 UTC).
+
