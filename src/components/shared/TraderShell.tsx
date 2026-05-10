@@ -399,12 +399,21 @@ export function useTraderAction<R extends ActionResponseBase = ActionResponseBas
       setLastResult(data);
       if (!data.ok) {
         // Compose a richer message: backend `error`, fallback to Netlify's
-        // `message`, then HTTP status. Beats the old "Unknown error" string.
+        // `message`, then HTTP status + RAW BODY SLICE so we can see exactly
+        // what the response looked like when none of the conventional error
+        // fields are present.
         const backendErr = (data as any).error
           || (data as any).message
           || (data as any).errorMessage
-          || `HTTP ${res.status} ${res.statusText || "no error message"}`;
+          || `HTTP ${res.status} ${res.statusText || "no error message"} · body: ${raw.slice(0, 300)}`;
         setError(String(backendErr));
+        // Console log for the operator to inspect the full response shape.
+        console.warn("[useTraderAction] backend response had !ok and no error field:", {
+          status: res.status,
+          statusText: res.statusText,
+          parsedKeys: Object.keys(data || {}),
+          rawSlice: raw.slice(0, 500),
+        });
       }
       return data;
     } catch (e: any) {
