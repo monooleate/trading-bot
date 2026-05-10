@@ -2118,3 +2118,106 @@ mutat — ez a tool-és-bot kapcsolatot vizuálisan is megjeleníti:
 - Ha más Gamma-szűrőre is hasonló bug kerül elő (pl. egy hosszú-szál
   market kihagyva volume miatt), érdemes az audit-mintát itt
   dokumentálni.
+
+# 2026-05-10 (i) — Crypto + Weather: backend-driven gate-list (uniform UI follow-up)
+
+## A bug, amit a user észlelt
+
+Az előző `(h)` szekcióban HL + F-Arb backend-shippelt gate-eket kapott;
+Crypto és Weather változatlanul a frontend `*EntryCriteria` mappert
+használta. **Élesben** a felhasználó látott:
+
+- A scan-row-okon **vagy nem volt chip**, vagy "1/1 ✓" jelent meg —
+  ami egyáltalán nem informatív.
+- Konzisztencia hiány: HL/F-Arb pontos "X/12" / "X/6" chipet mutatott,
+  Crypto/Weather meg semmit vagy 1/1-et.
+
+Oka: a `cryptoEntryCriteria(r, cfg)` mapper csak akkor adott hozzá egy
+gate-et, ha a row data tartalmazta a megfelelő mezőt. A skip soron csak
+subset volt jelen (pl. csak `r.activeSignals`), ezért 1/1 ✓ jött ki —
+pedig a backend decision-engine 8-9 gate-et ténylegesen kiértékelt.
+
+## Fix
+
+### `auto-trader/crypto/decision-engine.mts`
+
+`makeDecision` átírva — **nem short-circuitol** többé. Minden gate
+független pass/fail-ként kiértékelődik, a teljes lista visszatér.
+`shouldTrade = gates.every(g => g.passed)`. A `reason` mező a *legelső*
+bukott gate üzenetét hozza (változatlan UX a row footer-en).
+
+Gate set (9 elem, +1 conditional):
+
+1. Session loss limit · 2. Aktív signal források · 3. Market cooldown
+4. Open interest · 5. Entry window (BTC short markets, conditional)
+6. OB imbalance konvergencia · 7. Net edge ≥ küszöb
+8. Kelly conviction · 9. Kelly méret ≤ cap
+
+Daily piacokon (nincs `openedAtEstimate`) az 5. gate `passed: true,
+actual: "n/a (daily market)"` — Y stable.
+
+### `auto-trader/index.mts` (crypto runner)
+
+`marketContext`-be új mező: `gates: decision.gates ?? []`. Mivel ez minden
+push-ba spread-elve van (skip / failed / position_opened), a gates
+automatikusan minden soron jelen van.
+
+Két extra javítás:
+
+- "Already has open position" early-return: most synthetic 1-gate row
+  ("Market nincs nyitva", passed: false). A chip "0/1 · 1✗" rendererelhet.
+- Error path: `gates: []` (üres lista, chip nem jelenik meg, ami helyes
+  — nem volt mit ellenőrizni).
+
+### `auto-trader/weather/decision-engine.mts`
+
+`makeWeatherDecision` ugyanúgy átírva — **non-short-circuit**, teljes
+gate lista visszatér.
+
+Gate set (6 elem):
+
+1. Forecast confidence · 2. Idő a settlementig · 3. Forecast model frissesség
+4. Net edge ≥ küszöb · 5. Sanity cap (gross edge ≤ cap) · 6. Kelly méret ≤ cap
+
+### `auto-trader/weather/index.mts`
+
+Per-row gates push-olva minden ágon:
+
+- Already has open position → synthetic 1-gate "Market nincs nyitva"
+- Unknown city → synthetic 1-gate "Ismert station / city"
+- No matching bucket → synthetic 1-gate "Bucket match"
+- Decision skip → `decision.gates` (6 elem)
+- Buy order failed → `decision.gates`
+- Traded → `decision.gates`
+- Error → `[]`
+
+Skip soron a chip rendereléshez plusz mezők is jönnek (predictedTemp,
+edge, confidence, marketPrice, modelProb, direction, bucket).
+
+### Frontend (`CryptoTrader.tsx` + `WeatherTrader.tsx`)
+
+`criteria` builder: ha `r.gates` non-empty → backend payload, egyébként
+a régi mapper. Mostantól a backend mindig shippeli, így a fallback ritka.
+
+## Hatás deploy után
+
+- **Crypto scan-row**: minden 3 BTC market "X/9-10 gates" chippel jelenik
+  meg, hover-en a teljes pre-flight checklist `actual` és `required`
+  oszloppal. Eddig 1/1 vagy semmi volt → mostantól pl. 7/9 (2 fail, OB
+  + edge), és pontosan látszik melyik gate-ek buktak.
+- **Weather scan-row**: minden city "X/6 gates" chippel; HK Shanghai stb.
+  most 6/6 vagy 4/6 — pontosan látható melyik bukott (sanity cap, edge).
+- **HL + F-Arb**: változatlan (már a (h) session-ben kaptak backend gates).
+
+`tsc --noEmit` exit 0 + Astro build 9 page generated.
+
+## Megjegyzés a tsconfig-ról
+
+A user `internal-docs/mathSEO_reference/` folder-t hozzáadta a
+`.gitignore`-hoz, de a `tsconfig.json` `exclude` listájában nem szerepel,
+ezért a `tsc --noEmit` továbbra is hibát dobott rá. **Nem érintettem a
+tsconfig-ot** — ezt a user vagy egy későbbi session rendezi.
+
+Mivel az említett mappa nem része a Netlify build-nek (Astro/Vite csak
+a `src/` és `netlify/functions/` ágat dolgozza fel), a TS hibák nem
+blokkolják a deployt.

@@ -15,6 +15,7 @@ import {
   cryptoEntryCriteria,
   type ResultChip,
   type SignalArrow,
+  type CriteriaGate,
   type PendingPositionLite,
   type OpenPositionRow,
   type OpenPositionRationale,
@@ -343,7 +344,14 @@ export default function CryptoTrader({ bankroll }: { bankroll?: number }) {
                 }))
               : [];
 
-            const criteria = cryptoEntryCriteria(r, display.config);
+            // Backend now ships a per-row `gates: DecisionGate[]` covering
+            // session-loss / active-signals / cooldown / OI / entry-window /
+            // OB-imbalance / net-edge / kelly-conviction / kelly-cap, so the
+            // chip "X/Y gates" renders uniformly. Fallback to the lighter
+            // mapper for older payloads that pre-date the change.
+            const criteria: CriteriaGate[] = Array.isArray((r as any).gates) && (r as any).gates.length > 0
+              ? ((r as any).gates as CriteriaGate[])
+              : cryptoEntryCriteria(r, display.config);
 
             const extra = r.action === "position_opened" && r.entry !== undefined && r.size !== undefined
               ? `$${r.size.toFixed(2)} @ ${(r.entry * 100).toFixed(0)}¢`

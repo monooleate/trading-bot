@@ -351,6 +351,38 @@ netlify deploy --prod --dir=dist
 
 ## AKTUÁLIS ÁLLAPOT (2026-05-10) – Claude Code folytatáshoz
 
+### Huszadik session (2026-05-10) – Crypto + Weather: backend-driven gate-list (uniform UI follow-up)
+
+A 18. session-ben HL + F-Arb backend-shippelt gate-eket kapott; Crypto és
+Weather változatlanul a frontend mapperből építette → élesben "1/1 ✓" vagy
+semmi jelent meg. A user észrevette ("nem jelennek meg a gate-k vagy 1/1
+ben jelenik meg ugyanez van a weather -ön is! mondtam hogy egységes
+legyen!"). Most mindkét bot is backend-driven gate-listát kap.
+
+**Crypto** (`crypto/decision-engine.mts` + `auto-trader/index.mts`):
+- `makeDecision` átírva non-short-circuit-ra: minden gate független
+  pass/fail-ként értékelődik ki, teljes lista visszatér.
+  `shouldTrade = gates.every(g => g.passed)`. A `reason` mező továbbra is
+  a *legelső* bukott gate üzenetét hozza (változatlan UX a row footer-en).
+- 9 base gate + 1 conditional (entry-window — daily piacokon "n/a").
+- `marketContext.gates` mező — minden push (skip/failed/position_opened)
+  automatikusan kapja.
+- "Already has open position" early-return: synthetic 1-gate.
+
+**Weather** (`weather/decision-engine.mts` + `weather/index.mts`):
+- `makeWeatherDecision` ugyanúgy non-short-circuit. 6 gate.
+- Per-row gates push-olva minden ágon. Pre-decision skip-ek (unknown city,
+  no matching bucket) synthetic 1-gate-tel.
+
+**Frontend** (`CryptoTrader.tsx` + `WeatherTrader.tsx`): `criteria` builder
+ha `r.gates` non-empty → backend payload, egyébként legacy mapper fallback.
+
+Hatás: minden 4 boton most teljes "X/Y gates" chip látszik a hover popover-rel.
+Crypto eddig 1/1 ✓ vagy semmi → most 7/9 (pl. 2 fail), pontos checklist-tel.
+
+`tsc --noEmit` exit 0 + Astro build 9 page.
+Részletek: `internal-docs/changelog/CHANGELOG-2026-05-10.md` "(i)" szekció.
+
 ### Tizenkilencedik session (2026-05-10) – /tools/ dashboard: 9 tab kap egységes "How to use" info-doboz + vol-divergence 15m bug fix
 
 A `mj-trading.netlify.app/tools/` 9 elemző-tabja (Scanner, EV, Swarm,

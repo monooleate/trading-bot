@@ -404,7 +404,10 @@ async function runCryptoTrader(
       break;
     }
 
-    // Skip if already have an open position in this market
+    // Skip if already have an open position in this market. Synthesise a
+    // single-gate failure so the UI's "X/Y gates" chip still renders for
+    // these rows (instead of disappearing) — same shape as makeDecision's
+    // gate list, just with one element.
     if (updatedSession.openPositions.some((p) => p.market === market.slug)) {
       results.push({
         market: market.slug,
@@ -413,6 +416,13 @@ async function runCryptoTrader(
         reason: "Already has open position",
         marketPrice: market.currentPrice,
         endDate: market.endDate,
+        gates: [{
+          label: "Market nincs nyitva",
+          passed: false,
+          actual: "already open",
+          required: "no open position",
+          hint: "Egy piacra max 1 nyitott pozíció.",
+        }],
       });
       continue;
     }
@@ -442,6 +452,8 @@ async function runCryptoTrader(
 
       // Common per-market context surfaced in the response so the UI can
       // explain *why* the bot acted the way it did, regardless of branch.
+      // `gates` powers the unified "X/Y gates" chip + hover popover — same
+      // shape across all 4 bots.
       const marketContext = {
         market: market.slug,
         title: market.title,
@@ -456,6 +468,7 @@ async function runCryptoTrader(
         signalBreakdown: signal.signalBreakdown,
         obImbalance: signal.obImbalance ?? null,
         endDate: market.endDate,
+        gates: decision.gates ?? [],
       };
 
       if (!decision.shouldTrade) {
@@ -569,7 +582,8 @@ async function runCryptoTrader(
       });
     } catch (err: any) {
       log("ERROR", config.paperMode, { market: market.slug, error: err.message });
-      results.push({ market: market.slug, title: market.title, action: "error", error: err.message });
+      // Error rows still get an empty gates array so the UI shape is uniform.
+      results.push({ market: market.slug, title: market.title, action: "error", error: err.message, gates: [] });
     }
   }
 

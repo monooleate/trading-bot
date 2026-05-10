@@ -244,16 +244,35 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
 
   // 3. Process each market
   for (const market of markets.slice(0, 5)) {
-    // Skip if already have a position
+    // Skip if already have a position. Synthetic single-gate failure so
+    // the UI's "X/Y gates" chip still renders for these rows.
     if (updatedSession.openPositions.some((p) => p.market === market.slug)) {
-      results.push({ market: market.slug, action: "skip", reason: "Already has open position" });
+      results.push({
+        market: market.slug, action: "skip", reason: "Already has open position",
+        gates: [{
+          label: "Market nincs nyitva",
+          passed: false,
+          actual: "already open",
+          required: "no open position",
+          hint: "Egy piacra max 1 nyitott pozíció.",
+        }],
+      });
       continue;
     }
 
     try {
       const station = getStation(market.city);
       if (!station) {
-        results.push({ market: market.slug, action: "skip", reason: `Unknown city: ${market.city}` });
+        results.push({
+          market: market.slug, action: "skip", reason: `Unknown city: ${market.city}`,
+          gates: [{
+            label: "Ismert station / city",
+            passed: false,
+            actual: market.city || "—",
+            required: "mapped station",
+            hint: "A bot csak konfigurált METAR állomás alapján trade-elhet.",
+          }],
+        });
         continue;
       }
 
@@ -280,7 +299,18 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
       const sigma = forecast.cloudCoverPct > 60 ? 1.5 : 1.0;
       const match = matchBucket(forecast.predictedMaxC, market.outcomes, sigma);
       if (!match) {
-        results.push({ market: market.slug, action: "skip", reason: "No matching bucket" });
+        results.push({
+          market: market.slug, city: market.city, action: "skip", reason: "No matching bucket",
+          predictedTemp: forecast.predictedMaxC,
+          confidence: forecast.confidence,
+          gates: [{
+            label: "Bucket match (forecast → market bucket)",
+            passed: false,
+            actual: `pred ${forecast.predictedMaxC}°C, no nearby bucket`,
+            required: "min 1 bucket within σ",
+            hint: "A forecast hőmérséklet egyik szállított bucket center körül se illett be a σ-band-be.",
+          }],
+        });
         continue;
       }
 
@@ -299,7 +329,17 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
       });
 
       if (!decision.shouldTrade) {
-        results.push({ market: market.slug, city: market.city, action: "skip", reason: decision.reason });
+        results.push({
+          market: market.slug, city: market.city, action: "skip", reason: decision.reason,
+          predictedTemp: decision.predictedTemp,
+          marketPrice: decision.marketPrice,
+          modelProb: match.probability,
+          edge: decision.edge,
+          confidence: decision.confidence,
+          direction: decision.direction,
+          bucket: decision.bucketLabel,
+          gates: decision.gates ?? [],
+        });
         continue;
       }
 
@@ -417,17 +457,26 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
           entry: entryPrice,
           size: decision.positionSizeUSDC,
           predictedTemp: decision.predictedTemp,
+          marketPrice: decision.marketPrice,
+          modelProb: match.probability,
           edge: decision.edge,
           confidence: decision.confidence,
           reconcileAfter,
           status: "pending_settlement",
+          gates: decision.gates ?? [],
         });
       } else {
-        results.push({ market: market.slug, action: "failed", reason: "Buy order not filled" });
+        results.push({
+          market: market.slug, city: market.city, action: "failed", reason: "Buy order not filled",
+          predictedTemp: decision.predictedTemp,
+          edge: decision.edge,
+          confidence: decision.confidence,
+          gates: decision.gates ?? [],
+        });
       }
     } catch (err: any) {
       log("ERROR", config.paperMode, { market: market.slug, error: err.message });
-      results.push({ market: market.slug, action: "error", error: err.message });
+      results.push({ market: market.slug, action: "error", error: err.message, gates: [] });
     }
   }
 

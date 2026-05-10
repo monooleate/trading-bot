@@ -97,15 +97,10 @@ export async function getEffectiveWeatherConfig(): Promise<WeatherConfig> {
 
 const KELLY_CAP = 0.15;
 
-const noTrade = (reason: string, gates: DecisionGate[]): WeatherTradeDecision => ({
-  shouldTrade: false,
-  city: "", date: "", bucketLabel: "", direction: "YES",
-  tokenId: "", predictedTemp: 0, marketPrice: 0,
-  edge: 0, confidence: 0, modelLagMinutes: 0,
-  positionSizeUSDC: 0, reason,
-  gates,
-});
-
+// Evaluates the full ordered gate list for one (forecast × bucket) pair.
+// Like the crypto engine, it does NOT short-circuit — every gate is added
+// to the list and shouldTrade is `gates.every(g => g.passed)`. That keeps
+// the UI's "X/Y gates" chip uniform across rows.
 export function makeWeatherDecision(params: {
   forecast: ForecastResult;
   match: BucketMatch;
@@ -116,11 +111,10 @@ export function makeWeatherDecision(params: {
 }): WeatherTradeDecision {
   const { forecast, match, modelLag, timeToResolutionMin, bankrollUSDC, config } = params;
 
-  // Gate accumulator — every check pushes its pass/fail row so the popover
-  // can render the same shape as the crypto bot, including failed runs.
   const gates: DecisionGate[] = [];
+  const reasons: string[] = [];
 
-  // 1. Confidence check
+  // 1. Confidence
   const confOk = forecast.confidence >= config.confidenceMin;
   gates.push({
     label: "Forecast confidence ≥ küszöb",
@@ -129,14 +123,9 @@ export function makeWeatherDecision(params: {
     required: `≥ ${(config.confidenceMin * 100).toFixed(0)}%`,
     hint: "Az ensemble szórása alapján mért bizalmi szint. Cloud cover > 60% esetén automatikusan szigorúbb σ-val matchel.",
   });
-  if (!confOk) {
-    return noTrade(
-      `Confidence ${(forecast.confidence * 100).toFixed(0)}% < min ${(config.confidenceMin * 100).toFixed(0)}%`,
-      gates,
-    );
-  }
+  if (!confOk) reasons.push(`Confidence ${(forecast.confidence * 100).toFixed(0)}% < min ${(config.confidenceMin * 100).toFixed(0)}%`);
 
-  // 2. Too close to resolution
+  // 2. Time-to-resolution
   const timeOk = timeToResolutionMin >= config.exitBeforeMin;
   gates.push({
     label: "Idő a settlementig ≥ küszöb",
@@ -145,14 +134,9 @@ export function makeWeatherDecision(params: {
     required: `≥ ${config.exitBeforeMin}min`,
     hint: "Túl közeli endDate-en nem lenne idő reagálni egy modell-frissítésre.",
   });
-  if (!timeOk) {
-    return noTrade(
-      `Too close to resolution: ${timeToResolutionMin}min < ${config.exitBeforeMin}min`,
-      gates,
-    );
-  }
+  if (!timeOk) reasons.push(`Too close to resolution: ${timeToResolutionMin}min < ${config.exitBeforeMin}min`);
 
-  // 3. Model boundary check
+  // 3. Model boundary
   const modelOk = !modelLag.nearBoundary;
   gates.push({
     label: "Forecast model frissesség",
@@ -161,13 +145,12 @@ export function makeWeatherDecision(params: {
     required: "no boundary",
     hint: "GFS/ECMWF futás határán lévő forecast még ingadozhat — kihagyjuk a tickek közti zajt.",
   });
-  if (!modelOk) {
-    return noTrade("Near model update boundary, waiting for new data", gates);
-  }
+  if (!modelOk) reasons.push("Near model update boundary, waiting for new data");
 
-  // 4. Edge check (net of fees)
+  // 4. Net edge ≥ threshold
   const grossEdge = Math.abs(match.edge);
-  const netEdge = grossEdge - config.roundtripFeePct;
+  const netEdge   = grossEdge - config.roundtripFeePct;
+  const direction: "YES" | "NO" = match.edge > 0 ? "YES" : "NO";
   const edgeOk = netEdge >= config.edgeThreshold;
   gates.push({
     label: "Net edge ≥ küszöb",
@@ -176,18 +159,12 @@ export function makeWeatherDecision(params: {
     required: `≥ ${(config.edgeThreshold * 100).toFixed(1)}%`,
     hint: "|matchProb − bucketPrice| − roundtrip fees, signed.",
   });
-  if (!edgeOk) {
-    return noTrade(
-      `Net edge ${(netEdge * 100).toFixed(1)}% < threshold ${(config.edgeThreshold * 100).toFixed(0)}% ` +
-      `(gross ${(grossEdge * 100).toFixed(1)}% - fee ${(config.roundtripFeePct * 100).toFixed(1)}%)`,
-      gates,
-    );
-  }
+  if (!edgeOk) reasons.push(
+    `Net edge ${(netEdge * 100).toFixed(1)}% < threshold ${(config.edgeThreshold * 100).toFixed(0)}% ` +
+    `(gross ${(grossEdge * 100).toFixed(1)}% - fee ${(config.roundtripFeePct * 100).toFixed(1)}%)`,
+  );
 
-  // 4b. Sanity cap. A 70% gross edge against a market that's 85% on a single
-  // bucket is almost certainly model error (forecast bias, station mismatch,
-  // wrong unit). Above the cap we refuse to trade and surface the reason so
-  // the misbehaviour shows up in the run log.
+  // 5. Sanity cap (gross edge ≤ cap)
   const sanityOk = grossEdge <= config.maxEdgeCap;
   gates.push({
     label: "Sanity cap (gross edge ≤ cap)",
@@ -196,20 +173,15 @@ export function makeWeatherDecision(params: {
     required: `≤ ${(config.maxEdgeCap * 100).toFixed(0)}%`,
     hint: "Túl nagy gross edge tipikusan modell-hiba (rossz station, °F→°C, city-offset bug).",
   });
-  if (!sanityOk) {
-    return noTrade(
-      `Gross edge ${(grossEdge * 100).toFixed(1)}% > sanity cap ${(config.maxEdgeCap * 100).toFixed(0)}% ` +
-      `— likely model error, not opportunity`,
-      gates,
-    );
-  }
+  if (!sanityOk) reasons.push(
+    `Gross edge ${(grossEdge * 100).toFixed(1)}% > sanity cap ${(config.maxEdgeCap * 100).toFixed(0)}% ` +
+    `— likely model error, not opportunity`,
+  );
 
-  // 5. Direction
-  const direction: "YES" | "NO" = match.edge > 0 ? "YES" : "NO";
-
-  // 6. Position sizing (conservative Kelly for weather)
-  const kellyFraction = netEdge * forecast.confidence * 0.25;
-  const cappedKelly = Math.min(kellyFraction, KELLY_CAP);
+  // 6. Kelly cap (informational — Math.min always satisfies the cap, but
+  // surfacing the actual value lets the operator see how close we are).
+  const kellyFraction = Math.max(0, netEdge) * forecast.confidence * 0.25;
+  const cappedKelly   = Math.min(kellyFraction, KELLY_CAP);
   gates.push({
     label: "Kelly méret ≤ cap",
     passed: cappedKelly <= KELLY_CAP,
@@ -217,6 +189,32 @@ export function makeWeatherDecision(params: {
     required: `≤ ${(KELLY_CAP * 100).toFixed(1)}%`,
     hint: "¼-Kelly × confidence + 15% hard cap, plus a maxPositionUSD floor.",
   });
+
+  const allPassed = gates.every((g) => g.passed);
+
+  if (!allPassed) {
+    return {
+      shouldTrade: false,
+      city: forecast.city,
+      date: forecast.date,
+      bucketLabel: match.bucket.label,
+      direction,
+      tokenId: match.bucket.tokenId,
+      predictedTemp: forecast.predictedMaxC,
+      marketPrice: match.bucket.currentPrice,
+      edge: netEdge,
+      confidence: forecast.confidence,
+      modelLagMinutes: modelLag.lagMinutes,
+      positionSizeUSDC: 0,
+      reason: reasons[0] ?? "Gate failure",
+      gates,
+      kellyRaw:    kellyFraction,
+      kellyCapped: cappedKelly,
+      kellyCap:    KELLY_CAP,
+      grossEdge,
+      netEdge,
+    };
+  }
 
   const positionSize = Math.min(
     bankrollUSDC * cappedKelly,

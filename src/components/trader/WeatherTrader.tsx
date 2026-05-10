@@ -14,6 +14,7 @@ import {
   DroppedCard,
   weatherEntryCriteria,
   type ResultChip,
+  type CriteriaGate,
   type PendingPositionLite,
   type OpenPositionRow,
   type OpenPositionRationale,
@@ -259,7 +260,12 @@ export default function WeatherTrader({ bankroll }: { bankroll?: number }) {
               ? `$${(+r.size).toFixed(2)} @ ${(r.entry * 100).toFixed(0)}¢`
               : undefined;
 
-            const criteria = weatherEntryCriteria(r, display.config);
+            // Backend ships full gate list per row (confidence / time-to-
+            // settlement / model-freshness / net-edge / sanity-cap / kelly).
+            // Fallback to the lighter mapper for older payloads.
+            const criteria: CriteriaGate[] = Array.isArray((r as any).gates) && (r as any).gates.length > 0
+              ? ((r as any).gates as CriteriaGate[])
+              : weatherEntryCriteria(r, display.config);
 
             return (
               <ScanResultRow
