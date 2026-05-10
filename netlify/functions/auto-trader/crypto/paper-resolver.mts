@@ -47,11 +47,28 @@ const UMA_PENDING_STATES = new Set([
   "settled_pending",
 ]);
 
-async function fetchMarketResolution(conditionId: string): Promise<ResolutionInfo | null> {
+// Per-position diagnostic payload returned by resolvePendingPositions so
+// the UI can render the live Gamma state of every pending position without
+// a second round of Gamma fetches.
+export interface PendingDiagnostic {
+  market: string;
+  conditionId: string | null;
+  ageMin: number;
+  gamma: {
+    found: boolean;
+    closed: boolean | null;
+    outcomePrices: number[] | null;
+    umaResolutionStatus: string | null;
+  } | null;
+  /** Plain-language verdict shown in the UI. */
+  verdict: string;
+  /** True when the resolver SHOULD close this position on the next tick. */
+  shouldClose: boolean;
+}
+
+async function fetchMarketRaw(conditionId: string): Promise<any | null> {
   if (!conditionId) return null;
   try {
-    // `closed=true` is required: without it Gamma hides resolved markets
-    // and the response is `[]` even for legit conditionIds.
     const url = `${GAMMA_API}/markets?condition_ids=${encodeURIComponent(conditionId)}&closed=true`;
     const res = await fetch(url, {
       headers: { Accept: "application/json", "User-Agent": "EdgeCalc-PaperResolver/1.0" },
@@ -60,37 +77,63 @@ async function fetchMarketResolution(conditionId: string): Promise<ResolutionInf
     if (!res.ok) return null;
     const data: any = await res.json();
     const arr = Array.isArray(data) ? data : (data?.data ?? []);
-    const m = arr[0];
-    if (!m) return null;
-
-    let yes = 0.5;
-    try {
-      const op = typeof m.outcomePrices === "string" ? JSON.parse(m.outcomePrices) : m.outcomePrices;
-      if (Array.isArray(op) && op.length >= 1) yes = parseFloat(String(op[0]));
-    } catch {}
-
-    const closed = m.closed === true;
-
-    // UMA finality gate — even closed=true with op at extremes can flip
-    // during the dispute window. Only accept resolutions where UMA reached
-    // its final "resolved" state (or where the field is absent on legacy
-    // markets).
-    const umaStatus = String(m.umaResolutionStatus || "").toLowerCase();
-    if (UMA_PENDING_STATES.has(umaStatus)) {
-      console.warn(
-        `[paper-resolver] skipping ${conditionId.slice(0, 12)}…: ` +
-        `closed=true but umaResolutionStatus="${umaStatus}" — waiting for finality`,
-      );
-      return { resolved: false, yesOutcomePrice: yes, closed };
-    }
-
-    // Polymarket sets outcomePrices to a binary {0,1} once a market resolves.
-    // The 0.001 tolerance guards against string-parsing quirks.
-    const isResolved = closed && (yes <= 0.001 || yes >= 0.999);
-    return { resolved: isResolved, yesOutcomePrice: yes, closed };
+    return arr[0] ?? null;
   } catch {
     return null;
   }
+}
+
+function parseResolution(m: any): ResolutionInfo {
+  let yes = 0.5;
+  try {
+    const op = typeof m.outcomePrices === "string" ? JSON.parse(m.outcomePrices) : m.outcomePrices;
+    if (Array.isArray(op) && op.length >= 1) yes = parseFloat(String(op[0]));
+  } catch {}
+  const closed = m.closed === true;
+  // UMA finality gate — even closed=true with op at extremes can flip during
+  // the dispute window. Only accept resolutions where UMA reached its final
+  // "resolved" state (or where the field is absent on legacy markets).
+  const umaStatus = String(m.umaResolutionStatus || "").toLowerCase();
+  if (UMA_PENDING_STATES.has(umaStatus)) {
+    return { resolved: false, yesOutcomePrice: yes, closed };
+  }
+  // Polymarket sets outcomePrices to a binary {0,1} once a market resolves.
+  const isResolved = closed && (yes <= 0.001 || yes >= 0.999);
+  return { resolved: isResolved, yesOutcomePrice: yes, closed };
+}
+
+function buildDiagnostic(market: string, conditionId: string, ageMin: number, raw: any): PendingDiagnostic {
+  let op: number[] | null = null;
+  try {
+    const parsed = typeof raw.outcomePrices === "string" ? JSON.parse(raw.outcomePrices) : raw.outcomePrices;
+    if (Array.isArray(parsed)) op = parsed.map((x: any) => parseFloat(String(x)));
+  } catch {}
+  const closed = raw.closed === true;
+  const uma = String(raw.umaResolutionStatus || "").toLowerCase();
+  const yes = op && op.length >= 1 ? op[0] : NaN;
+  const isBinary = Number.isFinite(yes) && (yes <= 0.001 || yes >= 0.999);
+
+  let verdict: string;
+  let shouldClose = false;
+  if (!closed) {
+    verdict = `Closed flag still false on Gamma despite ageMin=${ageMin}. Market may not have flipped yet — UMA proposer hasn't pushed an outcome.`;
+  } else if (UMA_PENDING_STATES.has(uma)) {
+    verdict = `UMA "${uma}" — Polymarket flipped closed=true but UMA is in the dispute/voting window. Typical 2h after proposal. The resolver will auto-close once UMA reaches "resolved".`;
+  } else if (!isBinary) {
+    verdict = `Closed=true and UMA finalized but outcomePrices=${JSON.stringify(op)} is not binary. ` +
+              "Usually indicates a 50/50 dispute resolution; the resolver waits for {0,1}.";
+  } else {
+    verdict = `Resolved on Gamma: outcomePrices=${JSON.stringify(op)}, UMA="${uma || "n/a"}". Next cron tick should close.`;
+    shouldClose = true;
+  }
+  return {
+    market,
+    conditionId,
+    ageMin,
+    gamma: { found: true, closed, outcomePrices: op, umaResolutionStatus: uma || null },
+    verdict,
+    shouldClose,
+  };
 }
 
 // ─── Position resolution orchestrator ─────────────────────────────────
@@ -111,21 +154,33 @@ export interface ResolutionRecord {
  * same way as paper. Receiving the actual USDC requires a separate
  * `/polymarket-redeem` call (CTF redemption is intent-only); this is
  * logged via PAPER_RESOLVED with `mode: "live"` so the user can claim.
+ *
+ * Returns `pendingDiagnostics` for past-endDate positions that did NOT
+ * close on this pass — captures the Gamma probe data the resolver already
+ * fetched so the UI's "Reconcile pending" button doesn't need a second
+ * round of Gamma fetches (which would blow past Netlify's 10s function
+ * budget for sessions with multiple pending positions).
  */
 export async function resolvePendingPositions(
   session: SessionState,
-): Promise<{ session: SessionState; resolutions: ResolutionRecord[] }> {
+): Promise<{
+  session: SessionState;
+  resolutions: ResolutionRecord[];
+  pendingDiagnostics: PendingDiagnostic[];
+}> {
   if (session.openPositions.length === 0) {
-    return { session, resolutions: [] };
+    return { session, resolutions: [], pendingDiagnostics: [] };
   }
 
   const resolutions: ResolutionRecord[] = [];
+  const pendingDiagnostics: PendingDiagnostic[] = [];
   let updated = session;
   const now = Date.now();
   const grace = 30_000; // 30s grace after endDate before we even try to query
 
   for (const pos of session.openPositions) {
     const endTs = pos.endDate ? new Date(pos.endDate).getTime() : null;
+    const ageMin = endTs ? Math.round((now - endTs) / 60_000) : 0;
     // Market still active → don't try to resolve. Querying every open
     // market every tick is wasteful and the only valid exit price is the
     // settled outcome.
@@ -136,19 +191,49 @@ export async function resolvePendingPositions(
 
     if (!pos.conditionId) {
       log("PAPER_RESOLVE_SKIP", true, { market: pos.market, reason: "missing_conditionId" });
+      pendingDiagnostics.push({
+        market: pos.market,
+        conditionId: null,
+        ageMin,
+        gamma: null,
+        verdict: "Missing conditionId — legacy position from before the resolver wiring. Can never auto-close; reset the session to clear it.",
+        shouldClose: false,
+      });
       continue;
     }
 
-    const info = await fetchMarketResolution(pos.conditionId);
-    if (!info?.resolved) {
+    // Single Gamma fetch — drive both the resolution decision AND the UI
+    // diagnostic so we don't double the per-position network cost.
+    const raw = await fetchMarketRaw(pos.conditionId);
+    if (!raw) {
+      log("PAPER_RESOLVE_SKIP", true, {
+        market: pos.market,
+        reason: "gamma_no_market",
+        conditionId: pos.conditionId,
+        ageMin,
+      });
+      pendingDiagnostics.push({
+        market: pos.market,
+        conditionId: pos.conditionId,
+        ageMin,
+        gamma: { found: false, closed: null, outcomePrices: null, umaResolutionStatus: null },
+        verdict: "Gamma returned no market for this conditionId (with closed=true filter). " +
+                 "If ageMin < 60 the market may not yet have flipped closed=true; otherwise the conditionId may be stale or wrong.",
+        shouldClose: false,
+      });
+      continue;
+    }
+    const info = parseResolution(raw);
+    if (!info.resolved) {
       // Market past endDate but Polymarket hasn't published resolution yet
       // (UMA voting / dispute window). Wait — paper PnL must match real.
       log("PAPER_RESOLVE_SKIP", true, {
         market: pos.market,
         reason: "polymarket_not_resolved_yet",
         conditionId: pos.conditionId,
-        ageMin: endTs ? Math.round((now - endTs) / 60_000) : null,
+        ageMin,
       });
+      pendingDiagnostics.push(buildDiagnostic(pos.market, pos.conditionId, ageMin, raw));
       continue;
     }
 
@@ -195,124 +280,9 @@ export async function resolvePendingPositions(
     resolutions.push({ market: pos.market, exitPrice: exitSnap, pnl, method: "real" });
   }
 
-  return { session: updated, resolutions };
+  return { session: updated, resolutions, pendingDiagnostics };
 }
 
 // Backwards-compatible alias — the old name is still imported by the
 // orchestrator and any external scripts.
 export const resolvePendingPaperPositions = resolvePendingPositions;
-
-// ─── Live diagnostic ───────────────────────────────────────────────────
-// One-shot per-position Gamma probe for the "Reconcile" UI button. Unlike
-// resolvePendingPositions this doesn't mutate the session — it just reports
-// what state Gamma actually returns for each pending position so the
-// operator can tell "UMA still voting" from "wrong conditionId" / "Gamma
-// gone silent". Caller passes the pending positions (already filtered to
-// past-endDate); we return one diagnostic row per input.
-
-export interface PendingDiagnostic {
-  market: string;
-  conditionId: string | null;
-  ageMin: number;
-  /** Live Gamma flags (null if fetch failed). */
-  gamma: {
-    found: boolean;
-    closed: boolean | null;
-    outcomePrices: number[] | null;
-    umaResolutionStatus: string | null;
-  } | null;
-  /** Plain-language verdict shown in the UI. */
-  verdict: string;
-  /** True when the resolver SHOULD close this position now — surfaces the
-   *  edge case where Gamma says final but the cron hasn't run yet. */
-  shouldClose: boolean;
-}
-
-async function fetchMarketRaw(conditionId: string): Promise<any | null> {
-  if (!conditionId) return null;
-  try {
-    const url = `${GAMMA_API}/markets?condition_ids=${encodeURIComponent(conditionId)}&closed=true`;
-    const res = await fetch(url, {
-      headers: { Accept: "application/json", "User-Agent": "EdgeCalc-PaperResolver/1.0" },
-      signal: AbortSignal.timeout(8000),
-    });
-    if (!res.ok) return null;
-    const data: any = await res.json();
-    const arr = Array.isArray(data) ? data : (data?.data ?? []);
-    return arr[0] ?? null;
-  } catch {
-    return null;
-  }
-}
-
-export async function diagnosePendingPositions(
-  positions: Array<{ market: string; conditionId?: string; endDate?: string }>,
-): Promise<PendingDiagnostic[]> {
-  const now = Date.now();
-  const out: PendingDiagnostic[] = [];
-  for (const p of positions) {
-    const ageMin = p.endDate ? Math.round((now - new Date(p.endDate).getTime()) / 60_000) : 0;
-    if (!p.conditionId) {
-      out.push({
-        market: p.market,
-        conditionId: null,
-        ageMin,
-        gamma: null,
-        verdict: "Missing conditionId — legacy position from before the resolver wiring. Can never auto-close; reset the session to clear it.",
-        shouldClose: false,
-      });
-      continue;
-    }
-    const raw = await fetchMarketRaw(p.conditionId);
-    if (!raw) {
-      out.push({
-        market: p.market,
-        conditionId: p.conditionId,
-        ageMin,
-        gamma: { found: false, closed: null, outcomePrices: null, umaResolutionStatus: null },
-        verdict: "Gamma returned no market for this conditionId (with closed=true filter). " +
-                 "If ageMin < 60 the market may not yet have flipped closed=true; otherwise the conditionId may be stale or wrong.",
-        shouldClose: false,
-      });
-      continue;
-    }
-    let op: number[] | null = null;
-    try {
-      const parsed = typeof raw.outcomePrices === "string" ? JSON.parse(raw.outcomePrices) : raw.outcomePrices;
-      if (Array.isArray(parsed)) op = parsed.map((x: any) => parseFloat(String(x)));
-    } catch {}
-    const closed = raw.closed === true;
-    const uma = String(raw.umaResolutionStatus || "").toLowerCase();
-    const yes = op && op.length >= 1 ? op[0] : NaN;
-    const isBinary = Number.isFinite(yes) && (yes <= 0.001 || yes >= 0.999);
-
-    let verdict: string;
-    let shouldClose = false;
-    if (!closed) {
-      verdict = `Closed flag still false on Gamma despite ageMin=${ageMin}. Market may have re-opened or settlement hasn't started yet.`;
-    } else if (UMA_PENDING_STATES.has(uma)) {
-      verdict = `UMA "${uma}" — Polymarket has flipped closed=true but UMA is in the dispute/voting window. Typical 2h after proposal. The resolver will auto-close once UMA reaches "resolved".`;
-    } else if (!isBinary) {
-      verdict = `Closed=true and UMA finalized but outcomePrices=${JSON.stringify(op)} is not binary. ` +
-                "This is rare — usually indicates a 50/50 dispute resolution; the resolver waits for {0,1}.";
-    } else {
-      verdict = `Resolved on Gamma: outcomePrices=${JSON.stringify(op)}, UMA="${uma || "n/a"}". The next cron tick should close this position.`;
-      shouldClose = true;
-    }
-
-    out.push({
-      market: p.market,
-      conditionId: p.conditionId,
-      ageMin,
-      gamma: {
-        found: true,
-        closed,
-        outcomePrices: op,
-        umaResolutionStatus: uma || null,
-      },
-      verdict,
-      shouldClose,
-    });
-  }
-  return out;
-}

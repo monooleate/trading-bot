@@ -98,3 +98,92 @@ A reconcile gomb klikkelése megmutatja a pontos állapotot. Ha 4+ óra
 múlva sem záródik, az dispute eset (manual review).
 
 `tsc --noEmit` exit 0 (project files), Astro build 9 page generated.
+
+# 2026-05-11 (b) — Reconcile "Unknown error" fix (Netlify 10s timeout)
+
+## A user észrevett bug
+
+A /trade/crypto/ oldalon a "⟳ Reconcile pending" gombra "Unknown error"
+jelent meg. A backend nem dobott látható error message-et, és a frontend
+fallback szöveget mutatott.
+
+## Root cause
+
+`handleCryptoReconcile` két lépésben futott:
+
+1. `resolvePendingPaperPositions(session)` — minden past-endDate pozícióra
+   1 Gamma fetch (~5-8s timeout-tal).
+2. `diagnosePendingPositions(stillPending)` — UJABB 1 Gamma fetch ugyanazon
+   pozíciónként.
+
+N pending pozíció = **2N Gamma fetch szekvenciálisan**, kb. N × 10-16s
+wall-clock. Egyetlen pending pozíción a függvény ~10s körüli volt, és a
+**Netlify default function timeout 10s** alatt megszakadt. A frontend
+`res.json()` üres body-ra hibát dobott vagy `data` undefined volt, így
+a useTraderAction fallback `data.error || "Unknown error"`-ra esett.
+
+## Fix — single-pass refactor
+
+### `crypto/paper-resolver.mts`
+
+`resolvePendingPositions` mostantól **egyetlen Gamma fetch-et csinál per
+pozíció**, és visszaadja a teljes diagnosztikai listát is:
+
+```typescript
+return {
+  session: updated,
+  resolutions: ResolutionRecord[],
+  pendingDiagnostics: PendingDiagnostic[],  // ÚJ
+};
+```
+
+A `PendingDiagnostic` típus a Gamma probe eredményét hordozza: closed,
+outcomePrices, umaResolutionStatus, ageMin, plain-language verdict.
+A `parseResolution` és `buildDiagnostic` segéd-fv-ek dolgozzák fel a
+nyers Gamma raw-t.
+
+Régi `diagnosePendingPositions` standalone függvény **törölve** — fölösleges
+volt.
+
+### `auto-trader/index.mts`
+
+`handleCryptoReconcile` egyszerűsített:
+
+```typescript
+const r = await resolvePendingPaperPositions(session);
+if (r.resolutions.length > 0) await saveSession(r.session);
+return jsonResponse({
+  ok: true, action: "reconciled",
+  resolved: r.resolutions,
+  stillPending: r.pendingDiagnostics,  // már megvan, nem kell újabb fetch
+  session: sessionSummary(r.session),
+});
+```
+
+Wall-clock most ~N × 5s (a 8s Gamma timeout-on belül). Egy pending pozíción
+~2s, 5 pending-en ~10s — biztonságos a 10s budget alatt.
+
+## Védő fix: outer catch fallback
+
+`auto-trader/index.mts` top-level catch most graceful-en kezeli az üres
+`err.message`-t:
+
+```typescript
+const errMsg = (err && (err.message || err.toString?.() || String(err))) || "internal error";
+```
+
+Eddig ha valamit `throw undefined`-dal vagy primitív-vel dobott, az error
+message üres volt → frontend "Unknown error" fallback. Most legalább
+"internal error" jelenik meg, és az `alertError` is `.catch(() => {})`
+wrap-pelve, hogy a Telegram alert hibája ne maszkolja a tényleges hibát.
+
+## Hatás deploy után
+
+- A "⟳ Reconcile pending" gomb most ~2-3s alatt válaszol (1 pending).
+- Az új "Reconcile result" kártya megjelenik a Gamma chip-ekkel:
+  `closed: true`, `op: [0.50, 0.50]`, `uma: proposed`, + emberbarát
+  verdict.
+- Ha mégis hiba történne (Gamma API kiesés, stb.), az error pontos
+  message-szel jelenik meg, nem generic "Unknown error".
+
+`tsc --noEmit` exit 0 (project files), Astro build 9 page generated.

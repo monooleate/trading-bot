@@ -351,6 +351,31 @@ netlify deploy --prod --dir=dist
 
 ## AKTUÁLIS ÁLLAPOT (2026-05-11) – Claude Code folytatáshoz
 
+### Huszonhatodik session (2026-05-11) – Reconcile "Unknown error" — Netlify 10s timeout fix
+
+A user a "⟳ Reconcile pending" gombra "Unknown error"-t kapott. Root cause:
+a `handleCryptoReconcile` **kétszer fetch-elt Gamma-t** per pending pozíció
+(resolver pass + diagnose pass), így 1 pozíció ~10s körül futott, ami a
+**Netlify default 10s function budget** alatt megszakadt → üres response
+→ frontend fallback "Unknown error".
+
+**Fix:** `resolvePendingPositions` mostantól **single-pass** működik — egy
+Gamma fetch per pozíció, és visszaad egy `pendingDiagnostics:
+PendingDiagnostic[]` mezőt is a `resolutions` mellett. A standalone
+`diagnosePendingPositions` fv törölve. A `parseResolution` és
+`buildDiagnostic` segéd-fv-ek dolgozzák fel a raw Gamma adatot.
+
+Wall-clock: 1 pending pozíción ~2s, 5 pending-en ~10s — biztonságos a 10s
+budget alatt.
+
+**Védő fix:** a top-level dispatcher catch most graceful-en kezeli az üres
+`err.message`-t — `errMsg = err.message || err.toString?.() || String(err)
+|| "internal error"`. Eddig ha valami `throw undefined`-dal dobott, az
+error message üres volt, és a frontend "Unknown error"-ra esett vissza.
+
+`tsc --noEmit` exit 0 (project files), Astro build 9 page.
+Részletek: `internal-docs/changelog/CHANGELOG-2026-05-11.md` "(b)" szekció.
+
 ### Huszonötödik session (2026-05-11) – Env-vars dokumentáció
 
 Új doksi: **`internal-docs/env-vars.md`** — 61 env-változó kategorizálva

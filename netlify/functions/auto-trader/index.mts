@@ -29,7 +29,7 @@ import { aggregateSignals } from "./crypto/signal-aggregator.mts";
 import { makeDecision, setCooldown, padCryptoGates } from "./crypto/decision-engine.mts";
 import { placeBuyOrder } from "./crypto/execution.mts";
 import { handleBuyLifecycle, handleSellLifecycle, checkExitConditions } from "./crypto/order-lifecycle.mts";
-import { resolvePendingPaperPositions, diagnosePendingPositions } from "./crypto/paper-resolver.mts";
+import { resolvePendingPaperPositions } from "./crypto/paper-resolver.mts";
 import { fetchYesMidpoint } from "./crypto/live-price.mts";
 import { markRunStart, markRunFinish, getCryptoRunStatus } from "./crypto/run-state.mts";
 import {
@@ -216,9 +216,13 @@ export default async function handler(req: Request, _ctx: Context) {
         return jsonResponse({ ok: false, error: `Unknown action: ${action}` }, 400);
     }
   } catch (err: any) {
-    log("ERROR", true, { error: err.message, stack: err.stack });
-    await alertError(err.message);
-    return jsonResponse({ ok: false, error: err.message }, 500);
+    // Surface SOMETHING for the UI even when `err.message` is empty/undefined
+    // (e.g. when something throws a primitive). The previous "Unknown error"
+    // UI fallback hid which side actually failed.
+    const errMsg = (err && (err.message || err.toString?.() || String(err))) || "internal error";
+    log("ERROR", true, { error: errMsg, stack: err?.stack });
+    await alertError(errMsg).catch(() => {});
+    return jsonResponse({ ok: false, error: errMsg }, 500);
   }
 }
 
@@ -958,27 +962,21 @@ async function handleResume(config: ReturnType<typeof getTraderConfig>, category
 //   { resolved: ResolutionRecord[], stillPending: PendingDiagnostic[] }
 async function handleCryptoReconcile(config: ReturnType<typeof getTraderConfig>) {
   const session = await loadSession(config.paperMode, DEFAULT_BANKROLL);
+  // Single pass: the resolver does ONE Gamma fetch per past-endDate
+  // position and emits both the close decision AND the per-position
+  // diagnostic. The previous "fetch twice" version blew past Netlify's
+  // 10s function budget with even 1-2 pending positions, surfacing as an
+  // "Unknown error" on the UI side (timeout → empty response body).
   const r = await resolvePendingPaperPositions(session);
   if (r.resolutions.length > 0) {
     await saveSession(r.session);
   }
-  // Past-endDate positions still open AFTER the resolver pass — those need
-  // the live Gamma diagnostic.
-  const now = Date.now();
-  const stillPending = r.session.openPositions
-    .filter((p) => p.endDate && new Date(p.endDate).getTime() < now)
-    .map((p) => ({
-      market: p.market,
-      conditionId: p.conditionId,
-      endDate: p.endDate,
-    }));
-  const diagnostics = await diagnosePendingPositions(stillPending);
   return jsonResponse({
     ok: true,
     action: "reconciled",
     category: "crypto",
     resolved: r.resolutions,
-    stillPending: diagnostics,
+    stillPending: r.pendingDiagnostics,
     session: sessionSummary(r.session),
   });
 }
