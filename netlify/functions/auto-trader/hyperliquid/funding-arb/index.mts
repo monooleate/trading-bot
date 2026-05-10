@@ -439,6 +439,14 @@ export async function getArbStatus(): Promise<any> {
   const session   = await loadArbSession(config.paperMode);
   const runStatus = await getArbRunStatus();
 
+  // Load the shared HL bankroll for parity with the other bots' stats grid.
+  // Failure is non-fatal — summary just renders with bankrollShared=null.
+  let hlBankroll: { bankrollStart: number; bankrollCurrent: number } | null = null;
+  try {
+    const hl = await loadHlSession(config.paperMode);
+    hlBankroll = { bankrollStart: hl.bankrollStart, bankrollCurrent: hl.bankrollCurrent };
+  } catch {}
+
   // Live-readiness verdict for the UI badge — same shape as getHlStatus
   // returns for the directional bot, so the home-page banner can poll
   // `category=hyperliquid&layer=arb` and read it from a single field.
@@ -486,7 +494,7 @@ export async function getArbStatus(): Promise<any> {
     ok: true,
     action:   "status",
     category: "hyperliquid-arb",
-    session:  summarize(session),
+    session:  summarize(session, hlBankroll),
     runStatus,
     // Funding-arb is wired into auto-trader-multi-cron */3 * * * *,
     // always-on (same as the directional HL bot).
@@ -545,18 +553,28 @@ export async function arbResume(): Promise<any> {
   return { ok: true, action: "resumed", category: "hyperliquid-arb", session: summarize(resumed) };
 }
 
-function summarize(s: ArbSessionState) {
-  const open = openArbPositions(s);
+// Summarize the F-Arb session for the UI. `hlBankroll` is the shared HL
+// session bankroll (F-Arb has no bankroll of its own), included so the
+// dashboard can show parity with the other bots' 4-cell stats grid.
+function summarize(
+  s: ArbSessionState,
+  hl?: { bankrollStart: number; bankrollCurrent: number } | null,
+) {
+  const open    = openArbPositions(s);
+  const closed  = (s.positions ?? []).filter((p) => p.closedAt);
   return {
     paperMode:            s.paperMode,
     stopped:              s.stopped,
     stoppedReason:        s.stoppedReason,
     openPositions:        open.length,
+    closedTradesCount:    closed.length,
     deployedCapital:      parseFloat(deployedCapital(s).toFixed(2)),
     totalFundingAllTime:  parseFloat(s.totalFundingAllTime.toFixed(2)),
     totalFundingToday:    parseFloat(s.totalFundingToday.amount.toFixed(2)),
     fundingDate:          s.totalFundingToday.date,
     startedAt:            s.startedAt,
+    bankrollShared:       hl ? parseFloat(hl.bankrollCurrent.toFixed(2)) : null,
+    bankrollSharedStart:  hl ? parseFloat(hl.bankrollStart.toFixed(2))   : null,
     openDetails:          open.map((p: ArbPosition) => ({
       id:                 p.id,
       coin:               p.coin,

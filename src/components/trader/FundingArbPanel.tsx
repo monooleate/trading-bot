@@ -41,11 +41,14 @@ interface ArbSessionSummary {
   stopped:             boolean;
   stoppedReason:       string | null;
   openPositions:       number;
+  closedTradesCount?:  number;       // 2026-05-10 (j): backend-supplied for stats parity
   deployedCapital:     number;
   totalFundingAllTime: number;
   totalFundingToday:   number;
   fundingDate:         string;
   startedAt:           string;
+  bankrollShared?:      number | null; // 2026-05-10 (j): HL session bankroll (shared)
+  bankrollSharedStart?: number | null; // 2026-05-10 (j): HL starting bankroll
   openDetails:         ArbOpenDetail[];
 }
 
@@ -107,13 +110,32 @@ export default function FundingArbPanel({ bankroll }: { bankroll?: number }) {
     refresh();
   }, [run, refresh, setError, bankroll]);
 
+  // Parity with the other 4 bots: Bankroll / Session PnL / Trades / Open.
+  // F-Arb has no bankroll of its own — the backend includes the shared HL
+  // session bankroll. "Session PnL" maps to totalFundingAllTime since
+  // delta-neutral arb's only PnL component is funding accrual. Today's
+  // funding + deployed capital still appear in the bot's open-positions
+  // card and reset summary, so no info is lost.
   const stats: TraderStat[] = session ? [
-    { label: "Open",     value: String(session.openPositions) },
-    { label: "Deployed", value: `$${session.deployedCapital.toFixed(0)}` },
-    { label: "Today",    value: `${session.totalFundingToday >= 0 ? "+" : ""}$${session.totalFundingToday.toFixed(2)}`,
-      tone: session.totalFundingToday >= 0 ? "pos" : "neg" },
-    { label: "All-time", value: `${session.totalFundingAllTime >= 0 ? "+" : ""}$${session.totalFundingAllTime.toFixed(2)}`,
-      tone: session.totalFundingAllTime >= 0 ? "pos" : "neg" },
+    {
+      label: "Bankroll (HL)",
+      value: typeof session.bankrollShared === "number"
+        ? `$${session.bankrollShared.toFixed(2)}`
+        : "—",
+    },
+    {
+      label: "Session PnL",
+      value: `${session.totalFundingAllTime >= 0 ? "+" : ""}$${session.totalFundingAllTime.toFixed(2)}`,
+      tone: session.totalFundingAllTime >= 0 ? "pos" : "neg",
+    },
+    {
+      label: "Trades",
+      value: String(session.closedTradesCount ?? 0),
+    },
+    {
+      label: "Open",
+      value: String(session.openPositions),
+    },
   ] : [];
 
   const alerts: TraderAlert[] = [];
