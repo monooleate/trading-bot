@@ -85,6 +85,8 @@ interface Card {
   capability?: string;
   group: "execution" | "tools" | "analysis";
   category?: string;     // links per-category bankroll snapshot to this card
+  venue?: string;        // exchange/market the bot trades on (Polymarket, Hyperliquid, Bybit, ...)
+  auto?: "auto" | "manual"; // execution sub-grouping in the home page grid
 }
 
 const CARDS: Card[] = [
@@ -99,6 +101,8 @@ const CARDS: Card[] = [
     capability: "live-crypto-auto",
     category: "crypto",
     group: "execution",
+    venue: "Polymarket",
+    auto: "auto",
   },
   {
     id: "hyperliquid",
@@ -110,6 +114,8 @@ const CARDS: Card[] = [
     capability: "hyperliquid-paper",
     category: "hyperliquid",
     group: "execution",
+    venue: "Hyperliquid",
+    auto: "auto",
   },
   {
     id: "funding-arb",
@@ -121,6 +127,8 @@ const CARDS: Card[] = [
     capability: "hyperliquid-paper",
     category: "funding-arb",
     group: "execution",
+    venue: "Hyperliquid + Binance",
+    auto: "auto",
   },
   {
     id: "weather",
@@ -131,6 +139,8 @@ const CARDS: Card[] = [
     mode: "PAPER+LIVE",
     category: "weather",
     group: "execution",
+    venue: "Polymarket",
+    auto: "auto",
   },
   {
     id: "bybit",
@@ -141,6 +151,8 @@ const CARDS: Card[] = [
     mode: "MANUAL",
     capability: "bybit-manual",
     group: "execution",
+    venue: "Bybit",
+    auto: "manual",
   },
   {
     id: "binance",
@@ -151,6 +163,8 @@ const CARDS: Card[] = [
     mode: "MANUAL",
     capability: "binance-manual",
     group: "execution",
+    venue: "Binance",
+    auto: "manual",
   },
   {
     id: "polymarket-manual",
@@ -161,6 +175,8 @@ const CARDS: Card[] = [
     mode: "MANUAL",
     capability: "manual-trading",
     group: "execution",
+    venue: "Polymarket",
+    auto: "manual",
   },
 
   // ── Analysis: /tools (csak elemzés, nincs trading itt) ──
@@ -407,7 +423,7 @@ export default function HomePage() {
       )}
 
       {/* ─── SESSION SUMMARY (összesített) ─── */}
-      <SectionTitle title="Aggregated session" subtitle="Minden bot összesítve · per-category lentebb" />
+      <SectionTitle title="Aggregated session" subtitle="Minden bot összesítve · alább kattintható per-category lebontás → bot oldal" />
       <section className="hp-summary">
         <Stat
           label="Bankroll (Σ)"
@@ -437,11 +453,16 @@ export default function HomePage() {
         />
       </section>
 
-      {/* ─── PER-CATEGORY BREAKDOWN ─── */}
+      {/* ─── PER-CATEGORY BREAKDOWN (clickable → /trade/<category>/) ─── */}
       {multi && multi.categories.some((c) => c.found) && (
         <div className="hp-breakdown">
           {multi.categories.filter((c) => c.found).map((c) => (
-            <div key={c.category} className="hp-bd-row">
+            <a
+              key={c.category}
+              href={`/trade/${c.category}/`}
+              className="hp-bd-row"
+              title={`Ugrás: ${c.label} bot oldal`}
+            >
               <span className="hp-bd-cat">{c.label}</span>
               <span className="hp-bd-bk">${c.bankrollCurrent.toFixed(0)}</span>
               <span className={`hp-bd-pnl ${c.sessionPnL >= 0 ? "pos" : "neg"}`}>
@@ -451,15 +472,33 @@ export default function HomePage() {
               <span className={`hp-bd-status ${c.stopped ? "stopped" : "running"}`}>
                 {c.stopped ? "STOPPED" : "RUNNING"}
               </span>
-            </div>
+              <span className="hp-bd-arrow" aria-hidden="true">→</span>
+            </a>
           ))}
         </div>
       )}
 
-      {/* ─── EXECUTION CARDS ─── */}
-      <SectionTitle title="Trading & Execution" subtitle="Saját oldal kategóriánként · /trade/<venue>/ — itt nincs duplikáció a /tools-szal" />
+      {/* ─── EXECUTION CARDS — kategorizálva: Automated / Manual ─── */}
+      <SectionTitle title="Trading & Execution" subtitle="Bot-onkénti kártyák venue badge-zsel · automatizált (cron) vs. manuális (user-triggered)" />
+
+      <div className="hp-cat-head">
+        <span className="hp-cat-icon">⚙</span>
+        <span className="hp-cat-label">Automated bots</span>
+        <span className="hp-cat-meta">cron */3 perc · saját session · paper/live</span>
+      </div>
       <div className="hp-grid">
-        {CARDS.filter((c) => c.group === "execution").map((c) => (
+        {CARDS.filter((c) => c.group === "execution" && c.auto === "auto").map((c) => (
+          <CapCard key={c.id} card={c} envStat={envStat} multi={multi} />
+        ))}
+      </div>
+
+      <div className="hp-cat-head hp-cat-head-spaced">
+        <span className="hp-cat-icon">🎯</span>
+        <span className="hp-cat-label">Manual execution</span>
+        <span className="hp-cat-meta">user-triggered orders · nincs auto-session</span>
+      </div>
+      <div className="hp-grid">
+        {CARDS.filter((c) => c.group === "execution" && c.auto === "manual").map((c) => (
           <CapCard key={c.id} card={c} envStat={envStat} multi={multi} />
         ))}
       </div>
@@ -540,6 +579,12 @@ function CapCard({ card, envStat, multi }: { card: Card; envStat: EnvStatus | nu
         <span className={`hp-pill ${mode.cls}`}>{mode.txt}</span>
       </div>
       <div className="hp-card-title">{card.title}</div>
+      {card.venue && (
+        <div className="hp-card-venue" title={`Trading venue: ${card.venue}`}>
+          <span className="hp-venue-label">venue</span>
+          <span className="hp-venue-name">{card.venue}</span>
+        </div>
+      )}
       <div className="hp-card-blurb">{card.blurb}</div>
       {cat && cat.found && (
         <div className="hp-card-stats">
@@ -852,21 +897,34 @@ const css = `
 }
 .hp-bd-row {
   display: grid;
-  grid-template-columns: 2fr 1fr 1fr 1fr 1fr;
+  grid-template-columns: 2fr 1fr 1fr 1fr 1fr 14px;
   align-items: center;
-  padding: 8px 6px;
+  padding: 10px 8px;
   font-family: var(--mono);
   font-size: 11px;
   border-bottom: 1px solid var(--border);
   gap: 6px;
+  text-decoration: none;
+  color: inherit;
+  border-radius: 2px;
+  transition: background .12s, transform .08s;
+  cursor: pointer;
+}
+.hp-bd-row:hover {
+  background: #131318;
+  transform: translateX(2px);
+}
+.hp-bd-row:hover .hp-bd-arrow {
+  color: var(--accent);
+  transform: translateX(2px);
 }
 @media (max-width: 600px) {
   .hp-bd-row {
-    grid-template-columns: 1fr auto;
+    grid-template-columns: 1fr auto 14px;
     grid-template-areas:
-      "cat status"
-      "bk pnl"
-      "trades trades";
+      "cat status arrow"
+      "bk pnl arrow"
+      "trades trades arrow";
     row-gap: 4px;
   }
   .hp-bd-cat { grid-area: cat; }
@@ -874,6 +932,7 @@ const css = `
   .hp-bd-pnl { grid-area: pnl; text-align: right; }
   .hp-bd-trades { grid-area: trades; font-size: 9.5px; }
   .hp-bd-status { grid-area: status; justify-self: end; }
+  .hp-bd-arrow { grid-area: arrow; align-self: center; }
 }
 .hp-bd-row:last-child { border-bottom: none; }
 .hp-bd-cat { color: var(--text); font-weight: 700; }
@@ -884,6 +943,72 @@ const css = `
 .hp-bd-status { font-size: 9px; padding: 2px 6px; border-radius: 2px; text-align: center; letter-spacing: .08em; }
 .hp-bd-status.running { background: #0a2010; color: var(--accent); border: 1px solid #1a3300; }
 .hp-bd-status.stopped { background: #1f1400; color: var(--warn); border: 1px solid #332200; }
+.hp-bd-arrow {
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 700;
+  text-align: right;
+  transition: color .12s, transform .12s;
+}
+
+/* ─── Execution sub-category headers (Automated / Manual) ─── */
+.hp-cat-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 0 12px;
+  padding: 8px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 3px;
+}
+.hp-cat-head-spaced { margin-top: 26px; }
+.hp-cat-icon { font-size: 14px; line-height: 1; }
+.hp-cat-label {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.hp-cat-meta {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  color: var(--muted);
+  letter-spacing: .04em;
+  margin-left: auto;
+}
+@media (max-width: 460px) {
+  .hp-cat-head { flex-wrap: wrap; gap: 6px; }
+  .hp-cat-meta { margin-left: 0; flex-basis: 100%; }
+}
+
+/* ─── Card venue badge ─── */
+.hp-card-venue {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 4px 8px;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  align-self: flex-start;
+}
+.hp-venue-label {
+  color: var(--muted);
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  font-size: 8.5px;
+}
+.hp-venue-name {
+  color: var(--accent2);
+  font-weight: 700;
+  letter-spacing: .04em;
+}
 
 /* ─── Section header ─── */
 .hp-section {

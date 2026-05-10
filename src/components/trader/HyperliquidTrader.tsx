@@ -9,8 +9,10 @@ import TraderShell, {
 import {
   ScanResultsCard,
   ScanResultRow,
+  OpenPositionsCard,
   hlEntryCriteria,
   type ResultChip,
+  type OpenPositionRow,
 } from "../shared/TraderResults";
 import { useTradeExport } from "../shared/useTradeExport";
 import type { LiveReadinessReport } from "../shared/LiveReadinessBadge";
@@ -61,6 +63,27 @@ export default function HyperliquidTrader() {
   const display: HlRunResult | null = lastResult ?? (rs?.lastResult as HlRunResult | null) ?? null;
   const readiness = lastResult?.liveReadiness ?? (status as any)?.liveReadiness ?? null;
   const cronEnabled = status?.cronEnabled ?? true;
+  const openDetails = ((status as any)?.openDetails ?? []) as Array<{
+    coin: string;
+    direction: "LONG" | "SHORT";
+    sizeUSDC: number;
+    sizeCoins: number;
+    entryPrice: number;
+    leverage: number;
+    tpPrice: number;
+    slPrice: number;
+    openedAt: string;
+    edgeAtEntry: number | null;
+    predictedProb: number | null;
+  }>;
+
+  function ageString(iso: string): string {
+    const ms = Date.now() - new Date(iso).getTime();
+    if (ms < 60_000)    return `${Math.floor(ms / 1000)}s`;
+    if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m`;
+    if (ms < 86_400_000) return `${Math.floor(ms / 3_600_000)}h ${Math.floor((ms % 3_600_000) / 60_000)}m`;
+    return `${Math.floor(ms / 86_400_000)}d`;
+  }
 
   const doAction = useCallback(async (action: string) => {
     setError(null);
@@ -134,6 +157,20 @@ export default function HyperliquidTrader() {
       onExportTrades={exportTrades}
       exportingTrades={exporting}
     >
+      {openDetails.length > 0 && (
+        <OpenPositionsCard
+          title={`${openDetails.length} open perp position${openDetails.length > 1 ? "s" : ""}`}
+          rows={openDetails.map<OpenPositionRow>((p) => ({
+            coin:       p.coin,
+            direction:  p.direction,
+            entryText:  `@$${p.entryPrice.toFixed(2)}`,
+            sizeText:   `$${p.sizeUSDC.toFixed(0)} · ${p.leverage}× lev`,
+            spreadText: `TP $${p.tpPrice.toFixed(2)} / SL $${p.slPrice.toFixed(2)}`,
+            ageText:    ageString(p.openedAt),
+          }))}
+        />
+      )}
+
       {display && display.results && display.results.length > 0 && (
         <ScanResultsCard
           headerText={`Scanned ${display.coinsScanned ?? 0} coins`}

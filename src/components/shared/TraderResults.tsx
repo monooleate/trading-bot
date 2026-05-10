@@ -172,8 +172,24 @@ export function ScanResultRow(p: ScanRowProps) {
       ? "var(--accent)"
       : "var(--danger)";
 
+  // Decide the row's overall tone so the operator can spot at a glance
+  // whether the bot acted, was filtered out, or hit an error. Driven by the
+  // action verb plus the criteria-gate verdict for "skip" rows.
+  const a = String(p.action);
+  const failedGates = (p.criteria ?? []).filter((g) => !g.passed);
+  let tone: "pass" | "skip" | "fail" | "neutral" = "neutral";
+  if (a === "traded" || a === "position_opened" || a === "opened") tone = "pass";
+  else if (a === "closed") tone = "neutral";
+  else if (a === "failed" || a === "error" || a === "close_error") tone = "fail";
+  else if (a === "skip") tone = failedGates.length > 0 ? "skip" : "neutral";
+
+  // Surface the FIRST failing gate as a visible chip next to the action so
+  // the operator doesn't have to hover the gates popover to see what blocked
+  // a skip.
+  const firstFail = failedGates[0];
+
   return (
-    <div className="ts-row">
+    <div className={`ts-row ts-row-${tone}`}>
       <div className="ts-row-main">
         <div className="ts-row-title" title={p.titleTip || p.title}>
           {p.prefix && <span className="ts-row-title-prefix">{p.prefix}</span>}
@@ -191,6 +207,17 @@ export function ScanResultRow(p: ScanRowProps) {
           </div>
         )}
         {p.signals && <SignalRow signals={p.signals} />}
+        {tone === "skip" && firstFail && (
+          <div className="ts-row-blocker" title={firstFail.hint}>
+            <span className="ts-row-blocker-mark">✗</span>
+            <span className="ts-row-blocker-label">{firstFail.label}</span>
+            <span className="ts-row-blocker-actual">{firstFail.actual}</span>
+            <span className="ts-row-blocker-req">{firstFail.required}</span>
+            {failedGates.length > 1 && (
+              <span className="ts-row-blocker-more">+{failedGates.length - 1} további</span>
+            )}
+          </div>
+        )}
       </div>
       <span className={`ts-row-action ts-act-${p.action}`}>
         {String(p.action).replace(/_/g, " ")}
@@ -519,11 +546,20 @@ export function PendingPositionsCard(p: PendingPositionsCardProps) {
 /* ─── Open positions card ──────────────────────────────── */
 
 export interface OpenPositionRow {
+  /** Primary key — coin / city / market title. */
   coin: string;
+  /** Optional direction chip rendered after the coin. */
+  direction?: "YES" | "NO" | "LONG" | "SHORT";
+  /** Optional entry price chip ("@$54.32" / "@54¢"). */
+  entryText?: string;
+  /** Notional / size text (e.g. "$3.40", "$100"). */
   sizeText: string;
+  /** Optional middle-row text (spread, prediction, etc.) */
   spreadText?: string;
-  pnlText: string;
-  pnlValue: number;
+  /** Right-side P&L (omit if not yet meaningful). */
+  pnlText?: string;
+  pnlValue?: number;
+  /** "Age" or "ends in" label rendered last. */
   ageText: string;
 }
 
@@ -541,15 +577,37 @@ export function OpenPositionsCard({
       {rows.map((r, i) => (
         <div key={i} className="ts-pos-row">
           <span className="ts-pos-coin">{r.coin}</span>
+          {r.direction && (
+            <span
+              className={
+                "ts-pending-dir " +
+                (r.direction === "YES" || r.direction === "LONG"
+                  ? "ts-pending-dir-YES"
+                  : "ts-pending-dir-NO")
+              }
+            >
+              {r.direction}
+            </span>
+          )}
+          {r.entryText && <span className="ts-pos-spread">{r.entryText}</span>}
           <span className="ts-pos-size">{r.sizeText}</span>
           {r.spreadText && <span className="ts-pos-spread">{r.spreadText}</span>}
-          <span
-            className="ts-pos-acc"
-            style={{ color: r.pnlValue >= 0 ? "var(--accent)" : "var(--danger)" }}
-          >
-            {r.pnlText}
-          </span>
-          <span className="ts-pos-age">{r.ageText}</span>
+          {r.pnlText !== undefined && (
+            <span
+              className="ts-pos-acc"
+              style={{
+                color:
+                  r.pnlValue === undefined
+                    ? "var(--muted)"
+                    : r.pnlValue >= 0
+                    ? "var(--accent)"
+                    : "var(--danger)",
+              }}
+            >
+              {r.pnlText}
+            </span>
+          )}
+          <span className="ts-pos-age" style={{ marginLeft: r.pnlText !== undefined ? undefined : "auto" }}>{r.ageText}</span>
         </div>
       ))}
     </div>

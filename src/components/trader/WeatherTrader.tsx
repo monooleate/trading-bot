@@ -3,15 +3,19 @@ import TraderShell, {
   useAutoTraderStatus,
   useTraderAction,
   type TraderControl,
+  type TraderStat,
+  type TraderAlert,
 } from "../shared/TraderShell";
 import {
   ScanResultsCard,
   ScanResultRow,
   PendingPositionsCard,
+  OpenPositionsCard,
   DroppedCard,
   weatherEntryCriteria,
   type ResultChip,
   type PendingPositionLite,
+  type OpenPositionRow,
 } from "../shared/TraderResults";
 import { useTradeExport } from "../shared/useTradeExport";
 import type { LiveReadinessReport } from "../shared/LiveReadinessBadge";
@@ -77,6 +81,18 @@ export default function WeatherTrader() {
   const display: RunResult | null = lastResult ?? (rs?.lastResult as RunResult | null) ?? null;
   const readiness = lastResult?.liveReadiness ?? (status as any)?.liveReadiness ?? null;
   const pending = (status as any)?.pending as { count: number; nextReconcileAt: string | null; positions: PendingPosition[] } | undefined;
+  const openDetails = ((status as any)?.openDetails ?? []) as Array<{
+    market: string;
+    city: string;
+    date: string;
+    bucket: string;
+    direction: "YES" | "NO";
+    size: number;
+    avgEntry: number;
+    predictedMaxC: number;
+    openedAt: string;
+    reconcileAfter: string;
+  }>;
 
   const doAction = useCallback(async (action: string) => {
     setError(null);
@@ -92,9 +108,22 @@ export default function WeatherTrader() {
   ];
 
   const session: any = (status?.session as any) ?? lastResult?.session ?? null;
+
+  const stats: TraderStat[] = session ? [
+    { label: "Bankroll",    value: `$${(session.bankrollCurrent ?? 0).toFixed(2)}` },
+    { label: "Session PnL", value: `${(session.sessionPnL ?? 0) >= 0 ? "+" : ""}$${(session.sessionPnL ?? 0).toFixed(2)}`,
+      tone: (session.sessionPnL ?? 0) >= 0 ? "pos" : "neg" },
+    { label: "Trades",      value: String(session.tradeCount ?? 0) },
+    { label: "Open",        value: String(session.openPositions ?? 0) },
+  ] : [];
+
+  const alerts: TraderAlert[] = [];
+  if (session?.stopped) alerts.push({ tone: "danger", text: `Stopped: ${session.stoppedReason || "unknown"}` });
+
   const sessionSummary = session ? [
-    `Lezárt trade-ek: <b>${session.tradeCount ?? 0}</b>`,
-    `Pending pozíciók: <b>${pending?.count ?? 0}</b>`,
+    `Bankroll most: <b>$${(session.bankrollCurrent ?? 0).toFixed(2)}</b>${session.bankrollStart !== undefined ? ` (start: $${session.bankrollStart.toFixed(2)})` : ""}`,
+    `Lezárt trade-ek: <b>${session.tradeCount ?? 0}</b> · Session PnL: <b>${(session.sessionPnL ?? 0) >= 0 ? "+" : ""}$${(session.sessionPnL ?? 0).toFixed(2)}</b>`,
+    `Nyitott pozíciók: <b>${session.openPositions ?? 0}</b> · Pending: <b>${pending?.count ?? 0}</b>`,
     `Indult: <b>${session.startedAt ? new Date(session.startedAt).toLocaleString() : "—"}</b>`,
   ] : undefined;
 
@@ -107,6 +136,8 @@ export default function WeatherTrader() {
       isRunning={isRunning}
       lastSource={rs?.source ?? null}
       lastRunAt={rs?.lastRunAt ?? null}
+      stats={stats}
+      alerts={alerts}
       controls={controls}
       error={error}
       showLiveReadiness
@@ -124,6 +155,27 @@ export default function WeatherTrader() {
       onExportTrades={exportTrades}
       exportingTrades={exporting}
     >
+      {openDetails.length > 0 && (
+        <OpenPositionsCard
+          title={`${openDetails.length} open weather position${openDetails.length > 1 ? "s" : ""} (still in trading window)`}
+          rows={openDetails.map<OpenPositionRow>((p) => {
+            const reconcileIn = Math.max(0, new Date(p.reconcileAfter).getTime() - Date.now());
+            const inText =
+              reconcileIn > 86_400_000 ? `settles in ${Math.floor(reconcileIn / 86_400_000)}d`
+              : reconcileIn > 3_600_000 ? `settles in ${Math.floor(reconcileIn / 3_600_000)}h ${Math.floor((reconcileIn % 3_600_000) / 60_000)}m`
+              : `settles in ${Math.floor(reconcileIn / 60_000)}m`;
+            return {
+              coin:      `${p.city.charAt(0).toUpperCase() + p.city.slice(1)} · ${p.bucket}`,
+              direction: p.direction,
+              entryText: `@${(p.avgEntry * 100).toFixed(0)}¢`,
+              sizeText:  `$${p.size.toFixed(2)}`,
+              spreadText: `pred ${p.predictedMaxC}°C · ${p.date}`,
+              ageText:   inText,
+            };
+          })}
+        />
+      )}
+
       {pending && pending.count > 0 && (
         <PendingPositionsCard
           title={`${pending.count} pending paper position${pending.count > 1 ? "s" : ""} — awaiting Polymarket settlement`}

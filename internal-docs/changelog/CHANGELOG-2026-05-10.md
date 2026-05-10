@@ -1,69 +1,3 @@
-# 2026-05-10 — Crypto bot pending-paper-position kártya
-
-## Mit?
-
-A crypto bot UI-jára felkerült a `PendingPositionsCard`, ami csak akkor render,
-ha van olyan paper open position aminek az `endDate`-je már elmúlt, de még nem
-zárta le sem a Polymarket settle, sem a Brownian-bridge fallback. Ugyanez a
-kártya-nyelv és vizuális stílus mint a weather bot 2026-05-09-i pending
-kártyája — most a 4 bot között is szimmetrikus.
-
-## Miért?
-
-Eddig a crypto-n nem volt felülete a "stuck pending settle" állapotnak. A
-`paper-resolver.mts` (2026-05-09 v2) inline fut a `*/3 *` cron tickkel, így
-a pending ablak normál esetben < 3 perc, és a felület hiánya nem okozott
-hibát. De a 2026-05-10-i debug szerint a weather reconciler-cron 24+ órát
-nem futott le egy Shanghai pozíción — analóg incidens a crypto cron-on
-nem hagyna nyomot a UI-ban. Most:
-
-- Ha minden rendben → a kártya **nem render** (üres rendszerben nincs
-  vizuális zaj).
-- Ha 1+ pozíció átlépte az endDate-et és vár a settle-re → kártya
-  rögtön megjelenik state hint-tel ("auto-settles next tick" vagy
-  "Brownian fallback eligible" ha `paperFallbackAfterMs`-en is túl).
-
-## Hol?
-
-### Backend (`netlify/functions/auto-trader/index.mts`)
-
-- Új helper `getCryptoPendingPositions(session, fallbackAfterMs)` — szűri
-  a `session.openPositions`-t `endDate < now`-ra, számolja az `ageMs`-t és a
-  `fallbackEligibleAt`-et, sortolja `endDate` szerint növekvően.
-- A `getStatus()` crypto ágában `base.pending` mezőként visszaadja. A
-  `paperFallbackAfterMs`-t a meglévő `readyOv` runtime-overrides ablakból
-  húzza (default 30 min).
-
-### Frontend (`src/components/trader/CryptoTrader.tsx`)
-
-- `PendingPositionsCard` import + render conditional (`pending.count > 0`).
-- Per-row mapping: `primary` = title vagy slug, `secondary` = "expired Xm
-  ago" (új `formatAgeAgo` helper), `direction` chip, `predictionText` =
-  "pred N%", `sizeText` = "$X.XX", `whenText` = state hint.
-
-## Mit nem változtattam?
-
-- **A bot logikája semmilyen ponton nem változott.** A `paper-resolver.mts`
-  ugyanazt csinálja, a `*/3 *` cron ugyanúgy fut, a Brownian fallback
-  ugyanannál az `endTs + paperFallbackAfterMs` küszöbnél éleződik.
-- **Nincs új manuális reconcile gomb.** A meglévő "Run Scan" gomb már
-  triggereli a resolver-t (`auto-trader/index.mts:274` minden run előtt
-  hívja `resolvePendingPaperPositions`-t), tehát redundáns lenne.
-- **A weather bot UI nem változott.** Az ott élő `PendingPositionsCard` és
-  manuális "⟳ Reconcile pending" gomb maradt — azt indokolja a külön
-  `auto-trader-weather-reconciler-cron` és a 6h-os METAR fallback ablak.
-
-## Hova nyúlj legközelebb
-
-- Ha a kártya gyakran megjelenik még a Brownian fallback-en is túl → a
-  `*/3 *` `auto-trader` cron leállt vagy timeoutol. Netlify Functions →
-  scheduled tab → execution log.
-- Ha új mezőt szeretnél a sorokon (pl. live mp drift az entry óta), a
-  `getCryptoPendingPositions` kibővítése + a `pending.positions.map`
-  callback-be 1 új `PendingPositionLite` mező — máshol nem kell nyúlni.
-
----
-
 # 2026-05-10 — Paper resolvers: real Polymarket only, no simulator (simVersion 3)
 
 ## A bug
@@ -250,4 +184,297 @@ netlify/functions/auto-trader/hyperliquid/paper-resolver.mts        Real markPri
 netlify/functions/auto-trader/hyperliquid/order-manager.mts         Paper entry markPrice
 netlify/functions/auto-trader/hyperliquid/funding-arb/index.mts     Live HL+Binance
 netlify/functions/auto-trader/hyperliquid/funding-arb/hedge-manager.mts  paperFill markPrice
+```
+
+---
+
+# 2026-05-10 — Crypto bot pending-paper-position kártya (UI follow-up)
+
+## Mit?
+
+A crypto bot UI-jára felkerült a `PendingPositionsCard`, ami csak akkor
+render, ha van olyan paper open position aminek az `endDate`-je már
+elmúlt, de a Polymarket Gamma még nem publikálta az `outcomePrices` ∈
+`{0,1}`-et. Ugyanaz a kártya-nyelv és vizuális stílus mint a weather bot
+2026-05-09-i pending kártyája — szimmetria a 4 bot között.
+
+## Miért?
+
+A simVersion 3 átállás után a crypto paper pozíciók szignifikánsan
+tovább maradhatnak nyitva: nincs többé Brownian fallback, a UMA
+resolution 5–60 min tipikus a 5m/15m BTC piacokon, occasion 6+ óra
+dispute során. A user-nak kell egy felület ami megmutatja "ez a pozíció
+lejárt, várom a resolution-t", nem csak egy néma "Open: 1" számláló.
+
+- Ha minden rendben → a kártya **nem render** (üres rendszerben nincs
+  vizuális zaj).
+- Ha 1+ pozíció átlépte az endDate-et és vár → kártya rögtön megjelenik
+  "expired Xm ago · awaiting Polymarket resolution" sorral.
+
+## Hol?
+
+### Backend (`netlify/functions/auto-trader/index.mts`)
+
+- Új helper `getCryptoPendingPositions(session)` — szűri a
+  `session.openPositions`-t `endDate < now`-ra, számolja az `ageMs`-t,
+  sortolja `endDate` szerint növekvően. **Nincs fallback paraméter** —
+  v3-ban nincs simulator path, a "pending" egyszerűen "past endDate,
+  Polymarket még nem resolved".
+- A `getStatus()` crypto ágában `base.pending` mezőként visszaadja.
+- A shape-je megegyezik a weather pending-jével — `{ count, nextReconcileAt, positions }` — így a `PendingPositionsCard` ugyanazt a `PendingPositionLite[]` kontraktot fogadja mindkét boton.
+
+### Frontend (`src/components/trader/CryptoTrader.tsx`)
+
+- `PendingPositionsCard` import + render conditional (`pending.count > 0`).
+- Per-row mapping: `primary` = title vagy slug, `secondary` = "expired Xm
+  ago" (új `formatAgeAgo` helper), `direction` chip, `predictionText` =
+  "pred N%", `sizeText` = "$X.XX", `whenText` = "awaiting Polymarket
+  resolution".
+- `footnote` magyarázza a v3 contract-ot: "paper positions close only on
+  real Gamma outcomePrices. UMA resolution typical 5–60 min, longer
+  during disputes."
+
+## Mit nem változtattam?
+
+- **A bot logikája semmilyen ponton nem változott.** A `paper-resolver.mts`
+  v3 ugyanazt csinálja, a `*/3 *` cron ugyanúgy fut.
+- **Nincs új manuális reconcile gomb.** A meglévő "Run Scan" gomb már
+  triggereli a resolver-t (`auto-trader/index.mts:272-283` minden run
+  előtt hívja `resolvePendingPaperPositions`-t), tehát redundáns lenne.
+- **A weather bot UI nem változott.** Ott marad a meglévő manuális
+  "⟳ Reconcile pending" gomb — azt indokolja a külön
+  `auto-trader-weather-reconciler-cron` és a 6h-os METAR fallback ablak.
+
+## Hova nyúlj legközelebb
+
+- Ha egy market 1h+ ageMs-szel a kártyán marad → vagy UMA dispute fut,
+  vagy a Gamma `closed=true` query nem találja a market-et. Diagnosztika:
+  `curl 'https://gamma-api.polymarket.com/markets?condition_ids=0x...&closed=true'`.
+- Új mező a sorokon (pl. live mp drift az entry óta):
+  `getCryptoPendingPositions` + `pending.positions.map` callback. Máshol
+  nem kell nyúlni.
+
+## Érintett fájlok
+
+```
+netlify/functions/auto-trader/index.mts        +getCryptoPendingPositions, base.pending
+src/components/trader/CryptoTrader.tsx         +PendingPositionsCard, +formatAgeAgo
+```
+
+---
+
+# 2026-05-10 — HomePage navigáció: clickable per-category breakdown + Trading & Execution kategorizálás + venue badge
+
+## Mit?
+
+A főoldali `HomePage.tsx`-en három UX-feature:
+
+1. **Aggregated session per-category breakdown sorai mostantól kattinthatóak**,
+   közvetlenül a megfelelő bot oldalra navigálnak (`/trade/<category>/`).
+   Az 5 oszlopos grid (label / bankroll / pnl / trade-count / status pill)
+   változatlan, csak `<div>` → `<a>` lett, és kapott egy 6. oszlopot a hover
+   nyíl arrow-nak (→). Hover-en a sor háttere kissé világosodik (`#131318`)
+   és 2px-t jobbra mozdul (`translateX(2px)`); a nyíl ekkor accent-zöldre
+   vált, szintén jobbra mozdul. Mobil layouton (≤600px) az arrow külön
+   grid-area-ban van a jobb szélén.
+
+2. **Trading & Execution szekció kategorizálva: Automated bots / Manual
+   execution** — eddig 7 kártya volt egy flat rácsban, most 2 alszekció:
+   - **⚙ Automated bots** (cron */3 perc): Crypto, Hyperliquid Perp,
+     Funding Rate Arbitrage, Weather Trader.
+   - **🎯 Manual execution** (user-triggered orders): Bybit Futures,
+     Binance Futures, Polymarket Manual + Auto-Claim.
+
+   Mindkét alszekciónak saját header-pill-je van bal-szegéllyel
+   (`var(--accent)`), címkével és meta sub-label-lel ("cron */3 perc · saját
+   session · paper/live" / "user-triggered orders · nincs auto-session").
+
+3. **Venue badge minden execution kártyára** — a bot kártya belsejében a
+   cím alatt egy kis `venue: Polymarket` / `venue: Hyperliquid` /
+   `venue: Hyperliquid + Binance` / `venue: Bybit` / `venue: Binance` chip
+   jelenik meg (`var(--surface2)` háttér, `var(--accent2)` venue-name szín).
+
+## Miért?
+
+A user kifejezetten kérte: az Aggregated session elemeire is lehessen
+kattintani (egy klikkel a bot oldalra), és a Trading & Execution dobozai
+mutassák, melyik bot hol kereskedik (venue) + kategorizálva legyenek
+(auto vs. manual). Eddig a per-category breakdown csak read-only
+state-displayer volt, pedig pontosan az a mission-control sor, ami felett
+a leggyakoribb felhasználói cselekvés a "ugorjunk a bot oldalára". A flat
+7-kártyás rács pedig nem mutatta első ránézésre, melyik bot autonóm
+cron-vezérelt és melyik kézi.
+
+## Hol?
+
+### `src/components/HomePage.tsx`
+
+- **`Card` interface**: új opcionális mezők — `venue?: string` és
+  `auto?: "auto" | "manual"`.
+- **`CARDS[]`**: a 7 execution-kártya megkapta a `venue` és `auto` mezőket:
+  - crypto: `Polymarket` / `auto`
+  - hyperliquid: `Hyperliquid` / `auto`
+  - funding-arb: `Hyperliquid + Binance` / `auto`
+  - weather: `Polymarket` / `auto`
+  - bybit: `Bybit` / `manual`
+  - binance: `Binance` / `manual`
+  - polymarket-manual: `Polymarket` / `manual`
+- **Per-category breakdown**: `<div className="hp-bd-row">` →
+  `<a href={`/trade/${c.category}/`} className="hp-bd-row">` + új
+  `<span className="hp-bd-arrow">→</span>` 6. cellaként.
+- **Execution rács**: `<SectionTitle …>` után 2 különálló blokk
+  `hp-cat-head` header-rel és külön `hp-grid`-rel; filter:
+  `c.group === "execution" && c.auto === "auto" | "manual"`.
+- **`CapCard`**: a `hp-card-title` után új feltételes `hp-card-venue`
+  blokk — `venue` label + venue name két `<span>`-ben.
+- **Section subtitle frissítve**: "Aggregated session" alatt mostantól
+  *"Minden bot összesítve · alább kattintható per-category lebontás → bot
+  oldal"* — vizuális hint hogy a sorok klikkelhetők.
+
+### CSS bővítés (ugyanaz a fájl `css` template literal vége)
+
+- `hp-bd-row`: `text-decoration: none; color: inherit; cursor: pointer;` +
+  `transition: background .12s, transform .08s;` + `:hover` (bg `#131318`,
+  `translateX(2px)`). Grid-template-columns kibővítve 14px-es arrow
+  oszloppal. Mobil grid-template-areas frissítve.
+- Új `.hp-bd-arrow` selector + hover-state arrow szín/elmozdulás.
+- Új `.hp-cat-head` (és `.hp-cat-head-spaced` modifier a 2. headerre 26px
+  margin-top-pal): `display: flex` icon + label + meta-margin-left:auto.
+  Bal oldali 3px accent border.
+- Új `.hp-card-venue`, `.hp-venue-label`, `.hp-venue-name`: chip a card
+  belsejében a title alatt. `--surface2` bg, `--accent2` venue-name szín.
+
+## Tesztelés
+
+- TypeScript: `npx tsc --noEmit` — `HomePage.tsx`-ben nincs új error
+  (a 6 jelzett pre-existing más fájlokban).
+- Per-category sor klikkre `/trade/crypto/`, `/trade/weather/`,
+  `/trade/hyperliquid/`, `/trade/funding-arb/` oldalra navigál. A
+  category string közvetlenül a `multi-status` response-ból jön
+  (`multi-status.mts:66/85/104/128`), így minden helyen érvényes URL.
+
+## Follow-up ötletek (nem ebben a session-ben)
+
+- A venue badge nem-execution (analysis) kártyákra is felkerülhet később
+  (pl. "Apex Wallets · venue: Polymarket data-api"), de most az nem volt
+  kérve és elveszne a vizuális homogenitásból.
+- Az `hp-cat-head` mintát lehetne az analysis szekcióban is használni
+  (pl. "Order flow analytics" / "Market scanner" / "Arbitrage research"),
+  ha később bővülnek az analysis kártyák.
+
+## Érintett fájlok
+
+```
+src/components/HomePage.tsx     +venue/auto fields, +clickable bd-row,
+                                 +Automated/Manual subgroups, +venue badge,
+                                 +CSS for hp-bd-row hover, hp-cat-head, hp-card-venue
+```
+
+---
+
+# 2026-05-10 (b) — Auto-Trader Tab 1 visibility pass: open positions, pending, blocker chips, weather stats
+
+## Mit oldottunk meg
+
+A 4 bot oldalának (Crypto, Weather, HL, Funding-Arb) első tabján (Auto-Trader)
+3 láthatósági hiba volt:
+
+1. A **scan-row** csak hover-en árulta el, hogy egy "skip" miért skipped.
+   A user végigment a sorokon és nem látta szín alapján, hogy *kritérium-blokk*
+   vagy *infrastruktúra-skip* miatt nem kötött a bot.
+2. A **nyitott pozíciók** sehol sem jelentek meg expliciten a Tab 1-en
+   (Crypto: csak "open: 2" stat; Weather: hiányzott teljesen; HL: hiányzott).
+   Pending settlement is csak a Crypton+Weatheren volt, és nem volt
+   szétválasztva: minden open position bekerült a "pending" listába, akkor is
+   ha még a trading window-ban volt.
+3. A **Weather** Tab 1-ről hiányzott a 4-cellás stats grid (bankroll, session
+   pnl, trades, open) — minden más boton ott van, csak ott nem.
+
+## Backend
+
+### `auto-trader/index.mts`
+
+- **getStatus** payload bővítve `openDetails` mezővel mind crypto, mind weather kategóriára:
+  - `getCryptoOpenActive(session)` — csak azok a `session.openPositions`
+    sorok, ahol `endDate > now` (vagy nincs endDate). Visszaadja a market
+    címét, irányát, costBasist, avgEntry-t, predictedProb-ot.
+  - `getWeatherOpenActive(session)` — csak azok, ahol
+    `weatherMeta.reconcileAfter > now`. Visszaadja a city/date/bucket-et,
+    direction-t, predictedMaxC-t.
+- A `pending` lista most már SZIGORÚAN a "lejárt, settlement-re vár" sorok:
+  - Crypto: változatlan (endDate < now).
+  - Weather: új `getWeatherPendingForSettlement()` szűri az `isReady=true`
+    sorokat (reconcileAfter ≤ now).
+
+### `hyperliquid/index.mts`
+
+- **getHlStatus** payload bővítve `openDetails` mezővel: minden HL perp
+  pozíció (coin, direction, sizeUSDC, sizeCoins, entryPrice, leverage,
+  tpPrice, slPrice, openedAt, edgeAtEntry, predictedProb).
+
+## Frontend
+
+### `shared/TraderResults.tsx`
+
+- **OpenPositionsCard.OpenPositionRow** kiterjesztve direction (LONG/SHORT/
+  YES/NO) + entryText + spreadText opcionális mezőkkel + a pnl/pnlValue
+  most opcionális (HL-en már pnl-t mutatunk a closed-trade rowban, az open
+  perpnél nem akarunk fake unreal PnL-t).
+- **ScanResultRow** új tone-mező (pass/skip/fail/neutral): a `ts-row`
+  bal oldali border-ja most szín-kódolt:
+  - `pass` zöld (traded/position_opened/opened)
+  - `skip` narancs, halvány narancs háttér (skip + ≥1 failed gate)
+  - `fail` piros (failed/error)
+  - `neutral` átlátszó (skip ok pl. "already has open position", closed)
+- **Inline blocker line**: skip+failed-gate eseteken a sor maga megmutatja
+  az **első** elbukott gate-t — ✗ jellel, label-lel, tényleges és elvárt
+  értékkel, plus "+N további" ha több is van. Hover továbbra is a gate
+  popoverre kattan.
+
+### `shared/traderShellStyles.ts`
+
+- `.ts-row-pass/.ts-row-skip/.ts-row-fail/.ts-row-neutral` border-left + bg
+  tint
+- `.ts-row-blocker*` chip stílus (narancs border + halvány narancs bg,
+  piros ✗ és tényleges érték kiemelve)
+
+### Per-bot panelek
+
+- **CryptoTrader.tsx**: új OpenPositionsCard a pending fölött. Az
+  openDetails sorok title/direction/avgEntry/costBasis/predictedProb-ot
+  mutatnak; "ends in Xh Ym" countdown az `endDate`-ig.
+- **WeatherTrader.tsx**: új stats grid (Bankroll/Session PnL/Trades/Open) +
+  alerts (Stopped) + új OpenPositionsCard a pending fölött; sorok:
+  `City · Bucket` / direction / @entry / size / "pred 24°C · 2026-05-10" /
+  "settles in Xh".
+- **HyperliquidTrader.tsx**: új OpenPositionsCard a scan-results fölött
+  HL perp pozíciókkal: coin / direction / @entryPrice / `$X · Nx lev` /
+  `TP $... / SL $...` / age.
+- **FundingArbPanel.tsx**: változatlan — már korábban OpenPositionsCard-ot
+  használt a `session.openDetails`-ből.
+
+## Eredmény
+
+- Tab 1-en minden boton most szín alapján egyértelmű, hogy az egyes piacok
+  miért nem kerültek pozícióba — nem kell hover-elni a gates chipre.
+- Mind a 4 boton ugyanaz a 4-es stats grid (Bankroll/PnL/Trades/Open).
+- Mind a 4 boton ugyanaz a "Open positions" + (ahol releváns) "Pending
+  settlement" kártya jelenik meg a Run Scan gombsor alatt.
+- Új bot hozzáadásakor a TraderShell + a 4 mapper (criteria + stats +
+  openDetails + pending) kibővítése egy helyen elegendő — a
+  TraderResults.tsx most tartalmazza az összes közös vizuális blokk-ot.
+
+## Érintett fájlok
+
+```
+netlify/functions/auto-trader/index.mts          +getCryptoOpenActive, +getWeatherOpenActive,
+                                                   +getWeatherPendingForSettlement,
+                                                   getStatus payload: +openDetails
+netlify/functions/auto-trader/hyperliquid/index.mts  getHlStatus payload: +openDetails
+src/components/shared/TraderResults.tsx          ScanResultRow tone+blocker line,
+                                                   OpenPositionsCard direction/entry support
+src/components/shared/traderShellStyles.ts       +ts-row tone styles, +ts-row-blocker
+src/components/trader/CryptoTrader.tsx           +OpenPositionsCard render
+src/components/trader/WeatherTrader.tsx          +stats grid, +alerts, +OpenPositionsCard
+src/components/trader/HyperliquidTrader.tsx      +OpenPositionsCard render
 ```

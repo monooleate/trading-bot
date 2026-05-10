@@ -348,6 +348,20 @@ export async function getHlStatus(): Promise<any> {
     });
   } catch {}
 
+  const openDetails = session.openPositions.map((p) => ({
+    coin:         p.coin,
+    direction:    p.direction,
+    sizeUSDC:     p.sizeUSDC,
+    sizeCoins:    p.sizeCoins,
+    entryPrice:   p.entryPrice,
+    leverage:     p.leverage,
+    tpPrice:      p.tpPrice,
+    slPrice:      p.slPrice,
+    openedAt:     p.openedAt,
+    edgeAtEntry:  p.edgeAtEntry ?? null,
+    predictedProb: p.predictedProb ?? null,
+  }));
+
   return {
     ok: true,
     action: "status",
@@ -357,6 +371,7 @@ export async function getHlStatus(): Promise<any> {
     // HL is wired into auto-trader-multi-cron */3 * * * *, always-on.
     cronEnabled: true,
     liveReadiness,
+    openDetails,
   };
 }
 

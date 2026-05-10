@@ -10,11 +10,13 @@ import {
   ScanResultsCard,
   ScanResultRow,
   PendingPositionsCard,
+  OpenPositionsCard,
   DroppedCard,
   cryptoEntryCriteria,
   type ResultChip,
   type SignalArrow,
   type PendingPositionLite,
+  type OpenPositionRow,
 } from "../shared/TraderResults";
 import { useTradeExport } from "../shared/useTradeExport";
 import type { LiveReadinessReport } from "../shared/LiveReadinessBadge";
@@ -154,6 +156,18 @@ export default function CryptoTrader() {
   const pending = (status as any)?.pending as
     | { count: number; nextReconcileAt: string | null; positions: PendingPosition[] }
     | undefined;
+  const openDetails = ((status as any)?.openDetails ?? []) as Array<{
+    market: string;
+    title: string | null;
+    direction: "YES" | "NO";
+    size: number;
+    avgEntry: number;
+    shares: number;
+    openedAt: string;
+    endDate: string | null;
+    marketPriceAtEntry: number | null;
+    predictedProb: number | null;
+  }>;
 
   const doAction = useCallback(async (action: string) => {
     setError(null);
@@ -215,6 +229,34 @@ export default function CryptoTrader() {
       onExportTrades={exportTrades}
       exportingTrades={exporting}
     >
+      {openDetails.length > 0 && (
+        <OpenPositionsCard
+          title={`${openDetails.length} open position${openDetails.length > 1 ? "s" : ""} (still in trading window)`}
+          rows={openDetails.map<OpenPositionRow>((p) => {
+            const endsIn = p.endDate
+              ? Math.max(0, new Date(p.endDate).getTime() - Date.now())
+              : null;
+            const endsText = endsIn === null
+              ? "—"
+              : endsIn > 86_400_000
+              ? `ends in ${Math.floor(endsIn / 86_400_000)}d`
+              : endsIn > 3_600_000
+              ? `ends in ${Math.floor(endsIn / 3_600_000)}h ${Math.floor((endsIn % 3_600_000) / 60_000)}m`
+              : `ends in ${Math.floor(endsIn / 60_000)}m`;
+            return {
+              coin:      p.title || p.market,
+              direction: p.direction,
+              entryText: `@${(p.avgEntry * 100).toFixed(0)}¢`,
+              sizeText:  `$${p.size.toFixed(2)}`,
+              spreadText: p.predictedProb !== null
+                ? `pred ${(p.predictedProb * 100).toFixed(0)}%`
+                : undefined,
+              ageText:   endsText,
+            };
+          })}
+        />
+      )}
+
       {pending && pending.count > 0 && (
         <PendingPositionsCard
           title={`${pending.count} pending paper position${pending.count > 1 ? "s" : ""} past endDate — awaiting Polymarket resolution`}

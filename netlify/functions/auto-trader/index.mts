@@ -552,8 +552,10 @@ async function getStatus(config: ReturnType<typeof getTraderConfig>, category: s
     base.runStatus = await getWeatherRunStatus();
     const wcfg = await getEffectiveWeatherConfig();
     base.cronEnabled = wcfg.cronEnabled;
-    // Pending paper positions awaiting Polymarket settlement / METAR fallback.
-    base.pending = await getPendingPositions(config.paperMode);
+    // Past-METAR-window positions awaiting settlement.
+    base.pending = await getWeatherPendingForSettlement(config.paperMode);
+    // Active positions still in the trading window (reconcileAfter in the future).
+    base.openDetails = getWeatherOpenActive(session);
   } else if (category === "crypto") {
     // Same status payload shape as weather: the UI's status cluster reads
     // the same fields regardless of venue.
@@ -563,8 +565,58 @@ async function getStatus(config: ReturnType<typeof getTraderConfig>, category: s
     // 3 has no simulator fallback — positions stay open until Gamma publishes
     // outcomePrices ∈ {0,1}.
     base.pending = getCryptoPendingPositions(session);
+    // Active positions still in the trading window.
+    base.openDetails = getCryptoOpenActive(session);
   }
   return jsonResponse(base);
+}
+
+// Active (still-trading-window) open positions for the crypto bot.
+function getCryptoOpenActive(session: SessionState) {
+  const now = Date.now();
+  return session.openPositions
+    .filter((p) => !p.endDate || new Date(p.endDate).getTime() >= now)
+    .map((p) => ({
+      market:             p.market,
+      title:              (p as any).title ?? null,
+      direction:          p.direction,
+      size:               p.costBasis,
+      avgEntry:           p.avgEntry,
+      shares:             p.shares,
+      openedAt:           p.openedAt,
+      endDate:            p.endDate ?? null,
+      marketPriceAtEntry: p.marketPriceAtEntry ?? null,
+      predictedProb:      p.predictedProb ?? null,
+    }))
+    .sort((a, b) => (a.endDate ?? "").localeCompare(b.endDate ?? ""));
+}
+
+// Active (still-future-reconcile) weather positions and the past-METAR
+// pending list — both are derived from the same session.openPositions array,
+// split by reconcileAfter.
+function getWeatherOpenActive(session: SessionState) {
+  const now = Date.now();
+  return session.openPositions
+    .filter((p) => p.weatherMeta && new Date(p.weatherMeta.reconcileAfter).getTime() > now)
+    .map((p) => ({
+      market:        p.market,
+      city:          p.weatherMeta!.city,
+      date:          p.weatherMeta!.date,
+      bucket:        p.weatherMeta!.bucketLabel,
+      direction:     p.direction,
+      size:          p.costBasis,
+      avgEntry:      p.avgEntry,
+      predictedMaxC: p.weatherMeta!.predictedMaxC,
+      openedAt:      p.openedAt,
+      reconcileAfter: p.weatherMeta!.reconcileAfter,
+    }))
+    .sort((a, b) => a.reconcileAfter.localeCompare(b.reconcileAfter));
+}
+
+async function getWeatherPendingForSettlement(paperMode: boolean) {
+  const all = await getPendingPositions(paperMode);
+  const ready = all.positions.filter((p: any) => p.isReady);
+  return { count: ready.length, nextReconcileAt: ready[0]?.reconcileAfter ?? null, positions: ready };
 }
 
 // Pending paper-position view for the crypto bot.

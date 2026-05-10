@@ -131,12 +131,37 @@ export const traderShellCSS = `
   grid-template-columns: 1fr auto auto;
   align-items: start;
   gap: 0.5rem 0.65rem;
-  padding: 0.65rem 0;
+  padding: 0.65rem 0.65rem;
   border-bottom: 1px solid var(--border);
+  border-left: 3px solid transparent;
   font-family: var(--mono);
   font-size: 0.72rem;
+  transition: background 0.15s, border-left-color 0.15s;
 }
 .ts-row:last-child { border-bottom: none; }
+.ts-row-pass    { border-left-color: var(--accent);  background: rgba(200,241,53,0.04); }
+.ts-row-skip    { border-left-color: var(--warn);    background: rgba(241,160,53,0.04); }
+.ts-row-fail    { border-left-color: var(--danger);  background: rgba(241,53,53,0.06); }
+.ts-row-neutral { border-left-color: transparent; }
+
+/* Inline "blocker" line — visible without hovering. Highlights the FIRST
+   failed gate so the operator can scan the rejected-trade list at a glance. */
+.ts-row-blocker {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  font-family: var(--mono); font-size: 0.62rem;
+  color: var(--warn);
+  background: rgba(241,160,53,0.08);
+  border: 1px solid var(--warn);
+  border-radius: 3px;
+  padding: 2px 7px;
+  margin-top: 2px;
+  width: fit-content;
+}
+.ts-row-blocker-mark   { color: var(--danger); font-weight: 700; }
+.ts-row-blocker-label  { color: var(--text); }
+.ts-row-blocker-actual { color: var(--danger); font-weight: 700; }
+.ts-row-blocker-req    { color: var(--muted); }
+.ts-row-blocker-more   { color: var(--muted); font-size: 0.55rem; }
 .ts-row-main { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
 .ts-row-title {
   color: var(--text); font-weight: 600; font-size: 0.78rem;
