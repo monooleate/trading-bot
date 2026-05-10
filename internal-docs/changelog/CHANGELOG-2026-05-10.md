@@ -2313,3 +2313,78 @@ Ha `hasConditionId: false`, az egy legacy pozíció (a session manager
 simVersion bump-ja előttről). Reset oldja meg.
 
 `tsc --noEmit` exit 0 a project files-on. Astro build 9 page generated.
+
+# 2026-05-10 (k) — Stop/Resume gombok: Weather + Crypto backend handler hiányzott
+
+## A user észrevett bug
+
+A Weather bot Stop gomb működött, de a "Stopped: Manual stop" után **nem
+lehetett visszaindítani** — a Weather UI-ban nem volt Resume gomb.
+Sőt: a Crypto UI-on volt Resume gomb, de **a backend nem ismerte fel a
+"resume" action-t** crypto+weather kategóriára → 400 "Unknown action:
+resume" rejtett hibába futott.
+
+## Root cause
+
+1. **`auto-trader/index.mts` dispatcher** (crypto + weather ágban):
+   `case "stop"` jelen, **`case "resume"` hiányzik**. Csak HL és F-Arb
+   ágakban volt resume case (külön dispatcher branch).
+2. **`crypto/session-manager.mts`**: `stopSession` jelen,
+   **`resumeSession` nem volt definiálva**.
+3. **`WeatherTrader.tsx`**: `controls` array-ben **nincs Resume gomb**.
+   Csak Run / Reconcile / Stop.
+
+## Fix
+
+### `crypto/session-manager.mts`
+
+Új helper: `resumeSession(session)` — clears `stopped: false`,
+`stoppedReason: null`, `calibrationAlertSentAt: null`. Mirror-je a HL
+`resumeHlSession`-nek. Logol "SESSION_START" event-tel a session_resume
+trail miatt.
+
+### `auto-trader/index.mts`
+
+- Új `handleResume(config, category)` symmetric a `handleStop`-pal.
+  Loadolja a sessiont, hívja a `resumeSession`-t, mentés.
+- Új dispatcher case: `case "resume": return await handleResume(config, cat);`
+  — futás a HL/F-Arb resume case-ek alatt, a crypto+weather közös
+  switch-ben.
+
+### `WeatherTrader.tsx`
+
+Symmetric Stop/Resume gombok a Crypto / HL / F-Arb mintára:
+
+```tsx
+{ label: "Resume", kind: "secondary", onClick: () => doAction("resume"),
+  disabled: isRunning, when: isStopped },
+{ label: "Stop",   kind: "danger",    onClick: () => doAction("stop"),
+  disabled: isRunning, when: !isStopped },
+```
+
+A `session` változót feljebb húzva a controls deklaráció elé. Az `isStopped`
+flag az `!!session?.stopped` alapján.
+
+## Hatás deploy után
+
+- A "Stopped: Manual stop" alert mostantól **eltüntethető** a Resume
+  gombbal — csak akkor látszik, ha a session stopped, és ezzel egy időben
+  a Stop gomb eltűnik (helyette Resume jelenik meg).
+- Crypto Resume már korábban megjelent a UI-on, de 400-zal failt — most
+  helyesen működik.
+- HL + F-Arb: változatlan (saját resume case eddig is működött).
+
+## Egységesség checklist (mind a 4 bot)
+
+| Bot | Run | Reconcile | Resume (when stopped) | Stop (when running) | Refresh |
+|------|------|-----------|----------------------|---------------------|---------|
+| Crypto | ✓ | — | ✓ | ✓ | ✓ |
+| Weather | ✓ | ✓ | ✓ (ÚJ) | ✓ | — |
+| HL Perp | ✓ | — | ✓ | ✓ | ✓ |
+| F-Arb | ✓ | — | ✓ | ✓ | ✓ |
+
+A Resume gomb mind a 4 boton most ugyanazt a logikát követi: csak akkor
+látható, ha a session `stopped: true` (HL-en pluszban a `pausedUntil`).
+Stop gomb csak akkor látszik, ha NINCS stopped/paused.
+
+`tsc --noEmit` exit 0 + Astro build 9 page generated.

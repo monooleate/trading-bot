@@ -38,6 +38,7 @@ import {
   addOpenPosition,
   closePosition,
   stopSession,
+  resumeSession,
   resetSession,
 } from "./crypto/session-manager.mts";
 import { computeCalibrationHealth } from "../edge-tracker/statistics.mts";
@@ -196,6 +197,8 @@ export default async function handler(req: Request, _ctx: Context) {
         return await handleReset(config, cat, bankrollOverride);
       case "stop":
         return await handleStop(config, cat);
+      case "resume":
+        return await handleResume(config, cat);
       case "reconcile":
         // Weather-only manual reconcile — let the user force a settlement
         // pass without waiting for the */15 cron tick.
@@ -913,6 +916,25 @@ async function handleStop(config: ReturnType<typeof getTraderConfig>, category: 
     action: "stopped",
     category,
     session: sessionSummary(stopped),
+  });
+}
+
+// ─── Resume session ───────────────────────────────────────
+// Symmetric to handleStop. Clears the manual-stop flag so the bot resumes
+// trading on the next cron tick (or "Run Scan" click). Used by all four
+// bot tabs — the dispatch routes hyperliquid + funding-arb to their own
+// hlResume / arbResume handlers earlier in the switch, this one covers
+// crypto + weather. Without this the UI's Resume button hit a 400
+// "Unknown action: resume".
+async function handleResume(config: ReturnType<typeof getTraderConfig>, category: string = "crypto") {
+  const session = await loadSession(config.paperMode, DEFAULT_BANKROLL, category);
+  const resumed = resumeSession(session);
+  await saveSession(resumed, category);
+  return jsonResponse({
+    ok: true,
+    action: "resumed",
+    category,
+    session: sessionSummary(resumed),
   });
 }
 

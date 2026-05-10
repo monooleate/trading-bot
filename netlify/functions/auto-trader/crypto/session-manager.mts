@@ -160,6 +160,24 @@ export function stopSession(session: SessionState, reason: string): SessionState
   };
 }
 
+// Clears the manual-stop flag. Mirrors `resumeHlSession` in
+// hyperliquid/session-manager.mts so the four bots have identical
+// stop/resume semantics. Calibration alarms (set during the previous run)
+// are also cleared so a re-armed session can fire its own alert.
+export function resumeSession(session: SessionState): SessionState {
+  log("SESSION_START", session.paperMode, {
+    event: "manual_resume",
+    pnl: session.sessionPnL,
+    trades: session.tradeCount,
+  });
+  return {
+    ...session,
+    stopped: false,
+    stoppedReason: null,
+    calibrationAlertSentAt: null,
+  };
+}
+
 export function resetSession(bankroll: number, paperMode: boolean): SessionState {
   const session = defaultSession(bankroll, paperMode);
   log("SESSION_START", paperMode, { bankroll, simVersion: PAPER_SIM_VERSION });

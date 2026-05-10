@@ -108,13 +108,18 @@ export default function WeatherTrader({ bankroll }: { bankroll?: number }) {
     refresh();
   }, [run, refresh, setError, bankroll]);
 
-  const controls: TraderControl[] = [
-    { label: isRunning ? "Scanning..." : "Scan Weather Markets", kind: "primary", onClick: () => doAction("run"),       disabled: isRunning },
-    { label: "⟳ Reconcile pending",                              kind: "info",    onClick: () => doAction("reconcile"), disabled: isRunning, title: "Force a settlement pass on pending paper positions" },
-    { label: "Stop",                                             kind: "danger",  onClick: () => doAction("stop"),      disabled: isRunning },
-  ];
-
   const session: any = (status?.session as any) ?? lastResult?.session ?? null;
+  const isStopped = !!session?.stopped;
+
+  // Symmetric stop/resume: Stop visible while running, Resume visible when
+  // the session has been stopped (Manual stop / session-loss-limit /
+  // calibration-noise alarm). Same rules as the Crypto / HL / F-Arb bots.
+  const controls: TraderControl[] = [
+    { label: isRunning ? "Scanning..." : "Scan Weather Markets", kind: "primary",   onClick: () => doAction("run"),       disabled: isRunning },
+    { label: "⟳ Reconcile pending",                              kind: "info",      onClick: () => doAction("reconcile"), disabled: isRunning, title: "Force a settlement pass on pending paper positions" },
+    { label: "Resume",                                           kind: "secondary", onClick: () => doAction("resume"),    disabled: isRunning, when: isStopped },
+    { label: "Stop",                                             kind: "danger",    onClick: () => doAction("stop"),      disabled: isRunning, when: !isStopped },
+  ];
 
   const stats: TraderStat[] = session ? [
     { label: "Bankroll",    value: `$${(session.bankrollCurrent ?? 0).toFixed(2)}` },

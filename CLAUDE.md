@@ -351,6 +351,41 @@ netlify deploy --prod --dir=dist
 
 ## AKTUÁLIS ÁLLAPOT (2026-05-10) – Claude Code folytatáshoz
 
+### Huszonkettedik session (2026-05-10) – Stop/Resume gombok unifikálva (Weather Resume hiányzott, Crypto/Weather backend resume case hiányzott)
+
+A user észlelte: a Weather botot megállította (Stopped: Manual stop), de
+**nem tudta visszaindítani** — nincs Resume gomb a Weather UI-on. Plusz a
+Crypto UI-on volt Resume gomb, de a backend **nem ismerte fel a "resume"
+action-t** crypto+weather kategóriára → 400 "Unknown action: resume".
+
+**Backend fix:**
+- `crypto/session-manager.mts`: új `resumeSession(session)` helper
+  (mirror a HL `resumeHlSession`-nek). Clears `stopped`, `stoppedReason`,
+  `calibrationAlertSentAt`.
+- `auto-trader/index.mts`: új `handleResume(config, cat)` + új dispatcher
+  case `case "resume": return await handleResume(config, cat);`. HL és
+  F-Arb saját resume case-ek (külön branch) változatlanok.
+
+**Frontend fix:**
+- `WeatherTrader.tsx`: symmetric Resume/Stop gomb a Crypto / HL / F-Arb
+  mintára. Resume `when: isStopped`, Stop `when: !isStopped`.
+
+**Egységesség checklist (mind a 4 bot):**
+
+| Bot | Run | Reconcile | Resume (stopped) | Stop (running) | Refresh |
+|-----|-----|-----------|------------------|----------------|---------|
+| Crypto | ✓ | — | ✓ | ✓ | ✓ |
+| Weather | ✓ | ✓ | ✓ (ÚJ) | ✓ | — |
+| HL Perp | ✓ | — | ✓ | ✓ | ✓ |
+| F-Arb | ✓ | — | ✓ | ✓ | ✓ |
+
+A Resume gomb minden boton csak akkor jelenik meg, ha session `stopped:
+true` (HL-en `pausedUntil` is). Stop gomb csak akkor látszik, ha NINCS
+stopped/paused.
+
+`tsc --noEmit` exit 0 (project files), Astro build 9 page.
+Részletek: `internal-docs/changelog/CHANGELOG-2026-05-10.md` "(k)" szekció.
+
 ### Huszonegyedik session (2026-05-10) – Crypto + Weather: chip Y-uniformity + pending diagnostics
 
 A 20. session után a user 2 problémát észlelt:
