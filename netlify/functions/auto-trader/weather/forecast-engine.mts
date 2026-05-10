@@ -249,7 +249,15 @@ export async function getForecast(
 
   const gfsMax     = gfsResult?.maxTemp ?? null;
   const ecmwfMax   = ecmwfResult?.maxTemp ?? null;
-  const cloudCover = gfsResult?.cloudCover ?? ecmwfResult?.cloudCover ?? 50;
+  // Average cloud cover across the available models. Pre-fix only used GFS
+  // which made the cloudy-σ switch jitter when GFS disagreed with ECMWF —
+  // e.g. Shanghai 2026-05-11 had GFS=68%, ECMWF=53% so σ flipped to 1.5
+  // based on GFS alone. Averaging is more stable.
+  const cloudVals = [gfsResult?.cloudCover, ecmwfResult?.cloudCover]
+    .filter((v): v is number => typeof v === "number");
+  const cloudCover = cloudVals.length > 0
+    ? cloudVals.reduce((s, v) => s + v, 0) / cloudVals.length
+    : 50;
 
   // Base ensemble (original GFS+ECMWF+NOAA path) — always computed so we
   // have a fallback and can log raw per-model outputs.

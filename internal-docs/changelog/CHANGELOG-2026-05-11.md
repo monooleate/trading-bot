@@ -1,4 +1,166 @@
 
+# 2026-05-11 (d) — Weather bot audit-driven fixes: tail-bucket CDF + market-disagreement gate + ensemble default + cloud avg + log filter
+
+## A user kérése (folytatás)
+
+A 2026-05-11 (b) Reconcile timeout fix után a weather bot teljes audit-ja
+következett. A user a `https://mj-trading.netlify.app/trade/weather/`
+oldalon 2 nyitott paper pozíciót (Shanghai 25°C YES, Austin 82-83°F YES)
+kérdéses-re tartott, és a teljes trade pipeline strukturális
+felülvizsgálatát kérte. Az audit 4 strukturális hibát talált, mind
+javítva.
+
+## A 4 audit-finding
+
+**1. (HIGH) `bucket-matcher.mts` PDF-alapú normalizációja torzított.**
+A `parseTempFromLabel("84°F or higher")` `tempC=28.89`-t adott
+(threshold), és a matcher Gauss-**PDF**-et használt a normalizációhoz,
+nem a Gauss-**CDF**-integrált. Két hatás:
+  - **Tail-bucketek pontmázsaként kezelve** — Polymarket viszont
+    integrálban settlel: `P(T ≥ 28.89°C)` *és nem* `PDF(28.89)`. Az
+    Austin 2026-05-12 piacon a `"84°F or higher"` bucket 70%-os market
+    árán a bot 70.3% modell-probot adott (PDF-arány), miközben a helyes
+    CDF-érték `μ=28.9, σ=1.0` mellett 50% lett volna. A belső buckete-k
+    (`"82-83°F"`) ezért 38.8%-osra inflálódtak.
+  - **Bucket-szélességek figyelmen kívül hagyva** — 1°C-os integer °C
+    buckete-k és 2°F-os (~1.11°C) buckete-k ugyanazt a súlyt kapták.
+
+**2. (HIGH) `useEnsemble = false` default.** A 31-tagú GFS-ensemble API
+(`fetchEnsemble()`) már implementálva volt, de csak opt-in. Hardcoded
+`σ = 1.0 (clear) / 1.5 (cloudy)` empirikusan nem kalibrált — 18-24h
+daily-max forecast skill MAE ≈ 1.5°C, σ ≈ 2°C → a hardcoded 1.0 túl
+optimista, OVERESTIMATEs precision.
+
+**3. (MEDIUM) Cloud-cover csak GFS-ből.**
+`forecast-engine.mts:252` `cloudCover = gfsResult?.cloudCover ??
+ecmwfResult?.cloudCover ?? 50` — csak az első modell. Shanghai 2026-05-11
+esetén GFS=68%, ECMWF=53% → σ=1.5 kapcsolt be GFS alapján; átlaggal
+(60.5%) ugyanígy, de instabil pattern a két modell-disparity-nél.
+
+**4. (LOW) `/status` `recentLogs` cross-kategória.** A weather-status
+válaszban CRYPTO logok jelentek meg (`bitcoin-above-82k...`). A logger
+globális, kategória-tag nem szűrt. Cosmetic, de zavaró.
+
+## Az 5 fix
+
+### (a) Bucket-matcher CDF v2
+
+`bucket-matcher.mts` teljes átírás. Új algoritmus:
+- `parseTempFromLabel` mostantól `{ tempC, tail: "low" | "high" | null }`-t ad vissza.
+- `TemperatureBucket.tail` mező hozzáadva.
+- `matchBucket` minden bucket-et **intervalként** kezel:
+  - Belső bucket: `[lo, hi] = [(prev+self)/2, (self+next)/2]`
+  - Alsó tail: `[lo, hi] = [-∞, (self+next)/2]`
+  - Felső tail: `[lo, hi] = [(prev+self)/2, +∞]`
+  - Szélső, de nem tail: a szomszéd felé félút, ellenkező oldalon `T_i ± fél-step`
+- Per-bucket prob = Gauss-CDF az interval-on (`Φ(hi) - Φ(lo)`).
+- `erf` Abramowitz & Stegun 7.1.26 approximation (1.5×10⁻⁷ abs error).
+- Normalizáció only when tail-incomplete (sum < 1).
+- Új helper: `marketConsensusModalTempC(buckets)` — a legmagasabban árazott bucket centerét adja vissza.
+
+**Konkrét hatás a 2026-05-10-i Austin pozícióra:**
+- Régi: `P(82-83°F)` = 0.388 (PDF), gross edge 0.223, net 0.213
+- Új: `P(82-83°F)` = 0.258 (CDF), gross edge 0.088, net 0.078
+- **A new edge most 7.8% < 12% threshold → a trade NEM nyílna meg.** Az
+  Austin pozíció tehát PDF-bug artefakt volt.
+
+Konkrét hatás a Shanghai 25°C pozícióra: minimális
+(20.3% → 20.2%, edge 0.181 → 0.179) — itt a bucket belső,
+közel-modális, ezért a PDF/CDF különbség elenyésző.
+
+Új unit-test fájl: `netlify/functions/auto-trader/weather/bucket-matcher.test.mts`.
+4 kategóriás teszt (Shanghai live, Austin live, single-bucket edge case,
+market-modal helper). `npx tsx` → all passed.
+
+### (b) `useEnsemble` default true
+
+`decision-engine.mts:getWeatherConfig()` és `trader-settings.mts SCHEMA`
+default `useEnsemble: 1`. Operátor `USE_ENSEMBLE=false` env vagy a
+Settings tabon kapcsolhatja ki. Az ensemble API hibájára továbbra is
+graceful fallback a determinisztikus GFS+ECMWF combo-ra (a meglévő
+`ensembleResult.memberCount >= 5` gate marad).
+
+### (c) Cloud-cover átlag GFS+ECMWF
+
+`forecast-engine.mts` `cloudCover` mostantól `(gfs + ecmwf) / 2` ha
+mindkettő elérhető, egyébként az elérhetőre esik vissza.
+
+### (d) Market-disagreement gate (7. gate)
+
+Új gate a `decision-engine.mts`-ben:
+```
+disagreeC = |predictedTempC - marketModalTempC|
+gate.passed = disagreeC <= config.marketDisagreeMaxC
+```
+Default `marketDisagreeMaxC = 2.0°C`. `WEATHER_GATE_LABELS` 6→7 elem.
+A `padWeatherGates` automatikusan kibővítve.
+
+Az `index.mts`-ben a runner most a `marketConsensusModalTempC(market.outcomes)`-t számolja és átadja a decision-engine-nek. Soft-fail: ha
+a modal nem parse-olható, a gate passed=true marad ("no market modal").
+
+A 2026-05-09 Hong Kong May-9 historikus eset (predicted 24.4°C vs market
+26°C @ 85%, disagreeC = 1.6°C) — a sanity cap (40%) már korábban blokkolta;
+a market-disagreement gate (2.0°C) defense-in-depth.
+
+### (e) Per-category log filter
+
+`logger.mts` új `getLogBufferForCategory(category)` helper. Klasszifikáció
+egy-passzal:
+1. `category` field közvetlen match
+2. `venue` field whitelist (`hyperliquid`, `funding-arb`, `weather`)
+3. `type` field `weather`-prefix match
+4. `coin` field HL-coin whitelist (`BTC/ETH/SOL/XRP/AVAX`)
+5. `market` slug heuristika (`highest-temperature-*` → weather; `bitcoin-*`/`btc-*` → crypto)
+
+Untagged sorok (nincs egyik mező sem) MINDEN kategória válaszában
+megjelennek — session-wide warning-okat nem veszünk el.
+
+A `auto-trader/index.mts:getStatus` mostantól ezt a szűrt változatot
+adja vissza minden kategóriának.
+
+## Files touched
+
+| Fájl | Változás |
+|------|----------|
+| `netlify/functions/auto-trader/weather/bucket-matcher.mts` | Teljes átírás v2 CDF-alapú algoritmussal |
+| `netlify/functions/auto-trader/weather/bucket-matcher.test.mts` | ÚJ — 4 kategóriás unit-test fájl |
+| `netlify/functions/auto-trader/weather/market-finder.mts` | `parseTempFromLabel` `{tempC, tail}`-t ad vissza, `TemperatureBucket.tail` hozzáadva |
+| `netlify/functions/auto-trader/weather/decision-engine.mts` | 7. gate (market-disagreement), `WEATHER_GATE_LABELS` bővítve, useEnsemble default true |
+| `netlify/functions/auto-trader/weather/forecast-engine.mts` | cloud-cover átlag GFS+ECMWF |
+| `netlify/functions/auto-trader/weather/index.mts` | `marketConsensusModalTempC` import + átadása a decision-engine-nek |
+| `netlify/functions/auto-trader/shared/logger.mts` | `getLogBufferForCategory` + `classifyLogLine` helpers |
+| `netlify/functions/auto-trader/index.mts` | `getStatus` mostantól per-category log buffert hív |
+| `netlify/functions/trader-settings.mts` | `weatherUseEnsemble` default 1, új `weatherMarketDisagreeMaxC` field |
+| `internal-docs/math/16-weather-bot.md` | §5 átírva v2-re, §7 gate-listája 6→7 sor |
+
+## Verifikációs eredmény (live Shanghai + Austin data, 2026-05-10 22:30Z)
+
+| Trade | Old gate result | New gate result | Verdict |
+|-------|-----------------|-----------------|---------|
+| Shanghai 25°C YES @ 0.022, μ=26.1, σ=1.5 | edge 18.1%, all 6 pass | edge 16.9%, all 7 pass | Új scan-en újra nyílna ugyanaz (model agreement 0.9°C < 2.0°C cap) |
+| Austin 82-83°F YES @ 0.175, μ=28.9, σ=1.0 | edge 21.3%, all 6 pass | edge 7.8% < 12% → **edge gate FAIL** | Új scan-en nem nyílna — a régi pozíció PDF-bug artefakt |
+| Hong Kong May 9 historical, μ=24.4 vs market 26°C @ 85% | sanity cap blokkolt | sanity cap + 1.6°C disagree blokkol | Defense-in-depth |
+
+## Mit jelent ez a 2 jelenleg nyitott pozícióra
+
+**Semmit.** A `if (updatedSession.openPositions.some(p => p.market === market.slug))` check garantálja, hogy a meglévő pozíciók nem re-evaluálódnak. A 2 trade természetes módon settlel (Shanghai 2026-05-11 12:00Z, Austin 2026-05-12 12:00Z) METAR-on. Az új gate-logika csak FUTURE scan-ekre érvényes.
+
+A 2 trade tehát továbbra is "in flight" kalibrációs mintaként szolgál — az új CDF math nem retroaktív.
+
+## Build + test eredmény
+
+- `npx tsc --noEmit` → exit 0
+- `npx tsx netlify/functions/auto-trader/weather/bucket-matcher.test.mts` → all checks passed
+- `npx tsx netlify/functions/auto-trader/weather/station-config.test.mts` → 8/8 passed
+- `npm run build` (Astro) → 9 page generated, no errors
+
+## Még nem javított (low priority)
+
+- **Top-5 `markets.slice(0, 5)` limit** — a scan loop csak a top-5 volume eventet dolgozza fel. Tudatos latency-cap, marad.
+- **DEB σ-tanulás** — a per-bucket σ továbbra is hardcoded (1.0/1.5 cloudCover-alapú). Hosszú távon a closed-trade residual-eloszlásból kellene mérni (TODO, math/16-weather-bot.md §5 note).
+
+---
+
 # 2026-05-11 (c) — `internal-docs/` átszervezés (current-state / math / roadmap / archive)
 
 ## A user kérése
@@ -296,5 +458,104 @@ wrap-pelve, hogy a Telegram alert hibája ne maszkolja a tényleges hibát.
   verdict.
 - Ha mégis hiba történne (Gamma API kiesés, stb.), az error pontos
   message-szel jelenik meg, nem generic "Unknown error".
+
+`tsc --noEmit` exit 0 (project files), Astro build 9 page generated.
+
+---
+
+# 2026-05-11 (d) — Crypto bot decision-engine audit: 6 fix (9 → 12 gate, $1 floor kivétel, combiner recommendation gate, paper fee parity)
+
+## A user kérése
+
+"A crypto botot auditáld helyes trade működésre! Minden trade funkciót
+elemezz, hogy megfelelően működik-e, ellenőrizd a production oldalon,
+hogy a nyitott két pozíció indokolt volt-e és rendben működik a bot."
+
+## Audit eredmény
+
+A live `mj-trading.netlify.app/trade/crypto/` 3 nyitott paper pozíciót
+(2 aktív + 1 settlement-re vár) cross-reference-eltem a Gamma API +
+signal-combiner válaszával:
+
+| Pozíció | dir | size | entry | predProb | mktPrice | grossEdge | kellyRaw |
+|---|---|---|---|---|---|---|---|
+| bitcoin-above-82k-on-may-11 | YES | $1 | 0.27 | 0.505 | 0.255 | 25.0% | 0.03% |
+| bitcoin-up-or-down-on-may-11-2026 | YES | $1 | 0.32 | 0.5058 | 0.305 | 20.1% | 0.03% |
+
+A signal-combiner ugyanazon slug-ra most **`recommendation.action = "WAIT"`**,
+`trade_recommended = false`, `kelly.quarter = 0`. A 3 pozíció **nem volt
+indokolt** — a 9-gates rendszer kihagyott 3 védőréteget:
+
+1. Combiner saját `recommendation` ignorálva — a trader sose nézte.
+2. Combiner `|p − 0.5| < 5%` (zaj-detekció) ignorálva — gate hiányzott.
+3. Resolution-risk `trade_recommended = false` veto ignorálva.
+
+És a `Math.max(1, bankroll * kellyCapped)` $1 hard floor 13× over-sized
+minden trade-et (0.03% Kelly × $250 = $0.075 javasolt → $1 ténylegesen).
+
+## 6 fix implementálva
+
+| # | Fájl | Patch | Cél |
+|---|------|-------|-----|
+| **1** | `decision-engine.mts` | `Math.max(1, ...)` floor kiszedés. Új gate #11 "Kelly méret ≥ minimum" explicit pass/fail kontrollal. `MIN_POSITION_SIZE_USDC` env + Settings knob (default $0.50). | Méret-floor bypass kiszedés |
+| **2** | `signal-aggregator.mts` | `AggregatedSignal` 3 új mező: `combinerRecommendation`, `tradeRecommendedByRisk`, `adjustedProbability`. | Combiner ajánlás átemelése |
+| **3** | `decision-engine.mts` | Új gate #4 "Combiner recommendation" — pass csak ha `recAction.startsWith("BUY")`. | Combiner saját WAIT/WATCH/SKIP átemelése |
+| **4** | `decision-engine.mts` | Új gate #3 "Combiner confidence (\|p − 0.5\|)" — küszöb default 5%, env-tunable `COMBINER_CONFIDENCE_MIN`. | Zaj/jel megkülönböztetés |
+| **5** | `decision-engine.mts` | Új gate #5 "Resolution-risk gate" — pass csak ha `tradeRecommendedByRisk !== false`. `null` = helper nem futott → defensive pass. | Resolution-risk veto |
+| **6** | `paper-resolver.mts` | `applySettlementFee(pnlGross, proceeds, costBasis, feePct)` helper. Fee = `max(proceeds, costBasis) × 0.036`. `PAPER_RESOLVED` log entry `pnlGross + pnlNet + feePct` mind kiír. | Paper PnL = live PnL parity |
+
+### Plusz infrastruktúra
+
+- `types.mts:TraderConfig` 2 új mező: `minPositionSizeUSDC`, `combinerConfidenceMin`.
+- `types.mts:AggregatedSignal` 3 új optional mező (lásd fix #2).
+- `config.mts:getTraderConfig` + `getEffectiveTraderConfig` az új mezőkkel.
+- `trader-settings.mts:SCHEMA` 2 új field: `minPositionSizeUSDC`, `combinerConfidenceMin` — runtime override-olható.
+- `auto-trader/index.mts:traderConfigSummary` exposes az új mezőket a UI-nak.
+- `CRYPTO_GATE_LABELS` 9 → 12 elem. A régi "Kelly conviction (combiner > 0)" gate kikerült (a "Kelly méret ≥ minimum" funkcionálisan ekvivalens).
+
+### Mit NEM csináltam
+
+- **simVersion NEM bump-olva**. A 3 nyitott paper pozíció settle-el a saját
+  endDate-én (2026-05-11 16:00Z). Fee modell változás ezeken a pozíciókon
+  is alkalmazódik close-kor ($1 × 3.6% = $0.036 levonás per trade,
+  negligible).
+- **A meglévő open-ek nem törlődtek.** A fixek pure forward-looking módon
+  hatnak — a jövőbeli scan-tick-eken a 3 új gate fogja elkapni a
+  combiner-noise alapú trade-eket.
+
+## Új gate-sorrend a "Why?" panelen (12 gate)
+
+1. Session loss limit
+2. Aktív signal források (≥2)
+3. **Combiner confidence (|p − 0.5|)** ✦ ÚJ
+4. **Combiner recommendation === BUY** ✦ ÚJ
+5. **Resolution-risk gate** ✦ ÚJ
+6. Market cooldown
+7. Open interest ≥ küszöb
+8. Entry window (BTC short markets)
+9. OB imbalance konvergencia
+10. Net edge ≥ küszöb
+11. **Kelly méret ≥ minimum** ✦ ÚJ (replaces "Kelly conviction")
+12. Kelly méret ≤ cap
+
+## Live mode emlékeztető (új knob hatása)
+
+- Polymarket CLOB minimum order size **$5 USDC**.
+- Default `minPositionSizeUSDC = 0.50` csak paper módra optimális.
+- Live módra váltás előtt a Settings tabon **$5.00-ra (vagy magasabbra)
+  emelni kell** a knob-ot, különben a CLOB visszadob minden $5 alatti
+  orderet.
+- A `live-readiness` gate továbbra is védi a tényleges live-átállást
+  (30 trade, IC ≥ 5%, Sharpe ≥ 0.5, drawdown < 25%).
+
+## Hatás deploy után
+
+Következő cron tick (3 perc múlva):
+- A scanner most a 3 új gate-en megáll, ha a combiner WAIT/WATCH/SKIP-et ad.
+- A meglévő 3 open pozíció endDate-en (16:00Z) settle-el, $0.036 fee
+  levonással per trade.
+- Nem nyílnak új $1 paper trade-ek noise-level signal mellett.
+- A `Calibration Health` badge most érdemi IC-t fog mérni, mert a fee
+  parity miatt a paper PnL realisztikusabb.
 
 `tsc --noEmit` exit 0 (project files), Astro build 9 page generated.

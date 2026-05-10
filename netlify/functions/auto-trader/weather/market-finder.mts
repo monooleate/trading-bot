@@ -34,7 +34,11 @@ export interface TemperatureBucket {
                              // event level. Empirical proof: HK May-10 event has 6
                              // distinct conditionIds across 19/20/21/22/23/24°C buckets.
   currentPrice: number;
-  tempC: number | null;      // parsed center temp in °C, null if unparseable
+  tempC: number | null;      // parsed center temp / threshold in °C, null if unparseable
+  // Tail flag drives the CDF interval in bucket-matcher.mts. "low" means the
+  // bucket covers (−∞, tempC]; "high" means [tempC, +∞). Internal buckets
+  // get null and their interval is bounded by neighbour midpoints.
+  tail: "low" | "high" | null;
 }
 
 // ─── Slug parsing ─────────────────────────────────────────
@@ -104,37 +108,53 @@ function parseDateFromSlug(slug: string): string | null {
 
 // ─── Parse temperature from outcome label ─────────────────
 
-function parseTempFromLabel(label: string): number | null {
+/**
+ * Detect whether a bucket label is a tail bucket. Mirrors the regex used by
+ * the reconciler so matcher and settlement agree on semantics.
+ */
+function detectTail(label: string): "low" | "high" | null {
+  if (/\bor\s+below\b|\bor\s+lower\b/i.test(label)) return "low";
+  if (/\bor\s+(higher|above|more)\b/i.test(label))  return "high";
+  return null;
+}
+
+interface ParsedTemp {
+  tempC: number;
+  tail: "low" | "high" | null;
+}
+
+function parseTempFromLabel(label: string): ParsedTemp | null {
   // Supported formats:
-  //   "18°C"                 → 18
-  //   "15°C or below"        → 15
-  //   "22°C or higher"       → 22
+  //   "18°C"                 → 18 (internal)
+  //   "15°C or below"        → 15 (low tail)
+  //   "22°C or higher"       → 22 (high tail)
   //   "46-47°F"              → midpoint 46.5, converted to °C
   //   "Between 15°C and 20°C"→ midpoint 17.5
+  const tail = detectTail(label);
 
   // Hyphen-range: "46-47°F" or "14-15°C" → midpoint, then unit convert
   const rangeMatch = label.match(/(-?\d+(?:\.\d+)?)\s*-\s*(-?\d+(?:\.\d+)?)\s*°?\s*([CF])/i);
   if (rangeMatch) {
     const mid = (parseFloat(rangeMatch[1]) + parseFloat(rangeMatch[2])) / 2;
-    if (rangeMatch[3].toUpperCase() === "F") {
-      return Math.round(((mid - 32) * 5 / 9) * 10) / 10;
-    }
-    return mid;
+    const tempC = rangeMatch[3].toUpperCase() === "F"
+      ? Math.round(((mid - 32) * 5 / 9) * 10) / 10
+      : mid;
+    return { tempC, tail };
   }
 
   const celsiusMatch = label.match(/(-?\d+(?:\.\d+)?)\s*°?\s*C/i);
-  if (celsiusMatch) return parseFloat(celsiusMatch[1]);
+  if (celsiusMatch) return { tempC: parseFloat(celsiusMatch[1]), tail };
 
   const fahrenheitMatch = label.match(/(-?\d+(?:\.\d+)?)\s*°?\s*F/i);
   if (fahrenheitMatch) {
     const f = parseFloat(fahrenheitMatch[1]);
-    return Math.round(((f - 32) * 5 / 9) * 10) / 10;
+    return { tempC: Math.round(((f - 32) * 5 / 9) * 10) / 10, tail };
   }
 
   // "Between X and Y" pattern
   const betweenMatch = label.match(/between\s+(-?\d+)\s*.*?and\s+(-?\d+)/i);
   if (betweenMatch) {
-    return (parseFloat(betweenMatch[1]) + parseFloat(betweenMatch[2])) / 2;
+    return { tempC: (parseFloat(betweenMatch[1]) + parseFloat(betweenMatch[2])) / 2, tail };
   }
 
   return null;
@@ -171,13 +191,15 @@ function parseBucketsFromEvent(evt: any): TemperatureBucket[] {
       if (Array.isArray(op)) prices = op.map((p: any) => parseFloat(p));
     } catch {}
 
+    const parsed = parseTempFromLabel(label);
     buckets.push({
       label,
       tokenId:     clobIds[0] || "",       // YES token
       noTokenId:   clobIds[1] || "",       // NO token (clobIds[1] for direction=NO bets)
       conditionId: m.conditionId || "",    // per-bucket — see TemperatureBucket comment
       currentPrice: prices[0] ?? 0.5,      // YES price
-      tempC: parseTempFromLabel(label),
+      tempC: parsed?.tempC ?? null,
+      tail:  parsed?.tail  ?? null,
     });
   }
 

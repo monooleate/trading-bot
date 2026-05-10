@@ -17,9 +17,13 @@ export interface WeatherConfig {
   // Forecast pipeline knobs (passed through to getForecast).
   applyCityOffset: boolean;   // default false — see forecast-engine.mts
   forecastDays: number;       // 0 = auto-compute from target date
-  useEnsemble: boolean;       // default false (env USE_ENSEMBLE)
+  useEnsemble: boolean;       // default true since 2026-05-11
   // Cron-driven background runs from the scheduled wrapper.
   cronEnabled: boolean;       // default false (manual-only)
+  // Skip trades where the bot's prediction disagrees with the market's
+  // consensus modal bucket by more than this many °C — a soft alpha-vs-
+  // model-error filter. Default 2.0°C ≈ 3.6°F.
+  marketDisagreeMaxC: number; // default 2.0
 }
 
 export interface WeatherTradeDecision {
@@ -50,6 +54,12 @@ export interface WeatherTradeDecision {
 }
 
 export function getWeatherConfig(): WeatherConfig {
+  // USE_ENSEMBLE defaults to true (2026-05-11): the 31-member GFS ensemble
+  // gives empirically-calibrated σ instead of the hardcoded 1.0/1.5 fallback,
+  // so we want it on by default. Operators can still flip it off with
+  // USE_ENSEMBLE=false or via Settings tab if Open-Meteo's ensemble endpoint
+  // becomes unreliable.
+  const useEnsembleEnv = (process.env.USE_ENSEMBLE || "").toLowerCase();
   return {
     edgeThreshold:   parseFloat(process.env.WEATHER_EDGE_THRESHOLD  || "0.12"),
     confidenceMin:   parseFloat(process.env.WEATHER_CONFIDENCE_MIN  || "0.65"),
@@ -60,8 +70,13 @@ export function getWeatherConfig(): WeatherConfig {
     maxEdgeCap:      parseFloat(process.env.WEATHER_MAX_EDGE_CAP    || "0.40"),
     applyCityOffset: process.env.WEATHER_APPLY_CITY_OFFSET === "true",
     forecastDays:    parseInt(process.env.WEATHER_FORECAST_DAYS     || "0", 10),
-    useEnsemble:     (process.env.USE_ENSEMBLE || "").toLowerCase() === "true",
+    useEnsemble:     useEnsembleEnv === "false" ? false : true,
     cronEnabled:     process.env.WEATHER_CRON_ENABLED === "true",
+    // Market-consensus disagreement gate: skip when the bot's prediction
+    // differs from the highest-priced bucket's centre by more than this
+    // threshold (°C). Default 2.0°C → ~3.6°F → typically 1-2 buckets of drift
+    // before we treat it as model error rather than alpha.
+    marketDisagreeMaxC: parseFloat(process.env.WEATHER_DISAGREE_MAX_C || "2.0"),
   };
 }
 
@@ -89,6 +104,7 @@ export async function getEffectiveWeatherConfig(): Promise<WeatherConfig> {
         ? ov.weatherUseEnsemble >= 0.5 : env.useEnsemble,
       cronEnabled:     ov.weatherCronEnabled !== undefined
         ? ov.weatherCronEnabled >= 0.5 : env.cronEnabled,
+      marketDisagreeMaxC: ov.weatherMarketDisagreeMaxC ?? env.marketDisagreeMaxC,
     };
   } catch {
     return env;
@@ -99,13 +115,14 @@ const KELLY_CAP = 0.15;
 
 // Canonical labels for weather-bot gates. Used by the engine when fully
 // evaluating + by the runner to pad early-exit rows so every scan row
-// reports Y=6 on the unified "X/Y gates" chip.
+// reports Y=7 on the unified "X/Y gates" chip.
 export const WEATHER_GATE_LABELS = [
   "Forecast confidence ≥ küszöb",
   "Idő a settlementig ≥ küszöb",
   "Forecast model frissesség",
   "Net edge ≥ küszöb",
   "Sanity cap (gross edge ≤ cap)",
+  "Market disagreement ≤ küszöb",
   "Kelly méret ≤ cap",
 ] as const;
 
@@ -131,8 +148,13 @@ export function makeWeatherDecision(params: {
   timeToResolutionMin: number;
   bankrollUSDC: number;
   config: WeatherConfig;
+  // Highest-priced bucket centre (°C) from the market — proxy for the
+  // crowd's consensus modal forecast. Optional: if missing, the gate
+  // returns "not evaluated" (passed=true) so behaviour degrades gracefully.
+  marketModalTempC?: number | null;
+  marketModalLabel?: string | null;
 }): WeatherTradeDecision {
-  const { forecast, match, modelLag, timeToResolutionMin, bankrollUSDC, config } = params;
+  const { forecast, match, modelLag, timeToResolutionMin, bankrollUSDC, config, marketModalTempC, marketModalLabel } = params;
 
   const gates: DecisionGate[] = [];
   const reasons: string[] = [];
@@ -201,7 +223,31 @@ export function makeWeatherDecision(params: {
     `— likely model error, not opportunity`,
   );
 
-  // 6. Kelly cap (informational — Math.min always satisfies the cap, but
+  // 6. Market-consensus disagreement
+  // -----------------------------------------------------------------------
+  // If the model predicts a temperature far from where the crowd is pricing
+  // the modal bucket, that's a flag — the bot might have a better view, or
+  // it might be a station/offset/°F bug. We treat >2°C disagreement as
+  // model-error and skip the trade. Soft fail: passes when market modal is
+  // unknown (tail buckets without parseable centre, missing data).
+  const disagreePresent = typeof marketModalTempC === "number" && Number.isFinite(marketModalTempC);
+  const disagreeC = disagreePresent ? Math.abs(forecast.predictedMaxC - marketModalTempC!) : 0;
+  const disagreeOk = !disagreePresent || disagreeC <= config.marketDisagreeMaxC;
+  gates.push({
+    label: "Market disagreement ≤ küszöb",
+    passed: disagreeOk,
+    actual:   disagreePresent
+      ? `|${forecast.predictedMaxC.toFixed(1)}°C − ${marketModalTempC!.toFixed(1)}°C (${marketModalLabel || "?"})| = ${disagreeC.toFixed(1)}°C`
+      : "no market modal",
+    required: `≤ ${config.marketDisagreeMaxC.toFixed(1)}°C`,
+    hint: "Ha a botpredikció >2°C-kal eltér a market modális bucketjétől, valószínűbb modellhiba, mint alfa.",
+  });
+  if (!disagreeOk) reasons.push(
+    `Market disagreement ${disagreeC.toFixed(1)}°C > ${config.marketDisagreeMaxC.toFixed(1)}°C ` +
+    `(bot ${forecast.predictedMaxC.toFixed(1)}°C vs market modal ${marketModalTempC!.toFixed(1)}°C)`,
+  );
+
+  // 7. Kelly cap (informational — Math.min always satisfies the cap, but
   // surfacing the actual value lets the operator see how close we are).
   const kellyFraction = Math.max(0, netEdge) * forecast.confidence * 0.25;
   const cappedKelly   = Math.min(kellyFraction, KELLY_CAP);

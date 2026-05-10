@@ -173,19 +173,22 @@ A METAR-rounding pedig **mindig** alkalmazódik (lásd 6. szekció).
 
 ---
 
-## 5. Bucket matching — Gauss PDF allokáció
+## 5. Bucket matching — Gauss CDF interval allokáció (v2, 2026-05-11)
 
-A `matchBucket(predictedTempC, buckets, σ)` minden bucket-hez egy nem-normalizált valószínűséget rendel a normál eloszlás PDF-je alapján:
-
-$$
-p_i^{\text{raw}} = \exp\left(-\frac{1}{2}\left(\frac{T_{\text{pred}} - T_i^{\text{center}}}{\sigma}\right)^2\right)
-$$
-
-majd normalizálja:
+A `matchBucket(predictedTempC, buckets, σ)` minden bucket-et **interval-ként** kezel, és a hozzá tartozó valószínűséget Gauss CDF integrálással számolja:
 
 $$
-P(\text{bucket}_i) = \frac{p_i^{\text{raw}}}{\sum_j p_j^{\text{raw}}}
+P(\text{bucket}_i) = \Phi\!\left(\frac{\text{hi}_i - T_{\text{pred}}}{\sigma}\right) - \Phi\!\left(\frac{\text{lo}_i - T_{\text{pred}}}{\sigma}\right)
 $$
+
+ahol `[lo_i, hi_i]` minden bucket természetes intervalluma a szortírozott szomszédok félútjából származik:
+
+- **Belső bucket** (`i > 0` és `i < N-1`): `lo = (T_{i-1} + T_i)/2`, `hi = (T_i + T_{i+1})/2`
+- **Alsó tail** (`label tartalmazza "or below" / "or lower"`): `lo = -∞`, `hi = (T_0 + T_1)/2`
+- **Felső tail** (`label tartalmazza "or higher" / "or above" / "or more"`): `lo = (T_{N-2} + T_{N-1})/2`, `hi = +∞`
+- **Szélső, de nem tail**: a szomszéd felé félút, ellenkező oldalon `T_i ± fél-step` (graceful degradation single-bucket esetén)
+
+A masszok pontosan 1-re összegződnek tail-completion esetén; ha nincs explicit tail, a numerikus normalizáció a bucket-listán belül megőrzi a valószínűség-tulajdonságot.
 
 **Edge per bucket:**
 
@@ -195,16 +198,28 @@ $$
 
 A bot a **legnagyobb |edge|-ű** bucket-en próbál kereskedni, irány = `edge > 0 ? YES : NO`.
 
-### σ választás (kalibráció nélkül)
+### Miért CDF, nem PDF (a v1 hiba)
 
-| Felhőborítottság | σ | Indoklás |
+A 2026-05-11 audit kimutatta, hogy a v1 PDF-alapú matcher két strukturális torzítást okozott:
+
+1. **Tail-bucketek pontmázsaként kezelve.** A `"84°F or higher"` típusú label `tempC=28.89` küszöbként parse-olódott, és a matcher a PDF-et a küszöb pontjában mintázta — a Polymarket viszont az **integrál** `[28.89, ∞)`-en settlel. A v1 ezért szisztematikusan alulbecslte a tail-buckete-k valószínűségét, ami a belső buckete-k masszáját túlbecsülte. Konkrét hatás: 2026-05-10 Austin pozíció `P(82-83°F) = 38.8%` (PDF) helyett **25.8%** (CDF), gross edge `22.3% → 8.8%` — a trade most már nem zsörös át a 12%-os küszöbön.
+
+2. **Belső bucket-szélesség figyelmen kívül hagyva.** A v1 minden bucket-et 1 pontként mintázott, így pl. egy 2°F-es buckete (`"82-83°F"` ≈ 1.11°C-os szélesség) ugyanazt a súlyt kapott mint egy 0.55°C-os integer °C bucket. A CDF-integrál ezt a strukturális szélességkülönbséget korrektül kezeli.
+
+Shanghai 25°C YES trade-en a változás minimális (PDF 20.3% → CDF 20.2%), mert ez egy belső, közel-modális bucket; a Gauss-PDF közelítése itt ~jó. A különbség élesedik a tail-közeli buckete-eknél.
+
+### σ választás
+
+| Felhőborítottság (avg GFS+ECMWF) | σ | Indoklás |
 |------------------|---|----------|
 | `< 60%` | **1.0°C** | Tiszta ég, kis radiation forecast hiba |
 | `≥ 60%` | **1.5°C** | Borult, párás regime — nagyobb modell-residual |
 
-> **Kalibráció hiányzik.** A σ **nincs** historikus residual-eloszlásból mérve (pl. closed-trade-ek empirikus σ-jából). Ha a tényleges 1-napos residual std 0.7°C, a bot túl-fluffy-vá teszi a Gauss-t, és ezért minden bucket valószínűsége az átlag (uniform) felé nyom — **alulbecsült edge**. Fordítva ha a tényleges residual 2.5°C, a Gauss túl éles, **felülbecsült edge**, és a `maxEdgeCap` (40%) sokszor blokkol valódi opportunity-t.
->
-> Hosszú távon a DEB-hez hasonló per-város / per-évszak residual-tanulás kellene (TODO).
+A felhőborítás 2026-05-11 óta GFS + ECMWF **átlag** (előtte csak GFS-ből jött, ami a két modell közti diszparitásnál ingadozott).
+
+**Empirical σ via 31-tagú ensemble.** Ha `USE_ENSEMBLE = true` (default 2026-05-11 óta), a `confidence` mező a 31 perturbed GFS-tag empirikus szórásából származik (`σ_emp`), nem a 1.0/1.5 hardcoded értékből. A bucket-matcher `σ` paramétere továbbra is a `cloudCoverPct`-alapú értéket használja, **de a `confidence` skálázás ennek finomabb visszacsatolása**.
+
+> **Kalibráció TODO.** A bucket-matcher `σ` paramétere nincs historikus residual-eloszlásból mérve. Hosszú távon a DEB-hez hasonló per-város / per-évszak residual-tanulás kellene a `σ`-ra is.
 
 ---
 
@@ -245,7 +260,7 @@ const isUpperTail = /\bor\s+(higher|above|more)\b/i.test(label);
 
 ## 7. Decision engine — gate-ek
 
-A `makeWeatherDecision()` 6 gate-en keresztül engedi át a trade-et. Mind a 6 megjelenik a UI "Why?" popoverében (pass/fail + actual + required + hint).
+A `makeWeatherDecision()` 7 gate-en keresztül engedi át a trade-et. Mind a 7 megjelenik a UI "Why?" popoverében (pass/fail + actual + required + hint).
 
 | # | Gate | Default küszöb | Mit néz | Bukás reason |
 |---|------|----------------|---------|--------------|
@@ -254,7 +269,14 @@ A `makeWeatherDecision()` 6 gate-en keresztül engedi át a trade-et. Mind a 6 m
 | 3 | Forecast model frissesség | `nearBoundary = next run < 15 min` | `detectModelLag()` | Modell-határ — várjuk az új run-t |
 | 4 | Net edge ≥ küszöb | `edgeThreshold = 0.12` | `\|prob - price\| - feePct` | Edge alacsony, no-trade |
 | 4b | Sanity cap (gross ≤ cap) | `maxEdgeCap = 0.40` | `\|prob - price\|` | "Too good to be true" — modell-hiba |
-| 5 | Kelly méret ≤ cap | `KELLY_CAP = 0.15` | `clamp(Kelly, 0, 0.15)` | Strukturálisan nem bukhat el (clamp), de a UI ezzel mutatja a sizing-ot |
+| 5 | Market disagreement ≤ küszöb | `marketDisagreeMaxC = 2.0°C` | `\|predTempC − marketModalTempC\|` | A bot túl messzire jósol a market modális bucketjétől — valószínűbb modellhiba mint alfa |
+| 6 | Kelly méret ≤ cap | `KELLY_CAP = 0.15` | `clamp(Kelly, 0, 0.15)` | Strukturálisan nem bukhat el (clamp), de a UI ezzel mutatja a sizing-ot |
+
+### Az 5-ös market-disagreement gate (2026-05-11 óta)
+
+A `marketConsensusModalTempC(buckets)` a legmagasabban árazott bucket centerét adja vissza — ez a tömeg-szentiment modaljának proxy-ja. Ha a bot predikciója >2°C-kal eltér ettől, az tipikusan modellhibát jelez (rossz station, °F→°C tévedés, stale forecast), nem alfát. A 2.0°C ≈ 3.6°F default általában 1–2 bucket spread-en belül enged, ami a tipikus alfa-ablak.
+
+Soft-fail: ha a market modal nem parse-olható (tail bucket parseolható center nélkül vagy üres lineup), a gate átmegy (passed=true, actual="no market modal").
 
 ### A 4b sanity cap miért fontos
 

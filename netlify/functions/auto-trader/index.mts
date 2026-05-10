@@ -20,7 +20,7 @@ import { CORS, getTraderConfig, getEffectiveTraderConfig, getEffectiveBtcExitCon
 // against the existing session; it cannot mutate config or unblock a
 // stopped session (those need `reset`/`resume`, which DO require auth).
 const PROTECTED_ACTIONS = new Set(["reset", "stop", "resume"]);
-import { log, getLogBuffer } from "./shared/logger.mts";
+import { log, getLogBuffer, getLogBufferForCategory } from "./shared/logger.mts";
 import { alertTradeOpen, alertTradeClosed, alertSessionStop, alertError, alertCalibrationNoise, alertLiveBlocked } from "./shared/telegram.mts";
 import { computeLiveReadiness, shouldForcePaper, type LiveReadinessReport } from "./shared/live-readiness.mts";
 import { PAPER_SIM_VERSION } from "./crypto/session-manager.mts";
@@ -745,7 +745,7 @@ async function getStatus(config: ReturnType<typeof getTraderConfig>, category: s
     action: "status",
     category,
     session: sessionSummary(session),
-    recentLogs: getLogBuffer().slice(-20),
+    recentLogs: getLogBufferForCategory(category).slice(-20),
   };
 
   // Live-readiness gate verdict — surfaced for every category so each

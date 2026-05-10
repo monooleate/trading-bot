@@ -54,6 +54,18 @@ const SCHEMA: Record<string, FieldSpec> = {
   // resolution, no simulator. Old Blobs overrides are silently ignored
   // by `loadRuntimeOverrides()` since the keys are no longer in SCHEMA.
   btcMinPriceBand:      { default: 0.10,    min: 0.02,    max: 0.30,    label: "Min YES price (deep-OTM cut)", step: 0.01, unit: "frac", category: "crypto", group: "Market finder", help: "Az olyan piacokat skippeljük, ahol a YES ár 0.10 alatt vagy 0.90 felett van — ezeken a depth alig 1-2 share, nem realisztikus paper-ben filltetni. A 141 paper trade $0.01 entry probléma fő javítása." },
+  // ─── Decision-engine gate knobs (2026-05-11 audit fixes) ─────────
+  // The legacy $1 minimum position size silently padded sub-Kelly sizes
+  // up to $1 — a 13× over-sizing for 0.03% Kelly fractions on a $250
+  // paper bankroll. Now an explicit gate. Set this low enough that a
+  // legitimate ¼-Kelly entry on the paper bankroll clears it, but high
+  // enough to reject combiner-noise-level convictions.
+  minPositionSizeUSDC:  { default: 0.50,    min: 0.10,    max: 50,      label: "Min position size",            step: 0.05, unit: "USD",  category: "crypto", group: "Risk & sizing", help: "Minimum abszolút USD méret. Ha a ¼-Kelly × bankroll ez alá esik, a bot SKIP-pel (nem padding-eli fel $1-re). Default $0.50 = 0.2% $250 paper bankrollon — a 8% Kelly cap-en belül." },
+  // Combiner convergence threshold. Mirrors the signal-combiner's own
+  // recommend() WAIT gate so the engine doesn't trade on noise-level
+  // combiner outputs (the 8 raw signals all default to 0.5 when absent;
+  // their weighted average converges to 0.5 without real input).
+  combinerConfidenceMin:{ default: 0.05,    min: 0.01,    max: 0.20,    label: "Combiner confidence min",      step: 0.005, unit: "frac", category: "crypto", group: "Risk & sizing", help: "Minimum |finalProb − 0.5| amitől a combiner outputot 'signal'-nek és nem zajnak vesszük. Megegyezik a signal-combiner saját recommend() WAIT-küszöbével (5%)." },
   // ─── Live-readiness gates (apply to every trader) ──────────────
   // The cron loop refuses to honor PAPER_MODE=false until a session has
   // accumulated enough validated paper data. Every trader (crypto,
@@ -73,8 +85,9 @@ const SCHEMA: Record<string, FieldSpec> = {
   weatherMaxEdgeCap:      { default: 0.40, min: 0.10, max: 0.95, label: "Max-edge sanity cap",           step: 0.01,  unit: "frac", category: "weather", group: "Risk & sizing", help: "Ha az edge számítás >40%-ot ad, akkor valószínűleg számolási hiba (pl. rossz station temp). Cap-elem hogy ne tegyünk irreális pozíciót." },
   weatherForecastDays:    { default: 0,    min: 0,    max: 7,    label: "forecast_days (0 = auto)",      step: 1,     unit: "days", category: "weather", group: "Forecast pipeline", help: "Mennyi napra előre kérjük le a forecast-ot. 0 = auto (a piac endDate alapján számolva). Manual override csak teszteléshez." },
   weatherApplyCityOffset: { default: 0,    min: 0,    max: 1,    label: "Apply city_offset to forecast", step: 1,     unit: "bool", category: "weather", group: "Forecast pipeline", help: "Bekapcsolva: a tényleges station vs. lakossági centroid közti hőmérséklet-eltolás (pl. KLGA → NYC) alkalmazza. Nemzetközi piacokon is fontos." },
-  weatherUseEnsemble:     { default: 0,    min: 0,    max: 1,    label: "Use 31-member GFS ensemble",    step: 1,     unit: "bool", category: "weather", group: "Forecast pipeline", help: "Bekapcsolva: 31 GFS ensemble tag → P(YES) = (hány tag jósol >= threshold) / 31. Kikapcsolva: csak a control run. Master-plan szerint +15-20% pontosság ensemble-lel." },
+  weatherUseEnsemble:     { default: 1,    min: 0,    max: 1,    label: "Use 31-member GFS ensemble",    step: 1,     unit: "bool", category: "weather", group: "Forecast pipeline", help: "Default ON (2026-05-11): 31 GFS ensemble tag → P(YES) = (hány tag jósol >= threshold) / 31, empirikus σ. Kikapcsolva csak a control run + hardcoded σ=1.0/1.5. Az ensemble adatok elérhetők az Open-Meteo ensemble API-n." },
   weatherCronEnabled:     { default: 0,    min: 0,    max: 1,    label: "Enable scheduled cron runs",    step: 1,     unit: "bool", category: "weather", group: "Scheduling", help: "A weather auto-trader-weather-cron 5 percenként fut, de csak akkor csinál bármit ha ez a toggle BE van kapcsolva. Default OFF — biztonsági ráhagyás." },
+  weatherMarketDisagreeMaxC: { default: 2.0, min: 0.5, max: 5.0, label: "Max market disagreement",       step: 0.1,   unit: "°C",   category: "weather", group: "Risk & sizing", help: "Skip a trade-et ha a bot predikciója >ennyi °C-kal eltér a piac modális (legmagasabban árazott) bucketjétől. Lényeg: a >2°C disagreement gyakran model hiba (rossz station, stale forecast), nem alfa. 2.0 = ~3.6°F = általában 1-2 bucket spread." },
 };
 
 type Overrides = Partial<Record<keyof typeof SCHEMA, number>>;

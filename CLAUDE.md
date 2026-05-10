@@ -352,6 +352,96 @@ netlify deploy --prod --dir=dist
 
 ## AKTUÁLIS ÁLLAPOT (2026-05-11) – Claude Code folytatáshoz
 
+### Huszonkilencedik session (2026-05-11) – Weather bot audit + 5 strukturális fix (tail-bucket CDF v2, market-disagreement gate, ensemble default, cloud avg, per-category log filter)
+
+A user a `/trade/weather/` 2 nyitott pozíciójára (Shanghai 25°C YES,
+Austin 82-83°F YES) teljes trade pipeline audit-ot kért. 4 strukturális
+hiba (HIGH × 2, MEDIUM × 2) + 1 cosmetic (LOW) javítva.
+
+**Audit verdict a 2 nyitott pozícióra:**
+- Shanghai 25°C YES @ 0.022 — matematikailag konzisztens (új gate-eken is átmegy: edge 16.9% > 12%, market-disagreement 0.9°C < 2.0°C), "lottery-ticket karakterű" (80% bukás, 20% 45x payout, modal-ellenes fogadás).
+- Austin 82-83°F YES @ 0.175 — **a régi PDF-bug artefaktja volt**. Új CDF math `P(82-83°F) = 25.8%` (régi 38.8%), gross edge 8.8% (régi 22.3%) → **edge gate-en megbukik 7.8% < 12%**. Új scan-en nem nyílna.
+
+**5 fix:**
+
+| ID | Severity | Fix lényege | Fájlok |
+|----|----------|-------------|--------|
+| (a) | HIGH | Bucket-matcher v2 CDF: tail-bucketek `(−∞, T]`/`[T, +∞)` integrállal, belső bucketek interval-CDF-fel | `bucket-matcher.mts` (rewrite), `bucket-matcher.test.mts` (NEW), `market-finder.mts` (`parseTempFromLabel` + `tail` field) |
+| (b) | HIGH | `useEnsemble` default true — 31-tagú GFS-ensemble σ kalibrálva | `decision-engine.mts`, `trader-settings.mts` |
+| (c) | MEDIUM | Cloud-cover GFS+ECMWF átlag (eddig csak GFS) | `forecast-engine.mts` |
+| (d) | MEDIUM | 7. gate: Market disagreement ≤ 2.0°C. Új helper `marketConsensusModalTempC`. Soft-fail ha nincs market modal | `decision-engine.mts`, `index.mts`, `trader-settings.mts` |
+| (e) | LOW | Per-category recentLogs filter — eddig cross-kategória crypto logok jelentek meg weather status response-ban | `shared/logger.mts`, `index.mts` |
+
+**A 2 jelenleg nyitott pozíció érintetlen marad** — re-evaluation
+check (`if (session.openPositions.some(...))`) megakadályozza. Az új
+gate-logika csak FUTURE scan-ekre érvényes. Shanghai 2026-05-11 12:00Z-én,
+Austin 2026-05-12 12:00Z-én settlel METAR-on.
+
+`tsc --noEmit` exit 0, bucket-matcher.test 4/4 passed, station-config.test
+8/8 passed, Astro build 9 page.
+Részletek: `internal-docs/changelog/CHANGELOG-2026-05-11.md` "(d)" szekció.
+Math reference frissítve: `internal-docs/math/16-weather-bot.md` §5 + §7.
+
+### Hova nyúlj legközelebb (weather)
+
+- **Validáció**: várni a Shanghai (May 11 12:00Z) és Austin (May 12 12:00Z) settlement-jét. Mindkét METAR-eredmény után az IC értelmes lesz, calibration alarm bekapcsolható.
+- **DEB σ-tanulás**: per-város / per-évszak residual-eloszlás mérése a closed-trade-ekből (math/16-weather-bot.md §5 TODO).
+- **Top-5 limit**: `markets.slice(0, 5)` a `runWeatherTraderInner`-ben (tudatos latency-cap, marad).
+
+### Huszonnyolcadik session (2026-05-11) – Crypto decision-engine audit + 6 fix (9 → 12 gate, $1 floor kivétel, combiner recommendation gate, paper fee parity)
+
+Live `mj-trading.netlify.app/trade/crypto/` 3 nyitott paper pozíciójának
+audit-ja 6 strukturális hibát fedett fel a decision-engine + signal-
+aggregator réteg-ben. Mindhárom pozíció **predProb 0.505, market
+0.255-0.305, kelly 0.03%, méret $1** mintázattal nyílt — pedig a combiner
+saját ajánlása ugyanazokra a slug-okra `WAIT`/`WATCH`/`trade_recommended
+=false`. A trader nem olvasta sem a `recommendation`, sem a
+`trade_recommended` mezőt, és a `Math.max(1, bankroll * kellyCapped)` $1
+floor 13× over-sized minden trade-et.
+
+**6 fix implementálva:**
+
+| # | Probléma | Fix |
+|---|----------|-----|
+| **#1** | `$1` hard floor felülbírálja a Kelly-t (0.03% × $250 = $0.075 → $1) | `decision-engine.mts:230` floor kiszedve. Új gate #11 "Kelly méret ≥ minimum" ($0.50 default). |
+| **#2** | `signal-aggregator` csak `combined_probability + kelly.quarter`-t olvas. | `AggregatedSignal` 3 új mező: `combinerRecommendation`, `tradeRecommendedByRisk`, `adjustedProbability`. |
+| **#3** | Combiner `recommendation` (WAIT/WATCH/SKIP/BUY) ignorálva. | Új gate #4 "Combiner recommendation" — pass csak ha `recAction.startsWith("BUY")`. |
+| **#4** | `finalProb ≈ 0.5` zaj (8 signal default 0.5-höz konvergál input nélkül), de a trader 25% edge-et lát a 0.255 marketPrice ellenében. | Új gate #3 "Combiner confidence (\|p − 0.5\|)" — 5% küszöb. |
+| **#5** | `trade_recommended = false` (resolution-risk veto) UI-on látszott, trader nem nézte. | Új gate #5 "Resolution-risk gate" — `tradeRecommendedByRisk !== false`. |
+| **#6** | `paper-resolver.mts` `pnl = proceeds − costBasis` képletet használt, fee nélkül. Decision-engine `netEdge = grossEdge − 0.036` küszöböléssel gate-elt, így paper PnL szisztematikusan optimistábbnak látszott mint live. | `applySettlementFee(pnlGross, proceeds, costBasis, 0.036)` helper. |
+
+**Gate-szám: 9 → 12.** A régi "Kelly conviction (combiner > 0)" gate
+kikerült (a "Kelly méret ≥ minimum" funkcionálisan ekvivalens), és 3 új
+konvergencia-gate + 1 új size-min gate került be. UI `gates.length`-ből
+automatikusan rendererel.
+
+**Trader-settings új knob-ok**: `minPositionSizeUSDC` (default $0.50,
+**live módra $5-re emelni — Polymarket CLOB minimum order size**),
+`combinerConfidenceMin` (default 0.05).
+
+**Mit NEM csináltam**: simVersion **NEM** bump-olva. A 3 nyitott pozíció
+settle-el a saját endDate-én ($0.036 fee levonás per trade close-kor,
+negligible).
+
+`tsc --noEmit` exit 0, Astro build 9 page.
+Részletek: `internal-docs/changelog/CHANGELOG-2026-05-11.md` "(d)" szekció
++ `internal-docs/math/13-crypto-bot.md` §4 (12 gate-es tábla) + §9.
+
+### Hova nyúlj legközelebb (audit fix utáni paper validáció)
+
+1. **Új cron tick (3 perc)**: a scanner most az új 3 konvergencia-gate-en
+   meg fog állni minden olyan trade-en, amit a combiner saját ajánlása
+   szerint nem kellene nyitni. Vártan **kevesebb új trade nyílik**, ez
+   szándékos.
+2. **A 3 meglévő open**: lejár 2026-05-11 16:00Z-kor. Settlement-en zárul,
+   fee levonással. A `closedTrades` array elsőként a fee-adjusted PnL-t
+   fogja mutatni.
+3. **Calibration Health badge**: most érdemi IC-t kellene mérnie a fee
+   parity miatt. Ha a badge `noise` marad 30+ trade után → a fixek nem
+   elegendők, a signal-szettet kell átnézni.
+4. **Live mode emlékeztető**: a Settings tabon `minPositionSizeUSDC = 5.00`
+   kötelező, mielőtt PAPER_MODE=false-ra váltasz.
+
 ### Huszonhetedik session (2026-05-11) – `internal-docs/` átszervezés (current-state / math / roadmap / archive)
 
 A user kérése: az `internal-docs/` mappát logikus mappaszerkezetbe rendezni

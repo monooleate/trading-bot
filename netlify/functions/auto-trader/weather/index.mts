@@ -7,7 +7,7 @@ import type { WeatherMarket, DroppedEvent, TemperatureBucket } from "./market-fi
 import { getStation, getSeason } from "./station-config.mts";
 import { getForecast } from "./forecast-engine.mts";
 import { detectModelLag } from "./model-lag-detector.mts";
-import { matchBucket } from "./bucket-matcher.mts";
+import { matchBucket, marketConsensusModalTempC } from "./bucket-matcher.mts";
 import { makeWeatherDecision, getWeatherConfig, padWeatherGates } from "./decision-engine.mts";
 import type { WeatherTradeDecision, WeatherConfig } from "./decision-engine.mts";
 import { placeBuyOrder } from "../crypto/execution.mts";
@@ -326,6 +326,9 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
       const timeToResolutionMin = Math.max(0, (endTime - Date.now()) / 60000);
 
       // 7. Make decision
+      // Market consensus modal: highest-priced bucket — what the crowd
+      // thinks the daily max will be. Powers the disagreement gate.
+      const marketModal = marketConsensusModalTempC(market.outcomes);
       const decision = makeWeatherDecision({
         forecast,
         match,
@@ -333,6 +336,8 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
         timeToResolutionMin,
         bankrollUSDC: updatedSession.bankrollCurrent,
         config,
+        marketModalTempC: marketModal?.tempC ?? null,
+        marketModalLabel: marketModal?.label ?? null,
       });
 
       if (!decision.shouldTrade) {
