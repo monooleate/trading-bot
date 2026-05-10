@@ -136,21 +136,13 @@ function emptyBreakdown(): SignalBreakdown {
     momentum:       null,
     contrarian:     null,
     pairs_spread:   null,
+    forecast_edge:  null,  // weather-only synthetic signal
   };
 }
 
 function extractBreakdown(rawSignals: any): SignalBreakdown {
   if (!rawSignals || typeof rawSignals !== "object") {
-    return {
-      funding_rate: null,
-      orderflow: null,
-      vol_divergence: null,
-      apex_consensus: null,
-      cond_prob: null,
-      momentum: null,
-      contrarian: null,
-      pairs_spread: null,
-    };
+    return emptyBreakdown();
   }
   return {
     funding_rate:   rawSignals.funding_rate   ?? null,
@@ -161,6 +153,7 @@ function extractBreakdown(rawSignals: any): SignalBreakdown {
     momentum:       rawSignals.momentum       ?? null,
     contrarian:     rawSignals.contrarian     ?? null,
     pairs_spread:   rawSignals.pairs_spread   ?? null,
+    forecast_edge:  null,                                // weather-only
   };
 }
 

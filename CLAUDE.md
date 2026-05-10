@@ -352,6 +352,29 @@ netlify deploy --prod --dir=dist
 
 ## AKTUÁLIS ÁLLAPOT (2026-05-11) – Claude Code folytatáshoz
 
+### Harmincadik session (2026-05-11) – Weather deep-audit round 2: NaN guards + reconciler tail boundary + live-readiness IC unblock
+
+A 29. session után a user kért egy harmadik audit kört. **4 további
+strukturális hibát** találtam:
+
+| ID | Severity | Fix |
+|----|----------|-----|
+| 1 | HIGH | NaN `predictedTempC` szűrés a `matchBucket` elején; NaN tempC buckete-k kizárása (eddig NaN valószínűségek szivárogtak át a gate-eken false-ra értékelve, ami helyes viselkedést mutatott de rossz reason-t a UI-on) |
+| 2 | MEDIUM | NaN ár guard a Gamma `parseFloat` után — eddig nullish-coalescing nem fogta el a NaN-t |
+| 3 | HIGH | Reconciler tail-bucket boundary szimmetrizálva `tempC ± 0.5`-re — a v2 matcher `(-∞, mid-to-next]` intervallumot használ, a reconciler `settlementC <= tempC`-vel ellenőrzött, ami egy settlement gap-et eredményezett pl. METAR=70°F-en "21°C or below" buckette |
+| 4 | HIGH | Weather **soha nem teljesítette a live-readiness Signal IC gate-et** — `signalBreakdown: null` mindenhol, IC strukturálisan 0. Új `forecast_edge: predictedProb − marketPrice` mező a SignalBreakdown-ben, weather populálja, crypto/HL/F-Arb mind `null`. A `computeSignalIC` mostantól Pearson(forecast_edge, win)-t mér weather-en, ami a forecast skill valódi proxyja |
+
+`tsc --noEmit` exit 0 (9 file érintett a type-bővítés miatt),
+bucket-matcher.test 4/4 passed, station-config.test 8/8 passed, Astro
+build 10 page.
+
+Részletek: `internal-docs/changelog/CHANGELOG-2026-05-11.md` "(e)" szekció.
+
+### Még nem javított (low priority)
+
+- **Bucket-matcher °F-rounding bias**: integer °C buckete-k szűkebbek (~0.55°C) mint a matcher CDF intervalluma (1.0°C), 2°F buckete-k szélesebbek (1.11°C) — alternáló ~10% bias. TODO: explicit °F-integer modellezés.
+- **σ kalibráció**: hardcoded 1.0/1.5 a matcherben, az ensemble σ csak a `confidence` mezőbe folyik. TODO: ensemble σ-t a matchernek is átadni.
+
 ### Huszonkilencedik session (2026-05-11) – Weather bot audit + 5 strukturális fix (tail-bucket CDF v2, market-disagreement gate, ensemble default, cloud avg, per-category log filter)
 
 A user a `/trade/weather/` 2 nyitott pozíciójára (Shanghai 25°C YES,

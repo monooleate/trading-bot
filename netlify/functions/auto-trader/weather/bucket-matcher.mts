@@ -117,7 +117,18 @@ export function matchBucket(
   buckets: TemperatureBucket[],
   sigma: number = 1.0,
 ): BucketMatch | null {
-  const validBuckets = buckets.filter((b) => b.tempC !== null);
+  // Defensive: a NaN forecast leaks through every gate as NaN comparisons
+  // (which evaluate false), so callers think every gate failed when really
+  // the input was malformed. Reject upstream so the runner can log a clear
+  // "Unknown forecast" reason.
+  if (!Number.isFinite(predictedTempC)) return null;
+
+  // Filter to buckets whose tempC is an actual finite number. The Gamma
+  // bucket parser returns `tempC: null` for unparseable labels; defensively
+  // also exclude NaN/±Infinity so the sort/interval logic stays monotonic.
+  const validBuckets = buckets.filter(
+    (b) => typeof b.tempC === "number" && Number.isFinite(b.tempC),
+  );
   if (validBuckets.length === 0) return null;
 
   // Sort ascending so neighbour-midpoint logic is monotonic.

@@ -192,12 +192,18 @@ function parseBucketsFromEvent(evt: any): TemperatureBucket[] {
     } catch {}
 
     const parsed = parseTempFromLabel(label);
+    // `parseFloat` returns NaN for malformed Gamma values; nullish coalescing
+    // does NOT catch NaN, so guard explicitly and fall back to a neutral 0.5.
+    const yesPriceRaw = prices[0];
+    const yesPrice = typeof yesPriceRaw === "number" && Number.isFinite(yesPriceRaw)
+      ? yesPriceRaw
+      : 0.5;
     buckets.push({
       label,
       tokenId:     clobIds[0] || "",       // YES token
       noTokenId:   clobIds[1] || "",       // NO token (clobIds[1] for direction=NO bets)
       conditionId: m.conditionId || "",    // per-bucket — see TemperatureBucket comment
-      currentPrice: prices[0] ?? 0.5,      // YES price
+      currentPrice: yesPrice,              // YES price (NaN-safe)
       tempC: parsed?.tempC ?? null,
       tail:  parsed?.tail  ?? null,
     });

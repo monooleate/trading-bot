@@ -52,6 +52,7 @@ function makeSignalBreakdown(outcomeWin: boolean): SignalBreakdown {
     momentum:       clamp01(0.5 + bias * 0.9 + gaussian(0, 0.16)),
     contrarian:     clamp01(0.5 - bias * 0.7 + gaussian(0, 0.17)),  // mean-reverts vs market
     pairs_spread:   clamp01(0.5 + bias * 1.0 + gaussian(0, 0.15)),
+    forecast_edge:  null,                                                // weather-only synthetic
   };
 }
 

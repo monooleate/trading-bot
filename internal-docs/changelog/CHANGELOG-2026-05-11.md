@@ -1,4 +1,100 @@
 
+# 2026-05-11 (e) — Weather bot deep-audit round 2: NaN guards + reconciler tail boundary + weather live-readiness IC unblock
+
+## A user kérése (folytatás 2)
+
+A (d) commit utáni 3. audit-kör. A user kérése: "ha most újra megkérlek hogy
+ellenőrizz mindent megint hibát találsz?". Igen — 4 további hibát találtam:
+
+## 4 új audit-finding
+
+**1. (HIGH) NaN predictedTempC leak a bucket-matcheren.** Edge case sweep
+mutatta: `matchBucket(NaN, buckets, σ)` minden bucket-re NaN valószínűséget
+ad, és null helyett egy "hamis" BucketMatch-et ad vissza NaN edge-zel. A
+downstream gate-ek minden NaN-összehasonlítást false-ra értékelnek, így a
+"shouldTrade = false" miatt ártalmatlannak tűnik — de a bot rossz reason-t
+mutatna a UI-on. **Fix**: korai `if (!Number.isFinite(predictedTempC)) return null;`
+guard, plus a bucket szűrőből kizárva minden NaN/Infinity tempC.
+
+**2. (MEDIUM) NaN ár szivárog a `parseFloat` után.** A Gamma `outcomePrices`
+mező `parseFloat` után NaN lehet malformed value-knál; a nullish-coalescing
+(`prices[0] ?? 0.5`) NEM fogja el a NaN-t (csak null/undefined-ot). **Fix**:
+explicit `Number.isFinite` guard 0.5 fallback-kal.
+
+**3. (HIGH) Reconciler tail-bucket boundary inkonzisztens a matcher-rel.**
+A v2 CDF-matcher a "21°C or below" buckethez `(-∞, 21.5]` intervallumot
+rendel (midpoint a 22°C felé). A reconciler ellenőrzés viszont `settlementC
+<= 21` — szigorúan a küszöb. METAR=70°F → settlementC=21.11°C → tail-low
+check NEM teljesül (21.11 > 21), de a 22°C bucket sem teljesül
+(|21.11-22|=0.89 > 0.5). **Settlement gap**: METAR=70°F-en se "21°C or
+below", se "22°C" nem nyer (a fallback nearest-center logika kompenzálná, de
+a reconciler nem használ nearest-centert). **Fix**: tail-low `settlementC <=
+tempC + 0.5`, tail-high `settlementC >= tempC - 0.5` — szimmetrikus az
+internal-bucket ±0.5 toleranciával, konzisztens a matcher interval-jával.
+
+**4. (HIGH) Weather **soha** nem tudja teljesíteni a live-readiness IC gate-et.**
+A `signal-ic` gate `applicable: isPredictionDriven` (a weather bot a
+prediction-driven kategóriában van) — de a weather entry-decision snapshot
+`signalBreakdown: null`-t mentett, és a reconciler `signalBreakdown: null`-t
+ír be a closedTrade-be. A `computeSignalIC` minden trade-et kiszűr ami null
+signalBreakdown-nal jön → 0 trade IC-számításhoz → maxAbsIC = 0 → gate
+SOHA nem teljesül. **Az effekt: 30+ closed trade után a weather live-mode
+fix struktúrális blokkban van.** Mivel a trade-count gate (0 < 30) jelenleg
+maszkolja, élesedéskor látszott volna először. **Fix**: új `forecast_edge`
+mező a `SignalBreakdown` interface-ben — a weather entry-snapshot
+populálja `forecast_edge = predictedProb − marketPrice`-szel (a model edge),
+a reconciler propagálja a closedTrade-be. A `computeSignalIC` mostantól
+mérni tudja `Pearson(forecast_edge, win/loss)`-t weather-en, ami a forecast
+skill valódi proxyja. Crypto/HL/funding-arb mindenhol `forecast_edge: null`.
+
+## Files touched
+
+| Fájl | Változás |
+|------|----------|
+| `netlify/functions/auto-trader/weather/bucket-matcher.mts` | NaN guards (előtér + tempC szűrés) |
+| `netlify/functions/auto-trader/weather/market-finder.mts` | NaN ár guard a parseFloat után |
+| `netlify/functions/auto-trader/weather/reconciler.mts` | Tail-boundary szimmetrizálva (`tempC ± 0.5`) |
+| `netlify/functions/auto-trader/weather/index.mts` | `signalBreakdown.forecast_edge` populálva entry-kor |
+| `netlify/functions/auto-trader/shared/types.mts` | `SignalBreakdown.forecast_edge` mező |
+| `netlify/functions/edge-tracker/statistics.mts` | `forecast_edge` a `SIGNAL_NAMES`-ben |
+| `netlify/functions/auto-trader/crypto/signal-aggregator.mts` | `forecast_edge: null` minden crypto signal-építésnél |
+| `netlify/functions/auto-trader/hyperliquid/signal-source.mts` | `forecast_edge: null` HL signal-snapshot-on |
+| `netlify/functions/edge-tracker/mock-trades.mts` | `forecast_edge: null` mock trade-eken |
+
+## Verifikáció
+
+- `tsc --noEmit` exit 0 (9 file érintett a type-bővítés miatt)
+- `bucket-matcher.test` 4/4 passed (most már a NaN edge case is jól kezelt)
+- `station-config.test` 8/8 passed
+- `npm run build` 10 page (előbb 9 volt — nem a fix-ekhez kapcsolódó új page-ek)
+
+## Egyéb auditált, NEM-bug területek
+
+- METAR `parseMetarTGroup` (precise tenths-°C) működése validálva — order-of-ops
+  helyes (max precise → °F round → settlement compare)
+- `autoForecastDays` matek validálva
+- `computeEnsemble` DEB súly normalizálása ellenőrizve
+- Decision-engine NaN propagáció — match=null védi (a NaN guard miatt)
+- `marketConsensusModalTempC` soft-fail tail-only lineup-on, all-null tempC-n,
+  mixed null/szám lineup-on (mind ellenőrizve egy edge-case sweep-pel)
+
+## Még nem javított
+
+- **Bucket-matcher °F-rounding bias**: az integer °C buckete-k (pl. "25°C")
+  Polymarket settlement window-ja keskenyebb (csak 1 °F integer = ~0.55°C)
+  mint a matcher CDF intervalluma (1.0°C). 2°F buckete-k pedig szélesebbek
+  (1.11°C). Az alternáló bias kicsi (~10%), TODO: explicit °F-integer
+  modellezés.
+- **σ kalibráció**: hardcoded 1.0/1.5 a `cloudCoverPct > 60` ágon. A
+  31-tagú GFS-ensemble (most default ON) ad σ-t a `confidence` mezőhöz, de
+  a bucket-matcher továbbra is a hardcoded értéket használja. TODO:
+  ensemble σ-t átadni a matchernek is.
+- **HL coin "BTC/ETH/SOL/XRP/AVAX" lista** — funding-arb és HL bot is használja,
+  de a `classifyLogLine` szerinti `HL_COINS` set explicit. Új coin
+  hozzáadásakor szinkronizálni kell.
+
+---
+
 # 2026-05-11 (d) — Weather bot audit-driven fixes: tail-bucket CDF + market-disagreement gate + ensemble default + cloud avg + log filter
 
 ## A user kérése (folytatás)

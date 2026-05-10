@@ -160,12 +160,23 @@ export async function runWeatherReconciler(paperMode: boolean = true): Promise<R
 
       // Simulate Polymarket settlement: METAR-rounded daily max → which
       // bucket center matches?
+      //
+      // The matcher in bucket-matcher.mts integrates each bucket over
+      // [mid-prev, mid-next] (≈ tempC ± 0.5°C for 1°C grids). The reconciler
+      // must use the SAME boundary semantics or matcher and settlement will
+      // disagree on values right at the edge.
+      //
+      // Bug we just fixed (2026-05-11): with tempC=21 for "21°C or below",
+      // METAR=70°F gives settlementC=21.11°C — the matcher integrated
+      // (-∞, 21.5] (assigning mass to the tail), but the reconciler tested
+      // `settlementC <= 21` and would have NOT settled the bucket as won.
+      // Now both use the ±0.5°C window so they agree.
       const f = metar.dailyMaxC * 9 / 5 + 32;
       const settlementC = parseFloat((((Math.round(f) - 32) * 5) / 9).toFixed(2));
       const isTailLow  = /\bor\s+below\b|\bor\s+lower\b/i.test(meta.bucketLabel);
       const isTailHigh = /\bor\s+(higher|above|more)\b/i.test(meta.bucketLabel);
-      const bucketWon = isTailLow ? settlementC <= meta.bucketTempC
-                      : isTailHigh ? settlementC >= meta.bucketTempC
+      const bucketWon = isTailLow ? settlementC <= meta.bucketTempC + 0.5
+                      : isTailHigh ? settlementC >= meta.bucketTempC - 0.5
                       : Math.abs(settlementC - meta.bucketTempC) < 0.5;
       const positionWon = pos.direction === "YES" ? bucketWon : !bucketWon;
       exitPrice = positionWon ? 1.0 : 0.0;
@@ -194,7 +205,10 @@ export async function runWeatherReconciler(paperMode: boolean = true): Promise<R
       edgeAtEntry:        (pos.predictedProb !== undefined && pos.marketPriceAtEntry !== undefined)
         ? pos.predictedProb - pos.marketPriceAtEntry
         : undefined,
-      signalBreakdown:    null,
+      // Propagate the per-trade signal snapshot so the live-readiness IC gate
+      // can compute Pearson(forecast_edge, win/loss). Weather entries populate
+      // `forecast_edge`; the other 8 signal slots stay null.
+      signalBreakdown:    pos.entryDecision?.signalBreakdown ?? null,
     };
 
     session = closePosition(session, pos.buyOrderId, trade);

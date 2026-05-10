@@ -35,6 +35,12 @@ export interface SignalBreakdown {
   momentum: number | null;        // 0–1 score (Kakushadze 3.1, price momentum)
   contrarian: number | null;      // 0–1 score (Kakushadze 10.3, mean-reversion)
   pairs_spread: number | null;    // 0–1 score (Kakushadze 3.8, pairs Z-score)
+  // Forecast-vs-market edge for prediction-driven bots without the 8-signal
+  // combiner (weather, future). Stored as `predictedProb − marketPriceAtEntry`
+  // so the live-readiness IC gate can measure forecast skill without
+  // requiring all 8 trading signals to exist. Null for crypto/HL (which use
+  // the 8-signal combiner) so IC computation stays clean per-category.
+  forecast_edge: number | null;
 }
 
 export interface AggregatedSignal {

@@ -270,6 +270,11 @@ export interface SignalICResult {
 const SIGNAL_NAMES: (keyof SignalBreakdown)[] = [
   "funding_rate", "orderflow", "vol_divergence", "apex_consensus", "cond_prob",
   "momentum", "contrarian", "pairs_spread",
+  // Synthetic forecast-edge signal for prediction-driven bots without the
+  // 8-signal combiner (weather). Lets the live-readiness IC gate measure
+  // forecast skill (edge correlated with win/loss) instead of demanding
+  // all 8 trading signals exist for every category.
+  "forecast_edge",
 ];
 
 function classifyIC(ic: number): SignalICResult["strength"] {

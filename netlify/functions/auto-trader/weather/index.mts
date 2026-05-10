@@ -17,7 +17,7 @@ import {
   addOpenPosition,
   PAPER_SIM_VERSION,
 } from "../crypto/session-manager.mts";
-import type { MarketInfo, Position, EntryDecisionSnapshot } from "../shared/types.mts";
+import type { MarketInfo, Position, EntryDecisionSnapshot, SignalBreakdown } from "../shared/types.mts";
 
 const DEFAULT_BANKROLL = 100;
 
@@ -394,9 +394,23 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
 
         // Frozen entry-decision snapshot — same shape the crypto bot uses,
         // so the UI's `RationaleBlock` can render this without per-bot
-        // branches. Weather is forecast-driven (no signal-combiner mix), so
-        // signalBreakdown / obImbalance / activeSignals stay null/0 and
-        // the popover collapses those rows automatically.
+        // branches. Weather is forecast-driven (no signal-combiner mix), but
+        // we DO populate one signal: `forecast_edge = predictedProb -
+        // marketPrice`. That gives the live-readiness IC gate a measurable
+        // signal-vs-outcome correlation specific to weather. Without it the
+        // gate could never pass since signalBreakdown was null and IC was
+        // structurally 0 — blocking weather from ever reaching live mode.
+        const weatherSignals: SignalBreakdown = {
+          funding_rate:    null,
+          orderflow:       null,
+          vol_divergence:  null,
+          apex_consensus:  null,
+          cond_prob:       null,
+          momentum:        null,
+          contrarian:      null,
+          pairs_spread:    null,
+          forecast_edge:   match.probability - decision.marketPrice,
+        };
         const entryDecision: EntryDecisionSnapshot = {
           decidedAt:        new Date().toISOString(),
           finalProb:        match.probability,
@@ -410,8 +424,8 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
           kellyCap:         decision.kellyCap    ?? 0.15,
           positionSizeUSDC: decision.positionSizeUSDC,
           entryPrice,
-          activeSignals:    0,
-          signalBreakdown:  null,
+          activeSignals:    1,
+          signalBreakdown:  weatherSignals,
           obImbalance:      null,
           gates:            decision.gates ?? [],
           reason:           decision.reason,

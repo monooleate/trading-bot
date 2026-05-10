@@ -93,6 +93,7 @@ export async function getHlSignalForCoin(coin: HlCoin): Promise<HlSignalResult |
         momentum:       d.raw_signals?.momentum       ?? null,
         contrarian:     d.raw_signals?.contrarian     ?? null,
         pairs_spread:   d.raw_signals?.pairs_spread   ?? null,
+        forecast_edge:  null,                              // weather-only signal
       },
       marketSlug:     slug,
       marketPrice:    d.market?.yes_price ?? 0.5,
