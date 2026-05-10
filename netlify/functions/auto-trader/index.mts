@@ -116,6 +116,42 @@ export default async function handler(req: Request, _ctx: Context) {
 
     const config = getTraderConfig();
 
+    // ─── Registry-first dispatch (non-breaking, additive) ─────────────
+    // Új bot-ok (Sports + jövőbeli) a `shared/bot-registry.mts`-en
+    // keresztül regisztrálják magukat. A dispatcher CSAK a nem-legacy
+    // kategóriákra próbálja a registry-t — a {crypto, weather,
+    // hyperliquid} hármas a régi switch-case-en megy keresztül 100%-ban,
+    // zéró viselkedés-változással.
+    const LEGACY_CATEGORIES = new Set(["crypto", "weather", "hyperliquid"]);
+    if (!LEGACY_CATEGORIES.has(category)) {
+      try { await import("./registry-bootstrap.mts"); } catch (err: any) {
+        console.error("[dispatcher] registry-bootstrap import failed:", err?.message || err);
+      }
+      const { dispatchToRegistry } = await import("./shared/bot-registry.mts");
+      const url = new URL(req.url);
+      const source: "manual" | "cron" =
+        (url.searchParams.get("source") === "cron" || isScheduledTick) ? "cron" : "manual";
+
+      const out = await dispatchToRegistry({
+        category,
+        action: action as any,
+        source,
+        bankrollOverride,
+      });
+      if (out.handled) {
+        if (out.error) return jsonResponse({ ok: false, error: out.error }, 400);
+        return jsonResponse(out.result);
+      }
+      // Nem regisztrált bot → explicit hiba helyett a régi fallback-tól
+      // védjük az ismeretlen kategóriát, ami eddig csendben crypto-ra
+      // mapped (és a crypto bot futott a sports request-re, bitcoin
+      // piacokkal contaminálva a sports panelt — 2026-05-11 (j) bug).
+      return jsonResponse({
+        ok: false,
+        error: `Unknown category "${category}" — not registered in bot-registry and not a legacy category (crypto/weather/hyperliquid).`,
+      }, 400);
+    }
+
     // Route by category for all actions (each category has its own session)
     const cat = category === "weather"     ? "weather"
               : category === "hyperliquid" ? "hyperliquid"
