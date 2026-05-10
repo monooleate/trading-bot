@@ -207,10 +207,16 @@ export default async function handler(req: Request, _ctx: Context) {
         // and ALSO returns a per-position Gamma diagnostic so the user can
         // tell "UMA still voting" from "wrong conditionId" / "Gamma silent".
         if (cat === "weather") {
+          // runWeatherReconciler returns a plain object → wrap into a Response.
           return jsonResponse(await runWeatherReconciler(config.paperMode));
         }
         if (cat === "crypto") {
-          return jsonResponse(await handleCryptoReconcile(config));
+          // handleCryptoReconcile already returns a Response (it calls
+          // jsonResponse internally). Re-wrapping with jsonResponse would
+          // JSON.stringify(Response) → `{}` (no enumerable own props),
+          // which is exactly the "HTTP 200 body={}" bug we hit. Return it
+          // directly.
+          return await handleCryptoReconcile(config);
         }
         return jsonResponse({ ok: false, error: "reconcile is crypto + weather only" }, 400);
       default:
