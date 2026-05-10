@@ -2,6 +2,7 @@
 // Tab 07 – BTC Volatility Harvester: Implied vs Realized Vol + Locked Profit
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import ToolInfoBox from "./shared/ToolInfoBox";
 
 const FN = "/.netlify/functions";
 
@@ -157,6 +158,19 @@ export default function VolDivergencePanel() {
     <>
       <style>{css}</style>
       <div className="vd-wrap">
+        <ToolInfoBox
+          title="05 // Volatility Harvester"
+          what={<>BTC <strong>Implied Vol</strong> (Polymarket binary kontraktokból visszaszámolva) vs <strong>Realized Vol</strong> (Binance 1m klines). Ha IV ≫ RV → volatilitást túl drágán árazzák. Plusz <strong>locked profit scanner</strong>: ha YES + NO mid &lt; $1 − fee → garantált profit.</>}
+          howToUse={[
+            <>Auto-frissül load-ra. Manuálisan ⟳ Frissít vagy ▶ Auto 2m a polling-hoz.</>,
+            <>A "Locked profit detektálva" zöld banner csak akkor jelenik meg, ha valódi edge maradt fee után — különben "NO EDGE" oszlop a táblázatban.</>,
+            <>⚠ A táblázat <strong>mid</strong> árakat mutat, valódi ask 1-3¢-tel feljebb van. Kis edge eltűnhet execution-kor.</>,
+            <>Spread-jelzések: SELL VOL (IV − RV &gt; 50%), ELEVATED (20-50%), NORMAL (alacsonyabb), BUY VOL (IV &lt; RV − 10%).</>,
+          ]}
+          marketScope={<>Top 50 aktív piac → szűrés "btc" vagy "bitcoin" kulcsszóra → kizárja a 0.05–0.95 árintervallumon kívülieket és a &lt; 1h-án belül lejárókat → max 8 piac. A leggyakoribb találatok: <em>Bitcoin Up or Down – 15 minutes</em>, <em>BTC above $X on Y</em>. CLOB <code>/midpoint</code> hív minden token_id-re.</>}
+          relatedBot={{ label: "Crypto bot vol signal", href: "/trade/crypto/" }}
+          endpoint="GET /.netlify/functions/vol-divergence"
+        />
 
         {/* Header */}
         <div className="vd-topbar">

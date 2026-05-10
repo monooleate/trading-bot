@@ -2006,3 +2006,115 @@ színkódolása (≥30%/yr zöld, ≥5%/yr narancs, alatta piros).
 - Crypto + Weather is migrálható backend-driven gate-hez a jövőben (a
   jelenlegi frontend mapper csak a row data subset-jét látja, a backend
   gate-pipeline pontosabb és bővíthetőbb).
+
+# 2026-05-10 (h) — Tools dashboard: per-tab "How to use" info-box + vol-divergence 15m bug
+
+## Kontextus
+
+A `mj-trading.netlify.app/tools/` 9 elemző-eszköze (Scanner, EV, Swarm,
+Order Flow, Vol Harvest, Apex Wallets, Cond Prob, Signals, Arb Matrix)
+audit. Felhasználói feedback: a tabokra rákattintva nem nyilvánvaló,
+mit csinálnak és melyik Polymarket piacot/piacokat hívják. Kérés:
+- minden oldalra egységes "Mire való / Hogyan kell használni" info-doboz,
+- API-hívások ellenőrzése (a botoknál volt korábban Gamma/CLOB hiba),
+- Polymarket market-scope láthatóvá tétele tabonként.
+
+## Audit eredmények
+
+| Tab | Funkció | Polymarket scope | API status |
+|-----|---------|------------------|------------|
+| 01 Scanner | `polymarket-proxy` | Top 30 esemény volume24hr DESC | ✅ |
+| 02 EV | (none) | – pure Kelly sandbox | ✅ |
+| 03 Swarm | (none) | – pure simulator | ✅ |
+| 04 Order Flow | `orderflow-analysis` | Felh-választott piac CLOB book | ✅ |
+| 05 Vol Harvest | `vol-divergence` | BTC 15m–48h binary kontraktok | ⚠ → fix |
+| 06 Apex | `apex-wallets` | Cross-market top wallets | ✅ |
+| 07 Cond Prob | `cond-prob-matrix` | Top 50 aktív piac | ✅ |
+| 08 Signals | `signal-combiner` | Felh-választott / auto top piac | ✅ |
+| 09 Arb Matrix | `vwap-arb` / `llm-dependency` / `pair-cost-arb` | A: top 20 / B: top 30 / C: input / D: top 60 events | ✅ |
+
+A botok korábbi Gamma/CLOB hibái mind javítva (`closed=true` query,
+`condition_ids` plural, `clobTokenIds` JSON-string parsing) és stabilak.
+
+## Egy valódi bug: vol-divergence 15m markets filter
+
+`netlify/functions/vol-divergence.mts:117-119`:
+
+```typescript
+if (m.endDate) {
+  const hoursLeft = (new Date(m.endDate).getTime() - Date.now()) / 3600000;
+  if (hoursLeft < 1) return false; // ← BUG
+}
+```
+
+A komment szerint "BTC UP/DOWN kontraktok (15 perc)" a célpont — de a
+`hoursLeft < 1` szűrő pontosan ezeket a 15-perces piacokat dobta el
+(kevesebb mint 60 perc van hátra). A tool sosem talált 15 perces BTC
+piacot, csak a hosszabb (1h+) daily kontraktokat — viszont a per-market
+analízis `if (remaining < 1) timeRemainingHours = remaining` ágba sosem
+lépett be, így minden piac default 15-perces IV-vel lett számolva,
+függetlenül a tényleges remaining time-tól. Az IV-spread így jelentősen
+rossz volt 1h+ daily BTC kontraktokon.
+
+**Fix (2 hely):**
+
+1. `fetchBTCMarkets` filter:
+   - `hoursLeft < 1/60` → skip (settlement-hez túl közel, 1 perc alatt)
+   - `hoursLeft > 48` → skip (daily/weekly, BTC 1m-RV ablakhoz nem matchel)
+   - Köztes intervallum (1 perc – 48 óra) → bekerül
+
+2. Per-market timeRemainingHours: `remaining > 0 && remaining <= 48`
+   (volt: `< 1`), így 1-48h piacok is a saját remaining-jükkel kapnak
+   IV-szám, nem a 15-perces default-tal.
+
+## Új komponens: `src/components/shared/ToolInfoBox.tsx`
+
+Egységes "info-doboz" minden tool-tab tetejére:
+- **title** — pl. "01 // Polymarket Scanner"
+- **what** — 1-2 mondatos magyarázat
+- **howToUse** — lépéslista (ol)
+- **marketScope** — melyik Polymarket piac(ok) hívva, milyen szűrőkkel
+- **relatedBot** (opcionális) — link a kapcsolódó bot oldalra (pl.
+  Order Flow → /trade/crypto/)
+- **endpoint** (opcionális) — háttér API endpoint transparency-ért
+
+A 9 tab-ből 8 kap saját ToolInfoBox-ot (a Polytope sub-tab és a
+Pair-Cost sub-tab az Arb Matrix közös info-jában szerepel).
+
+## Bot-eszköz mapping
+
+A `relatedBot` mező mind az 5 megfelelő tabon a crypto bot oldalra
+mutat — ez a tool-és-bot kapcsolatot vizuálisan is megjeleníti:
+
+| Tool tab | Bot párja |
+|----------|-----------|
+| 04 Order Flow | Crypto bot orderflow signal |
+| 05 Vol Harvester | Crypto bot vol signal |
+| 06 Apex | Crypto bot apex_consensus signal |
+| 07 Cond Prob | Crypto bot cond_prob signal |
+| 08 Signal Combiner | Crypto bot — same combinator |
+| 09 Arb Matrix (D) | Crypto bot pair_cost arb |
+
+## Mit nem változtattam
+
+- A botok signal-pipeline-jában nincs változás. A vol-divergence fix csak
+  az analízis-tool-ot érinti (a `vol-divergence.mts` netlify function
+  szigorúan a /tools/#vol oldalt szolgálja ki, nem a crypto botot — a
+  crypto bot a `signal-combiner.mts:getVolSignal()`-t hívja, ami már
+  külön logikával számol IV-t).
+- A 4 inline tabnak (Scanner / EV / Swarm) nincs külön component fájlja,
+  inline maradnak a Dashboard.tsx-ben.
+- TS check zöld (`tsc --noEmit` exit 0 a project files-on; a pre-existing
+  `internal-docs/mathSEO_reference/` Deno-script hibák változatlanul
+  maradnak — azok a build-en kívül vannak).
+
+## Hova nyúlj legközelebb
+
+- Ha új tool-tab kerül a /tools/ alá, csak importáld a ToolInfoBox-ot és
+  add hozzá az 5 prop-pal — egységes UX automatikusan.
+- A vol-divergence fix után érdemes 24h-t hagyni a paneltot futni és
+  ellenőrizni, hogy a "BTC kontraktok" táblázat valóban 15 perces
+  piacokat is hoz (nem csak daily-eket).
+- Ha más Gamma-szűrőre is hasonló bug kerül elő (pl. egy hosszú-szál
+  market kihagyva volume miatt), érdemes az audit-mintát itt
+  dokumentálni.

@@ -2,6 +2,7 @@
 // Tab 09 – Conditional Probability Matrix + Polymarket CLI info
 
 import { useState, useEffect, useCallback } from "react";
+import ToolInfoBox from "./shared/ToolInfoBox";
 
 const FN = "/.netlify/functions";
 
@@ -124,6 +125,19 @@ export default function CondProbPanel({ bankroll }: { bankroll: number }) {
     <>
       <style>{css}</style>
       <div className="cp-wrap">
+        <ToolInfoBox
+          title="07 // Conditional Probability Matrix"
+          what={<>Mispricing detektor logikai feltételek alapján: <strong>Complement</strong> (P(YES)+P(NO) ≠ 1.000), <strong>Monotonicity</strong> (ha A ⊂ B akkor P(A) ≤ P(B), pl. BTC&gt;120k vs BTC&gt;100k), <strong>Temporal chains</strong> (ha esemény Apr 7-ig akkor Apr 15-ig is, P(by Apr 7) ≤ P(by Apr 15)).</>}
+          howToUse={[
+            <>Auto-fut load-ra. Manuálisan ⟳ Scan a frissítéshez.</>,
+            <>Csoport-szűrő: 🔍 Auto (top 40 piac) / BTC / FED — minden csoportban kulcsszó-alapú társítás.</>,
+            <>Magas severity (zöld bar &gt; 70%) → komoly mispricing. Edge oszlop = 100 × |eltérés|.</>,
+            <>Action sor: SELL / BUY párokkal — fee-vel ~2-4¢/oldal csak akkor profit, ha edge &gt; 6¢.</>,
+          ]}
+          marketScope={<>Top 50 aktív piac (<code>active=true&amp;closed=false&amp;order=volume24hr</code>) közötti összes pár ellenőrzése. Mutual-exclusion mintázatokat (pl. World Cup wins) explicit kihagyja, hogy ne keverjen össze versenyző eseményeket implication chain-ekkel.</>}
+          relatedBot={{ label: "Crypto bot cond_prob signal", href: "/trade/crypto/" }}
+          endpoint="GET /.netlify/functions/cond-prob-matrix"
+        />
 
         {/* Header */}
         <div className="cp-topbar">

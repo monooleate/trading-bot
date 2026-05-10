@@ -7,6 +7,7 @@ import ApexWalletsPanel from "./ApexWalletsPanel";
 import CondProbPanel from "./CondProbPanel";
 import SignalCombinerPanel from "./SignalCombinerPanel";
 import ArbMatrixPanel from "./ArbMatrixPanel";
+import ToolInfoBox from "./shared/ToolInfoBox";
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 interface Market {
@@ -293,6 +294,18 @@ function ScannerTab({ bankroll }: { bankroll: number }) {
 
   return (
     <div>
+      <ToolInfoBox
+        title="01 // Polymarket Scanner"
+        what={<>Top forgalmú aktív Polymarket piacok élő listája. Kattints egy sorra → jobb oldalon EV / ¼-Kelly kalkulátor a saját YES becsléseddel összevetve.</>}
+        howToUse={[
+          <>Tölt automatikusan top 30 piacot — ha üres, kattints a JSON import upload box-ra a kézi feltöltéshez.</>,
+          <>Szűrj kategóriára a chip-sorral (crypto, politics, sports, …).</>,
+          <>Kattints egy piacra → "EV Kalkulátor" panel jobbra — állítsd a saját becslésedet a slider-rel.</>,
+          <>Verdict: edge &gt; 4% és Kelly &gt; 2% kell a "BUY" zöld jelzéshez.</>,
+        ]}
+        marketScope={<>Top 30 esemény forgalom szerint (<code>volume24hr DESC</code>) — minden aktív, nem-lezárt binary piac, min. $5k 24h volume. Az URL-ek <code>/event/&#123;eventSlug&#125;/&#123;marketSlug&#125;</code> formátumban épülnek.</>}
+        endpoint="GET /.netlify/functions/polymarket-proxy?limit=30"
+      />
       <div className="ec-sec-title">Polymarket Scanner</div>
       <div className="ec-sec-sub">
         <span className={`ec-sdot ${loading ? "off" : "live"}`} />
@@ -380,6 +393,17 @@ function EVTab({ bankroll }: { bankroll: number }) {
 
   return (
     <div>
+      <ToolInfoBox
+        title="02 // EV Kalkulátor"
+        what={<>Standalone Kelly + EV számológép sandbox. Nem hív API-t — csak a slider értékeiből számol. Akkor használd, ha már van saját becslésed és ki akarod nézni a pozícióméretet.</>}
+        howToUse={[
+          <>Állítsd a "Piaci ár" slider-t arra az árra, amit Polymarketen látsz (mid YES vagy NO).</>,
+          <>Állítsd a "Saját becslés" slider-t a kutatásod alapján — ez a fair-value.</>,
+          <>"Kelly fraction" slider — alapértelmezés 25% (¼-Kelly, intézményi standard). Ne emeld 50% fölé.</>,
+          <>Verdict zöld ✓: edge &gt; 10%. Sárga ~ : edge 4-10%. Piros ✗ : edge &lt; 4%, skip.</>,
+        ]}
+        marketScope={<>Egyetlen piacot sem hív — pusztán Kelly Criterion (<code>f* = (pb − q) / b</code>) sandbox. A bemenet a saját kezedben.</>}
+      />
       <div className="ec-sec-title">EV Kalkulátor</div>
       <div className="ec-sec-sub">Expected Value + Kelly pozícióméretezés • LMSR ármodell</div>
       <div className="ec-grid2" style={{ marginBottom: 15 }}>
@@ -535,6 +559,17 @@ function SwarmTab({ bankroll }: { bankroll: number }) {
 
   return (
     <div>
+      <ToolInfoBox
+        title="03 // Swarm Intelligence"
+        what={<>32 ágens (6 klaszter: base-rate, momentum, contrarian, pollster, narrative, quant) Bayesian konszenzus szimulátor. Próbáld ki, mit "gondolna" egy heterogén bettor-csoport a piacról a saját külső jeled mellett.</>}
+        howToUse={[
+          <>Válassz preset-et (Fed kamat / BTC $100k / Tűzszünet / Egyedi) — vagy állítsd kézzel a két slider-t.</>,
+          <>"Piaci ár" = a Polymarket aktuális ára (referencia). "Külső jel" = az általad ismert info amit a piac még nem árazott (poll, NOAA, FOMC statement).</>,
+          <>▶ Start → 50 körön át fut a step-by-step Bayesian update. A klaszterek színe szerint látod, kik mozdulnak el legjobban.</>,
+          <>▶ Monte Carlo (2000 sim) → P5/P95 konfidencia-intervallum + edge becslés.</>,
+        ]}
+        marketScope={<>Egyetlen piacot sem hív — pure szimulátor. A "Piaci ár" inputja az amit látsz a Polymarket UI-n; a Swarm konszenzust generál belőle.</>}
+      />
       <div className="ec-sec-title">Swarm Intelligence Modul</div>
       <div className="ec-sec-sub">{agents.length} ágens • {AGENT_TYPES.length} klaszter • súlyozott Bayesian konszenzus</div>
 

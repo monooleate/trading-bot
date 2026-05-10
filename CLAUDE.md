@@ -351,6 +351,52 @@ netlify deploy --prod --dir=dist
 
 ## AKTUÁLIS ÁLLAPOT (2026-05-10) – Claude Code folytatáshoz
 
+### Tizenkilencedik session (2026-05-10) – /tools/ dashboard: 9 tab kap egységes "How to use" info-doboz + vol-divergence 15m bug fix
+
+A `mj-trading.netlify.app/tools/` 9 elemző-tabja (Scanner, EV, Swarm,
+Order Flow, Vol Harvest, Apex Wallets, Cond Prob, Signals, Arb Matrix)
+audit + UX javítás. A felhasználó kérése: minden tabra egy "Mire való
+és hogyan kell használni" doboz, és jelölje, melyik Polymarket piacot
+hívja a tool. Plusz az API-hívások ellenőrzése (a botoknál volt korábban
+Gamma/CLOB hiba).
+
+**Audit eredmény:** a 9 tabot kiszolgáló netlify function-ök Gamma/CLOB
+hívásai mind helyesek (`closed=true` filter, `condition_ids` plural,
+`clobTokenIds` JSON-string parsing) — ezeket korábbi sessionökben
+javítottuk és stabilak. **Egy valódi bugot találtam:**
+
+- **`netlify/functions/vol-divergence.mts:117-119`** — a "BTC 15m
+  kontraktok" filter `hoursLeft < 1 → skip` ágat tartalmazta, ami
+  pontosan a 15-perces BTC UP/DOWN piacokat dobta el (a tool fő
+  célpontját). Plusz a per-market `if (remaining < 1) timeRemainingHours
+  = remaining` ág sosem futott le, így minden piac default 15-perces
+  IV-vel lett számolva, függetlenül a tényleges remaining time-tól.
+  **Fix**: filter `1/60h–48h` intervallumra, per-market határ 48h-ra
+  bővítve.
+
+**Új komponens:** `src/components/shared/ToolInfoBox.tsx` — egységes
+"info-doboz" 5 prop-pal (title / what / howToUse / marketScope /
+relatedBot / endpoint). A 9 tab közül 8 kap saját boxot (a 9. Arb
+Matrix közös box-ot kap A/B/C/D sub-tabokkal).
+
+**Bot-eszköz mapping** a `relatedBot` mező segítségével: Order Flow / Vol
+Harvest / Apex / Cond Prob / Signal Combiner / Arb Matrix(D) → mind a
+crypto bot megfelelő signal-ját hívja vissza, így a tool-és-bot kapcsolat
+vizuálisan is megjelenik a /trade/crypto/ oldalra mutató linkként.
+
+`tsc --noEmit` zöld a project files-on. Részletes leírás:
+`internal-docs/changelog/CHANGELOG-2026-05-10.md` "(h)" szekció.
+
+### Hova nyúlj legközelebb (/tools/)
+
+- Új tool-tab esetén csak importáld a ToolInfoBox-ot és add meg az 5
+  prop-ot — egységes UX automatikusan.
+- A vol-divergence fix-et érdemes 24h paper-megfigyeléssel validálni:
+  a Tab 5 BTC kontraktok táblázata most már 15 perces piacokat is kell
+  hozzon, nem csak daily-eket.
+- Ha más Gamma-szűrő is gyanús (pl. extra volume kritérium kihagy
+  actionable piacokat), ugyanaz az audit-mintázat alkalmazható.
+
 ### Tizennyolcadik session (2026-05-10) – Auto-Trader UI: egységes "X/Y gates" chip + hover popover minden bot scan-rétegén
 
 A 4 bot scan-listájában (Crypto / Weather / HL Perp / Funding-Arb) eddig

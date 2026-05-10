@@ -2,6 +2,7 @@
 // Tab 06 – Kyle Lambda + VPIN + Hawkes + AS Quoting live dashboard
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import ToolInfoBox from "./shared/ToolInfoBox";
 
 const FN = "/.netlify/functions";
 
@@ -196,6 +197,19 @@ export default function OrderFlowPanel() {
     <>
       <style>{css}</style>
       <div className="of-wrap">
+        <ToolInfoBox
+          title="04 // Order Flow Analysis"
+          what={<>Microstructure metrikák egy konkrét Polymarket piac CLOB trade history-jából: <strong>Kyle's λ</strong> (price impact), <strong>VPIN</strong> (flow toxicity), <strong>Hawkes branching</strong> (self-excited orders) + <strong>Avellaneda–Stoikov</strong> spread ajánlás.</>}
+          howToUse={[
+            <>Kattints egy piacra a "Piac kiválasztása" táblázatban (alul) → automatikusan elemzi a YES token order flow-ját.</>,
+            <>Vagy másold be manuálisan a CLOB <code>token_id</code>-t (a Polymarket dev tools / API-ból) → "ELEMZÉS →".</>,
+            <>"▶ Auto" gomb → 60 másodpercenként frissít.</>,
+            <>Verdict: VPIN &gt; 0.65 vagy Kyle λ &gt; 0.002 = informed trader aktív, szélesítsd a spreadet vagy állj félre.</>,
+          ]}
+          marketScope={<>Egy felhasználó által kiválasztott piac YES token-je. A market picker a top 15 forgalmú aktív piacot mutatja (<code>polymarket-proxy</code>). A trade history-t a Data API <code>/trades?asset=&lt;tokenId&gt;</code> + CLOB <code>/midpoint</code> kombinációból veszi.</>}
+          relatedBot={{ label: "Crypto bot orderflow signal", href: "/trade/crypto/" }}
+          endpoint="GET /.netlify/functions/orderflow-analysis?token_id=…"
+        />
         {/* Header */}
         <div className="of-topbar">
           <div>

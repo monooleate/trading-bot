@@ -108,17 +108,20 @@ async function fetchBTCMarkets() {
   const data = await res.json() as any;
   const list: any[] = Array.isArray(data) ? data : (data.markets || []);
 
-  // Szűrés: BTC UP/DOWN kontraktok (15 perc)
+  // Szűrés: BTC UP/DOWN kontraktok (15 perc — 48 óra között).
+  // A korábbi `hoursLeft < 1 → skip` szűrő kizárta a 15 perces piacokat
+  // (a tool egyik fő célpontját). Most csak a settlement-hez nagyon közeli
+  // (< 1 perc) és a daily-nél hosszabb (> 48h, nincs RV-window match)
+  // piacokat dobjuk el.
   return list.filter((m: any) => {
     const q = (m.question || m.title || "").toLowerCase();
     if (!q.includes("btc") && !q.includes("bitcoin")) return false;
-    // Kizárjuk a lejárt/majdnem lezárt piacokat
-    // Ha nincs endDate vagy nagyon hamar lejár, skip
     if (m.endDate) {
       const hoursLeft = (new Date(m.endDate).getTime() - Date.now()) / 3600000;
-      if (hoursLeft < 1) return false; // kevesebb mint 1 óra van hátra
+      if (hoursLeft < 1 / 60) return false; // < 1 perc, settlement
+      if (hoursLeft > 48)     return false; // daily/weekly, IV-RV összehasonlítás nem értelmes
     }
-    // Kizárjuk az extrém árazású piacokat (lejárt)
+    // Kizárjuk az extrém árazású piacokat (lejárt vagy túl egyoldalú)
     try {
       const op = typeof m.outcomePrices === "string" ? JSON.parse(m.outcomePrices) : m.outcomePrices;
       const yp = parseFloat(op?.[0] || 0.5);
@@ -262,12 +265,14 @@ export default async function handler(req: Request, _ctx: Context) {
       const yesPrice = Number.isFinite(yesMid as number) ? (yesMid as number) : storedYes;
       const noPrice  = Number.isFinite(noMid  as number) ? (noMid  as number) : storedNo;
 
-      // Remaining time estimation (15m kontraktnál max 15 perc van hátra)
+      // Remaining time estimation. A felső korlát 48h — a fetchBTCMarkets
+      // már szűri a hosszabb piacokat. Ha a remaining nem értelmezhető,
+      // marad a 15-perces default (a tool elsődleges célpontja).
       const endDate = m.endDate || m.end_date_iso || "";
       let timeRemainingHours = 15 / 60; // default: 15 perc
       if (endDate) {
         const remaining = (new Date(endDate).getTime() - Date.now()) / 1000 / 3600;
-        if (remaining > 0 && remaining < 1) timeRemainingHours = remaining;
+        if (remaining > 0 && remaining <= 48) timeRemainingHours = remaining;
       }
 
       const iv = impliedVolFromBinaryPrice(yesPrice, timeRemainingHours);

@@ -3,6 +3,7 @@
 // IR = IC × √N
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import ToolInfoBox from "./shared/ToolInfoBox";
 
 const FN = "/.netlify/functions";
 
@@ -161,6 +162,20 @@ export default function SignalCombinerPanel({ bankroll }: { bankroll: number }) 
     <>
       <style>{css}</style>
       <div className="sc-wrap">
+        <ToolInfoBox
+          title="08 // Signal Combiner"
+          what={<>8 független jel egyesítése súlyozott Bayesian kombinátorral: <strong>Vol Divergence, Order Flow, Apex Consensus, Cond Prob, Funding Rate, Momentum, Contrarian, Pairs Spread</strong>. Az ajánlás <strong>BUY YES / BUY NO / WAIT / WATCH</strong> + ¼-Kelly pozícióméret. Ez ugyanaz a kombinátor, amit a crypto bot is használ.</>}
+          howToUse={[
+            <>Tölt automatikusan top forgalmú piacot. ⊕ Piac → válassz konkrét piacot a listából.</>,
+            <>"⟳ Combine" / "▶ Auto 3m" — egyetlen piac elemzéséhez.</>,
+            <>Multi-Market Scanner ("⟳ Scan Top 10"): 10 piac párhuzamos elemzése, abszolút edge szerint sorba rendezve.</>,
+            <>"Log Trade" → trade logger Blobs store-ba (csak BUY ajánláskor jelenik meg). Edge tracker innen olvassa.</>,
+            <>IR &gt; 0.30 = HIGH conf, 0.20-0.30 = MEDIUM, &lt; 0.20 = LOW. Edge &lt; 5% vagy IR &lt; 0.10 → automatikus WAIT.</>,
+          ]}
+          marketScope={<>Egy piacra fut (<code>?slug=…</code>) vagy auto-pickel top forgalmú aktív piacot. A 8 jel mindegyike különböző helyről húz: CLOB <code>/book</code> + <code>/midpoint</code> a piac YES token-jén, Data API <code>/trades</code> apex agg-hez, Gamma <code>/markets</code> related-pair-ekhez, Binance/Bybit BTC funding rate-hez. Resolution-risk score is része (UMA dispute kockázat).</>}
+          relatedBot={{ label: "Crypto bot — same combinator", href: "/trade/crypto/" }}
+          endpoint="GET /.netlify/functions/signal-combiner?slug=…"
+        />
 
         {/* Header */}
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-end" }}>

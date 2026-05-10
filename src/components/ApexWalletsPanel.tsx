@@ -2,6 +2,7 @@
 // Tab 08 – Apex Wallet Profiler + Consensus Detector
 
 import { useState, useEffect, useCallback } from "react";
+import ToolInfoBox from "./shared/ToolInfoBox";
 
 const FN = "/.netlify/functions";
 
@@ -757,6 +758,19 @@ export default function ApexWalletsPanel({ bankroll }: { bankroll: number }) {
     <>
       <style>{css}</style>
       <div className="aw-wrap">
+        <ToolInfoBox
+          title="06 // Apex Wallet Profiler"
+          what={<>Top Polymarket walletek (PnL alapján) profilozása + <strong>Consensus Detector</strong> (mire fogadnak közösen) + <strong>Bot szűrő</strong> (Hubble Research módszertan: focus ratio, sleep gap, timing CV) + <strong>Payout ratio</strong> + <strong>LP Subgroup A/B/C</strong> (FADE / COPY).</>}
+          howToUse={[
+            <>3 alfül: <strong>Consensus</strong> (mire fogadnak ≥ 2 apex wallet együtt) — alapértelmezett.</>,
+            <><strong>Leaderboard</strong>: top 50 wallet PnL szerint, 1d/7d/30d/all idősíkokon.</>,
+            <><strong>Profil</strong>: bemásolod a proxy walletet (a polymarket.com/profile/ URL-jéből) → Sharpe, win rate, payout ratio, kategória-térkép, bot score, LP subgroup.</>,
+            <>Kategória-térkép: ✓ COPY (WR ≥ 65%) / ✗ SKIP (WR &lt; 40%) — másold csak a profitábilis kategóriákat.</>,
+          ]}
+          marketScope={<>Cross-market: nem egy konkrét piacot hív, hanem a Data API <code>/trades</code> endpointot piac-szűrő nélkül (top 500 trade globálisan a hét/hónap idősíkon). Consensus-ben a top 10 wallet utolsó 20 trade-jét aggregálja <code>conditionId</code> szerint. Profil mód: <code>/trades?user=&lt;addr&gt;&amp;limit=500</code> + <code>/activity?user=…</code>.</>}
+          relatedBot={{ label: "Crypto bot apex consensus signal", href: "/trade/crypto/" }}
+          endpoint="GET /.netlify/functions/apex-wallets?action=consensus|leaderboard|profile"
+        />
         <div className="aw-topbar">
           <div>
             <div style={{ fontFamily: "var(--sans)", fontSize: 18, fontWeight: 800, letterSpacing: "-.02em", marginBottom: 3 }}>

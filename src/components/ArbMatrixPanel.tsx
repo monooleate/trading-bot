@@ -5,6 +5,7 @@
 //   C: Marginal polytope constraints (kibővített cond prob)
 
 import { useState, useCallback } from "react";
+import ToolInfoBox from "./shared/ToolInfoBox";
 
 const FN = "/.netlify/functions";
 
@@ -525,6 +526,19 @@ export default function ArbMatrixPanel({ bankroll }: { bankroll: number }) {
     <>
       <style>{css}</style>
       <div className="am-wrap">
+        <ToolInfoBox
+          title="09 // Arbitrage Matrix"
+          what={<>4 különálló arbitrage scanner egy panelben: <strong>A. VWAP Arb</strong> (mid helyett kitölthető ár), <strong>B. LLM Dependency</strong> (Claude API logikai függőség detektor), <strong>C. Polytope Checker</strong> (kézi constraint check), <strong>D. Pair-Cost Arb</strong> (riskless YES+NO redeem &lt; $1).</>}
+          howToUse={[
+            <><strong>A</strong> alapértelmezett. Üres slug = top 10 piac VWAP scan; konkrét slug = egy piac részletes analízise. EXECUTE chip ha net profit &gt; $0.05/share.</>,
+            <><strong>B</strong> kézi pár (pl. "Trump win PA?" + "Trump win presidency?") vagy Auto Scan top 30 piac. Claude Sonnet visszaadja a függőségi típust, irányt, és arb-feltételt.</>,
+            <><strong>C</strong> manuális constraint sandbox: add piacokat saját YES árakkal, kérj monotonicity check-et.</>,
+            <><strong>D</strong> Pair-Cost Arb: a Tab 09 (CondProb) komplementer-szabályának VWAP-validált változata, valódi $50 notional-on.</>,
+          ]}
+          marketScope={<>A: top 20 piac (<code>order=volume24hr</code>) CLOB <code>/book</code>-ja, max 10 párhuzamosan elemezve. B: top 30 piac, kategória-csoportosítás után pár-szintű elemzés. C: nincs API hívás, csak felhasználó-input. D: top 60 esemény (<code>/events</code>) → flatten markets → szűrés ≥ 24h-ig nyitott + min volume → min profit % feletti candidatek VWAP walk-kal validálva $50-on.</>}
+          relatedBot={{ label: "Crypto bot pair_cost arb (D)", href: "/trade/crypto/" }}
+          endpoint="GET /.netlify/functions/{vwap-arb,llm-dependency,pair-cost-arb}"
+        />
         <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-end",marginBottom:4 }}>
           <div>
             <div style={{ fontFamily:"var(--sans)",fontSize:18,fontWeight:800,letterSpacing:"-.02em",marginBottom:3 }}>
