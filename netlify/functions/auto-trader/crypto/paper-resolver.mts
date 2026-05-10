@@ -201,3 +201,118 @@ export async function resolvePendingPositions(
 // Backwards-compatible alias — the old name is still imported by the
 // orchestrator and any external scripts.
 export const resolvePendingPaperPositions = resolvePendingPositions;
+
+// ─── Live diagnostic ───────────────────────────────────────────────────
+// One-shot per-position Gamma probe for the "Reconcile" UI button. Unlike
+// resolvePendingPositions this doesn't mutate the session — it just reports
+// what state Gamma actually returns for each pending position so the
+// operator can tell "UMA still voting" from "wrong conditionId" / "Gamma
+// gone silent". Caller passes the pending positions (already filtered to
+// past-endDate); we return one diagnostic row per input.
+
+export interface PendingDiagnostic {
+  market: string;
+  conditionId: string | null;
+  ageMin: number;
+  /** Live Gamma flags (null if fetch failed). */
+  gamma: {
+    found: boolean;
+    closed: boolean | null;
+    outcomePrices: number[] | null;
+    umaResolutionStatus: string | null;
+  } | null;
+  /** Plain-language verdict shown in the UI. */
+  verdict: string;
+  /** True when the resolver SHOULD close this position now — surfaces the
+   *  edge case where Gamma says final but the cron hasn't run yet. */
+  shouldClose: boolean;
+}
+
+async function fetchMarketRaw(conditionId: string): Promise<any | null> {
+  if (!conditionId) return null;
+  try {
+    const url = `${GAMMA_API}/markets?condition_ids=${encodeURIComponent(conditionId)}&closed=true`;
+    const res = await fetch(url, {
+      headers: { Accept: "application/json", "User-Agent": "EdgeCalc-PaperResolver/1.0" },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) return null;
+    const data: any = await res.json();
+    const arr = Array.isArray(data) ? data : (data?.data ?? []);
+    return arr[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function diagnosePendingPositions(
+  positions: Array<{ market: string; conditionId?: string; endDate?: string }>,
+): Promise<PendingDiagnostic[]> {
+  const now = Date.now();
+  const out: PendingDiagnostic[] = [];
+  for (const p of positions) {
+    const ageMin = p.endDate ? Math.round((now - new Date(p.endDate).getTime()) / 60_000) : 0;
+    if (!p.conditionId) {
+      out.push({
+        market: p.market,
+        conditionId: null,
+        ageMin,
+        gamma: null,
+        verdict: "Missing conditionId — legacy position from before the resolver wiring. Can never auto-close; reset the session to clear it.",
+        shouldClose: false,
+      });
+      continue;
+    }
+    const raw = await fetchMarketRaw(p.conditionId);
+    if (!raw) {
+      out.push({
+        market: p.market,
+        conditionId: p.conditionId,
+        ageMin,
+        gamma: { found: false, closed: null, outcomePrices: null, umaResolutionStatus: null },
+        verdict: "Gamma returned no market for this conditionId (with closed=true filter). " +
+                 "If ageMin < 60 the market may not yet have flipped closed=true; otherwise the conditionId may be stale or wrong.",
+        shouldClose: false,
+      });
+      continue;
+    }
+    let op: number[] | null = null;
+    try {
+      const parsed = typeof raw.outcomePrices === "string" ? JSON.parse(raw.outcomePrices) : raw.outcomePrices;
+      if (Array.isArray(parsed)) op = parsed.map((x: any) => parseFloat(String(x)));
+    } catch {}
+    const closed = raw.closed === true;
+    const uma = String(raw.umaResolutionStatus || "").toLowerCase();
+    const yes = op && op.length >= 1 ? op[0] : NaN;
+    const isBinary = Number.isFinite(yes) && (yes <= 0.001 || yes >= 0.999);
+
+    let verdict: string;
+    let shouldClose = false;
+    if (!closed) {
+      verdict = `Closed flag still false on Gamma despite ageMin=${ageMin}. Market may have re-opened or settlement hasn't started yet.`;
+    } else if (UMA_PENDING_STATES.has(uma)) {
+      verdict = `UMA "${uma}" — Polymarket has flipped closed=true but UMA is in the dispute/voting window. Typical 2h after proposal. The resolver will auto-close once UMA reaches "resolved".`;
+    } else if (!isBinary) {
+      verdict = `Closed=true and UMA finalized but outcomePrices=${JSON.stringify(op)} is not binary. ` +
+                "This is rare — usually indicates a 50/50 dispute resolution; the resolver waits for {0,1}.";
+    } else {
+      verdict = `Resolved on Gamma: outcomePrices=${JSON.stringify(op)}, UMA="${uma || "n/a"}". The next cron tick should close this position.`;
+      shouldClose = true;
+    }
+
+    out.push({
+      market: p.market,
+      conditionId: p.conditionId,
+      ageMin,
+      gamma: {
+        found: true,
+        closed,
+        outcomePrices: op,
+        umaResolutionStatus: uma || null,
+      },
+      verdict,
+      shouldClose,
+    });
+  }
+  return out;
+}

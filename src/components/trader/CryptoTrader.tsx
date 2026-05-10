@@ -104,6 +104,27 @@ function formatAgeAgo(ms: number): string {
   return `${Math.floor(sec / 86400)}d ${Math.floor((sec % 86400) / 3600)}h ago`;
 }
 
+interface PendingDiagnostic {
+  market: string;
+  conditionId: string | null;
+  ageMin: number;
+  gamma: {
+    found: boolean;
+    closed: boolean | null;
+    outcomePrices: number[] | null;
+    umaResolutionStatus: string | null;
+  } | null;
+  verdict: string;
+  shouldClose: boolean;
+}
+
+interface ReconcileResult {
+  ok: boolean;
+  action: "reconciled";
+  resolved: { market: string; exitPrice: number; pnl: number }[];
+  stillPending: PendingDiagnostic[];
+}
+
 interface RunResult {
   ok: boolean;
   action: string;
@@ -112,6 +133,10 @@ interface RunResult {
   marketsConsidered?: number;
   results?: ScanResult[];
   droppedMarkets?: DroppedMarket[];
+  // Reconcile-action returns a different payload shape — kept on RunResult
+  // so the same useTraderAction hook handles it.
+  resolved?: { market: string; exitPrice: number; pnl: number }[];
+  stillPending?: PendingDiagnostic[];
   config?: {
     edgeThreshold:    number;
     maxKellyFraction: number;
@@ -203,8 +228,10 @@ export default function CryptoTrader({ bankroll }: { bankroll?: number }) {
   const alerts: TraderAlert[] = [];
   if (session?.stopped) alerts.push({ tone: "danger", text: `Stopped: ${session.stoppedReason || "unknown"}` });
 
+  const pendingCount = pending?.count ?? 0;
   const controls: TraderControl[] = [
     { label: isRunning ? "Scanning..." : "Run Scan", kind: "primary",   onClick: () => doAction("run"),    disabled: isRunning },
+    { label: "⟳ Reconcile pending",                  kind: "info",      onClick: () => doAction("reconcile"), disabled: isRunning, when: pendingCount > 0, title: "Forces a Polymarket settlement pass + per-position Gamma diagnostic" },
     { label: "Stop",                                 kind: "danger",    onClick: () => doAction("stop"),   disabled: isRunning, when: !session?.stopped },
     { label: "Resume",                               kind: "secondary", onClick: () => doAction("resume"), disabled: isRunning, when: !!session?.stopped },
     { label: "Refresh",                              kind: "secondary", onClick: refresh,                  disabled: isRunning },
@@ -299,8 +326,73 @@ export default function CryptoTrader({ bankroll }: { bankroll?: number }) {
               : "awaiting Polymarket resolution",
             isReady: p.hasConditionId !== false,
           }))}
-          footnote="simVersion 3: paper positions close only on real Gamma outcomePrices. UMA resolution typical 5–60 min, longer during disputes. Legacy positions without conditionId can never auto-close — reset session to clear them."
+          footnote="Polymarket BTC up/down markets settle through UMA (oracle propose → 2h dispute window → finalize). Typical close 5min–4h after endDate. The resolver re-checks every 3 min and auto-closes once Gamma reports closed=true AND umaResolutionStatus=resolved AND outcomePrices ∈ {0,1}. Click '⟳ Reconcile pending' for a per-position live Gamma probe — it shows exactly which gate is still blocking."
         />
+      )}
+
+      {/* Reconcile diagnostic — only shown right after the user clicks
+          "⟳ Reconcile pending". Lists each still-pending position with the
+          actual Gamma state (closed flag, outcomePrices, UMA status) so the
+          operator can pinpoint exactly why the resolver isn't closing it. */}
+      {display && display.action === "reconciled" && (display.stillPending?.length || display.resolved?.length) && (
+        <div className="ts-card">
+          <h3 className="ts-card-head">
+            <strong>Reconcile result</strong>
+            {display.resolved && display.resolved.length > 0 && (
+              <span className="ts-tag" style={{ color: "var(--accent)", borderColor: "var(--accent)" }}>
+                {display.resolved.length} closed
+              </span>
+            )}
+            {display.stillPending && display.stillPending.length > 0 && (
+              <span className="ts-tag" style={{ color: "var(--warn)", borderColor: "var(--warn)" }}>
+                {display.stillPending.length} still pending
+              </span>
+            )}
+          </h3>
+          {display.resolved?.map((r, i) => (
+            <div key={`closed-${i}`} className="ts-row ts-row-pass">
+              <div className="ts-row-main">
+                <div className="ts-row-title">{r.market}</div>
+                <div className="ts-row-reason">
+                  Closed at {(r.exitPrice * 100).toFixed(0)}¢ · PnL {r.pnl >= 0 ? "+" : ""}${r.pnl.toFixed(2)}
+                </div>
+              </div>
+              <span className="ts-row-action ts-act-closed">closed</span>
+            </div>
+          ))}
+          {display.stillPending?.map((p, i) => (
+            <div key={`pending-${i}`} className={`ts-row ts-row-${p.shouldClose ? "pass" : p.gamma === null || !p.gamma?.found ? "fail" : "skip"}`}>
+              <div className="ts-row-main">
+                <div className="ts-row-title">{p.market}</div>
+                <div className="ts-row-chips">
+                  <span className="ts-chip">age {p.ageMin}min</span>
+                  {p.gamma?.closed != null && (
+                    <span className={`ts-chip ts-chip-${p.gamma.closed ? "pos" : "neg"}`}>
+                      closed: {String(p.gamma.closed)}
+                    </span>
+                  )}
+                  {p.gamma?.outcomePrices && (
+                    <span className="ts-chip" title="Gamma outcomePrices [YES, NO]">
+                      op: [{p.gamma.outcomePrices.map((x) => x.toFixed(2)).join(", ")}]
+                    </span>
+                  )}
+                  {p.gamma?.umaResolutionStatus && (
+                    <span className={`ts-chip ts-chip-${p.gamma.umaResolutionStatus === "resolved" ? "pos" : "warn"}`}>
+                      uma: {p.gamma.umaResolutionStatus}
+                    </span>
+                  )}
+                  {!p.conditionId && (
+                    <span className="ts-chip ts-chip-neg">no conditionId</span>
+                  )}
+                </div>
+                <div className="ts-row-reason">{p.verdict}</div>
+              </div>
+              <span className="ts-row-action ts-act-skip">
+                {p.shouldClose ? "ready" : "waiting"}
+              </span>
+            </div>
+          ))}
+        </div>
       )}
 
       {display && (display.results || display.reason) && (

@@ -349,7 +349,37 @@ netlify deploy --prod --dir=dist
 
 ---
 
-## AKTUÁLIS ÁLLAPOT (2026-05-10) – Claude Code folytatáshoz
+## AKTUÁLIS ÁLLAPOT (2026-05-11) – Claude Code folytatáshoz
+
+### Huszonnegyedik session (2026-05-11) – Crypto Reconcile + per-position Gamma diagnostic
+
+A user észlelte: /trade/crypto/ oldalon 1 pending paper position past
+endDate "awaiting Polymarket resolution", és nem látta miért nem zár.
+
+**A valódi viselkedés**: Polymarket BTC up/down piacai UMA-n keresztül
+rendeződnek (proposer → 2h dispute window → finalize). Tipikus close
+**5min–4h** az endDate után. A resolver minden 3 percben próbálkozik,
+automatikusan zár amint Gamma `closed=true` + `outcomePrices` ∈ {0,1} +
+`umaResolutionStatus="resolved"` (UMA finality gate az előző session-ben).
+
+**Új diagnosztika gomb:**
+- `crypto/paper-resolver.mts`: új `diagnosePendingPositions()` helper.
+  Per-position Gamma probe, visszaadja `closed/outcomePrices/umaResolutionStatus`
+  + emberbarát verdict-et.
+- `auto-trader/index.mts`: `handleCryptoReconcile()` + `case "reconcile"`
+  kibővítve crypto-ra (eddig weather-only).
+- `CryptoTrader.tsx`: új "⟳ Reconcile pending" gomb (csak ha pending > 0).
+  Új "Reconcile result" kártya: zárt pozíciók zöld sorral + PnL,
+  pending-ek Gamma chip-ekkel (closed/op/uma) + verdict.
+
+A felhasználó most kattintva a Reconcile gombra konkrét diagnosztikát kap:
+- `closed: true, uma: proposed` → 2h dispute window, várj
+- `closed: true, uma: resolved, op: [1,0]` → következő tick zárja
+- `closed: false` → market még nyitva (edge case)
+- `no conditionId` → legacy, reset kell
+
+`tsc --noEmit` exit 0 (project files), Astro build 9 page.
+Részletek: `internal-docs/changelog/CHANGELOG-2026-05-11.md` "(a)" szekció.
 
 ### Huszonharmadik session (2026-05-10) – Bankroll: per-bot input + F-Arb homepage visibility + shared-pool flag
 

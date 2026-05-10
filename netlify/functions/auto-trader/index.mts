@@ -29,7 +29,7 @@ import { aggregateSignals } from "./crypto/signal-aggregator.mts";
 import { makeDecision, setCooldown, padCryptoGates } from "./crypto/decision-engine.mts";
 import { placeBuyOrder } from "./crypto/execution.mts";
 import { handleBuyLifecycle, handleSellLifecycle, checkExitConditions } from "./crypto/order-lifecycle.mts";
-import { resolvePendingPaperPositions } from "./crypto/paper-resolver.mts";
+import { resolvePendingPaperPositions, diagnosePendingPositions } from "./crypto/paper-resolver.mts";
 import { fetchYesMidpoint } from "./crypto/live-price.mts";
 import { markRunStart, markRunFinish, getCryptoRunStatus } from "./crypto/run-state.mts";
 import {
@@ -200,12 +200,18 @@ export default async function handler(req: Request, _ctx: Context) {
       case "resume":
         return await handleResume(config, cat);
       case "reconcile":
-        // Weather-only manual reconcile — let the user force a settlement
-        // pass without waiting for the */15 cron tick.
+        // Manual reconcile — force a settlement pass without waiting for the
+        // next cron tick. Weather runs its dedicated runWeatherReconciler
+        // (Polymarket + METAR fallback). Crypto runs resolvePendingPaperPositions
+        // and ALSO returns a per-position Gamma diagnostic so the user can
+        // tell "UMA still voting" from "wrong conditionId" / "Gamma silent".
         if (cat === "weather") {
           return jsonResponse(await runWeatherReconciler(config.paperMode));
         }
-        return jsonResponse({ ok: false, error: "reconcile is weather-only" }, 400);
+        if (cat === "crypto") {
+          return jsonResponse(await handleCryptoReconcile(config));
+        }
+        return jsonResponse({ ok: false, error: "reconcile is crypto + weather only" }, 400);
       default:
         return jsonResponse({ ok: false, error: `Unknown action: ${action}` }, 400);
     }
@@ -935,6 +941,45 @@ async function handleResume(config: ReturnType<typeof getTraderConfig>, category
     action: "resumed",
     category,
     session: sessionSummary(resumed),
+  });
+}
+
+// ─── Crypto manual reconcile + diagnostic ─────────────────
+// User-triggered settlement pass for the crypto bot. Mirrors the weather
+// "Reconcile pending" button. Two-step:
+//   1. Run resolvePendingPaperPositions — closes any past-endDate position
+//      whose Polymarket market has settled (Gamma closed=true + UMA final).
+//   2. For positions that DIDN'T close, query Gamma per conditionId and
+//      surface the live state (closed flag, outcomePrices, UMA status).
+//
+// The diagnostic is the actionable piece — without it the UI just says
+// "awaiting Polymarket resolution" with no way to tell UMA-still-voting
+// from wrong-conditionId. Returns:
+//   { resolved: ResolutionRecord[], stillPending: PendingDiagnostic[] }
+async function handleCryptoReconcile(config: ReturnType<typeof getTraderConfig>) {
+  const session = await loadSession(config.paperMode, DEFAULT_BANKROLL);
+  const r = await resolvePendingPaperPositions(session);
+  if (r.resolutions.length > 0) {
+    await saveSession(r.session);
+  }
+  // Past-endDate positions still open AFTER the resolver pass — those need
+  // the live Gamma diagnostic.
+  const now = Date.now();
+  const stillPending = r.session.openPositions
+    .filter((p) => p.endDate && new Date(p.endDate).getTime() < now)
+    .map((p) => ({
+      market: p.market,
+      conditionId: p.conditionId,
+      endDate: p.endDate,
+    }));
+  const diagnostics = await diagnosePendingPositions(stillPending);
+  return jsonResponse({
+    ok: true,
+    action: "reconciled",
+    category: "crypto",
+    resolved: r.resolutions,
+    stillPending: diagnostics,
+    session: sessionSummary(r.session),
   });
 }
 
