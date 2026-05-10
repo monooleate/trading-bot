@@ -178,17 +178,18 @@ export async function resolvePendingPositions(
   const now = Date.now();
   const grace = 30_000; // 30s grace after endDate before we even try to query
 
+  // Pre-pass: collect every conditionId that needs a live Gamma probe.
+  // We Promise.all them so the wall-clock cost is one Gamma RTT instead of
+  // N × RTT — critical for staying under Netlify's 10s function budget
+  // when the session has more than 1 pending position.
+  const toFetch: Array<{ pos: typeof session.openPositions[number]; ageMin: number }> = [];
   for (const pos of session.openPositions) {
     const endTs = pos.endDate ? new Date(pos.endDate).getTime() : null;
-    const ageMin = endTs ? Math.round((now - endTs) / 60_000) : 0;
-    // Market still active → don't try to resolve. Querying every open
-    // market every tick is wasteful and the only valid exit price is the
-    // settled outcome.
     if (endTs && now < endTs + grace) {
       log("PAPER_RESOLVE_SKIP", true, { market: pos.market, reason: "market_still_active" });
       continue;
     }
-
+    const ageMin = endTs ? Math.round((now - endTs) / 60_000) : 0;
     if (!pos.conditionId) {
       log("PAPER_RESOLVE_SKIP", true, { market: pos.market, reason: "missing_conditionId" });
       pendingDiagnostics.push({
@@ -201,10 +202,20 @@ export async function resolvePendingPositions(
       });
       continue;
     }
+    toFetch.push({ pos, ageMin });
+  }
 
-    // Single Gamma fetch — drive both the resolution decision AND the UI
-    // diagnostic so we don't double the per-position network cost.
-    const raw = await fetchMarketRaw(pos.conditionId);
+  // Parallel Gamma probe. fetchMarketRaw is already exception-safe (returns
+  // null on any failure) so Promise.all here can't reject. Each fetch has
+  // its own 8s AbortSignal timeout, so the slowest network round-trip caps
+  // the entire pass at ~8s instead of N × 8s.
+  const fetchResults = await Promise.all(
+    toFetch.map(({ pos }) => fetchMarketRaw(pos.conditionId!)),
+  );
+
+  for (let i = 0; i < toFetch.length; i++) {
+    const { pos, ageMin } = toFetch[i];
+    const raw = fetchResults[i];
     if (!raw) {
       log("PAPER_RESOLVE_SKIP", true, {
         market: pos.market,
@@ -214,7 +225,7 @@ export async function resolvePendingPositions(
       });
       pendingDiagnostics.push({
         market: pos.market,
-        conditionId: pos.conditionId,
+        conditionId: pos.conditionId!,
         ageMin,
         gamma: { found: false, closed: null, outcomePrices: null, umaResolutionStatus: null },
         verdict: "Gamma returned no market for this conditionId (with closed=true filter). " +
@@ -225,15 +236,13 @@ export async function resolvePendingPositions(
     }
     const info = parseResolution(raw);
     if (!info.resolved) {
-      // Market past endDate but Polymarket hasn't published resolution yet
-      // (UMA voting / dispute window). Wait — paper PnL must match real.
       log("PAPER_RESOLVE_SKIP", true, {
         market: pos.market,
         reason: "polymarket_not_resolved_yet",
         conditionId: pos.conditionId,
         ageMin,
       });
-      pendingDiagnostics.push(buildDiagnostic(pos.market, pos.conditionId, ageMin, raw));
+      pendingDiagnostics.push(buildDiagnostic(pos.market, pos.conditionId!, ageMin, raw));
       continue;
     }
 

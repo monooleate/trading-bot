@@ -961,24 +961,40 @@ async function handleResume(config: ReturnType<typeof getTraderConfig>, category
 // from wrong-conditionId. Returns:
 //   { resolved: ResolutionRecord[], stillPending: PendingDiagnostic[] }
 async function handleCryptoReconcile(config: ReturnType<typeof getTraderConfig>) {
-  const session = await loadSession(config.paperMode, DEFAULT_BANKROLL);
-  // Single pass: the resolver does ONE Gamma fetch per past-endDate
-  // position and emits both the close decision AND the per-position
-  // diagnostic. The previous "fetch twice" version blew past Netlify's
-  // 10s function budget with even 1-2 pending positions, surfacing as an
-  // "Unknown error" on the UI side (timeout → empty response body).
-  const r = await resolvePendingPaperPositions(session);
-  if (r.resolutions.length > 0) {
-    await saveSession(r.session);
+  // Wrap the whole pipeline in a local try so the user sees the exact stage
+  // that failed (loadSession / resolve / save) instead of falling all the
+  // way through to the outer catch's generic message. The outer catch's
+  // "internal error" fallback didn't surface to the user — Netlify was
+  // returning its own 504 timeout body (no `error` field), so the frontend
+  // fell to its "Unknown error" string. The local try here returns a
+  // specific 500 with the stage so we can finally diagnose.
+  try {
+    const session = await loadSession(config.paperMode, DEFAULT_BANKROLL);
+    // Single pass: the resolver does ONE Gamma fetch per past-endDate
+    // position and emits both the close decision AND the per-position
+    // diagnostic.
+    const r = await resolvePendingPaperPositions(session);
+    if (r.resolutions.length > 0) {
+      await saveSession(r.session);
+    }
+    return jsonResponse({
+      ok: true,
+      action: "reconciled",
+      category: "crypto",
+      resolved: r.resolutions,
+      stillPending: r.pendingDiagnostics ?? [],
+      session: sessionSummary(r.session),
+    });
+  } catch (err: any) {
+    const msg = (err && (err.message || err.toString?.() || String(err))) || "reconcile failed";
+    log("ERROR", true, { event: "reconcile_failed", error: msg, stack: err?.stack });
+    return jsonResponse({
+      ok: false,
+      action: "reconcile_failed",
+      category: "crypto",
+      error: `Reconcile failed: ${msg}`,
+    }, 500);
   }
-  return jsonResponse({
-    ok: true,
-    action: "reconciled",
-    category: "crypto",
-    resolved: r.resolutions,
-    stillPending: r.pendingDiagnostics,
-    session: sessionSummary(r.session),
-  });
 }
 
 // ─── Helpers ──────────────────────────────────────────────
