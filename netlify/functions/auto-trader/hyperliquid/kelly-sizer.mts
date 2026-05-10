@@ -9,7 +9,15 @@
 //   3. Convert USD notional → coin size via leverage and current price
 
 import { formatSize } from "./hl-client.mts";
+import { log } from "../shared/logger.mts";
 import type { HlCoin } from "./types.mts";
+
+// Hard cap on leverage. Above this the bot refuses to scale up regardless
+// of `HL_MAX_LEVERAGE` env. A 3x cap keeps the SL=−1% loss bounded at 3%
+// of margin (≈0.45% of bankroll at the default 15% maxPctBankroll), which
+// is well below the consecutive-loss pause trigger of 3 losses.
+const HL_LEVERAGE_HARD_CAP = 3;
+let leverageWarningSent = false;
 
 export interface KellyToPerpInput {
   bankrollUSDC:   number;
@@ -35,7 +43,19 @@ export function kellyToPerpSize(p: KellyToPerpInput): KellyToPerpOutput {
   const cappedByLimit = cappedFrac < quarterKelly;
 
   const sizeUSDC  = Math.max(0, p.bankrollUSDC * cappedFrac);
-  const leverage  = Math.max(1, Math.min(p.leverage, 3));  // hard-cap 3x
+  // Hard cap leverage and surface a warning the first time someone
+  // configures a value above the cap. Previously the clamp was silent —
+  // an operator setting HL_MAX_LEVERAGE=5 would never know it was being
+  // ignored.
+  if (p.leverage > HL_LEVERAGE_HARD_CAP && !leverageWarningSent) {
+    log("ERROR", false, {
+      venue:        "hyperliquid",
+      configWarning: `HL_MAX_LEVERAGE=${p.leverage} clamped to ${HL_LEVERAGE_HARD_CAP}x hard cap`,
+      hint: "Update HL_MAX_LEVERAGE to <=3 to silence this warning, or remove the override.",
+    });
+    leverageWarningSent = true;
+  }
+  const leverage  = Math.max(1, Math.min(p.leverage, HL_LEVERAGE_HARD_CAP));
   const sizeCoins = p.currentPrice > 0
     ? (sizeUSDC * leverage) / p.currentPrice
     : 0;

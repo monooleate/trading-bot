@@ -169,6 +169,51 @@ export interface HlOrderParams {
 export interface HlExecutionAdapter {
   placeOrder(params: HlOrderParams): Promise<{ ok: boolean; orderId?: string; error?: string }>;
   cancelOrder(coin: HlCoin, orderId: string): Promise<{ ok: boolean; error?: string }>;
+  // Wallet address derived from HL_PRIVATE_KEY. Needed by the live
+  // resolver to query the user's own clearinghouseState / fills.
+  getAddress(): string;
+}
+
+// ─── HL fill record (subset of userFillsByTime response fields) ────────────
+//
+// Per the HL info-endpoint docs, userFills/userFillsByTime returns an array
+// of fills with at least these fields. We keep the shape minimal so the
+// live resolver doesn't depend on internal HL response evolution beyond
+// the documented contract.
+export interface HlFill {
+  coin:    string;       // coin ticker
+  px:      string;       // fill price as decimal string
+  sz:      string;       // fill size in coin units, decimal string
+  side:    "A" | "B";    // A = ask (sell), B = bid (buy)
+  time:    number;       // ms since epoch
+  oid?:    number;       // order id that produced the fill
+  closedPnl?: string;    // realized PnL on the closing side (decimal string)
+  dir?:    string;       // e.g. "Open Long", "Close Short" — human-readable
+}
+
+/**
+ * Fetch a wallet's fills since `startTimeMs`. Mirrors the doc-recommended
+ * `userFillsByTime` payload. Returns `[]` on any failure so the caller can
+ * proceed without a fill record (the resolver treats missing fills as
+ * "wait for next tick" rather than booking a phantom close).
+ */
+export async function getUserFillsByTime(
+  address: string,
+  startTimeMs: number,
+  paperMode: boolean,
+): Promise<HlFill[]> {
+  if (!address || !/^0x[a-fA-F0-9]{40}$/.test(address)) return [];
+  try {
+    const data = await hlInfoPost(paperMode, {
+      type: "userFillsByTime",
+      user: address,
+      startTime: startTimeMs,
+    });
+    if (!Array.isArray(data)) return [];
+    return data as HlFill[];
+  } catch {
+    return [];
+  }
 }
 
 // Cached adapter result so we don't pay the dynamic-import cost on every
@@ -223,6 +268,7 @@ export async function tryLoadLiveAdapter(paperMode: boolean): Promise<HlExecutio
     const exchange  = new ExchangeClient({ transport, wallet });
 
     const adapter: HlExecutionAdapter = {
+      getAddress: () => wallet.address as string,
       async placeOrder(p: HlOrderParams) {
         try {
           // Resolve the asset index from the live universe — hard-coded

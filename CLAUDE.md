@@ -351,6 +351,31 @@ netlify deploy --prod --dir=dist
 
 ## AKTUÁLIS ÁLLAPOT (2026-05-10) – Claude Code folytatáshoz
 
+### Tizenhetedik session (2026-05-10) – HL bots: 6 nyitott finding closeolva (live exit, lot precision, cooldown, slippage, …)
+
+A 16. session-ben dokumentált 6 nyitott finding **mind javítva**.
+`tsc --noEmit` exit 0. Részletes leírás: `internal-docs/changelog/CHANGELOG-2026-05-10.md` "(g)" szekció.
+
+| ID | Fix | Fájlok |
+|----|-----|--------|
+| §9.A | Live HL exit/reconcile: új `live-resolver.mts` (`clearinghouseState` + `userFillsByTime`, oid match → tp/sl/manual close reason) | `live-resolver.mts` (NEW), `hl-client.mts` (HlFill type, getUserFillsByTime, getAddress), `index.mts` (paper/live branch) |
+| F7 | Binance lot precision: `exchangeInfo` cache (6h TTL) + `roundToStep(qty, sym)` minden SELL-en. SOL/AVAX (0.01) / DOGE (1) most korrekt precíziójú | `hedge-manager.mts` |
+| H4 | Cooldown Blobs persistence: `hyperliquid-runtime / cooldowns-v1` key, 30s reload TTL. Async setCooldown/isOnCooldown | `decision-engine.mts`, `index.mts` |
+| F8 | `totalFundingToday: { date, amount }` typed shape + `migrateTodayShape` régi blob fallback | `funding-arb/types.mts`, `fr-session.mts`, `funding-arb/index.mts` |
+| H5 | Explicit warning log `HL_MAX_LEVERAGE > 3` clamp-on (egyszer sessiononként) + `HL_LEVERAGE_HARD_CAP` const dokumentált | `kelly-sizer.mts` |
+| F2/F3 | Paper slippage modellezve: HL SL 0.1%, timeout 0.05%, Binance entry/close 0.05%, HL paper entry 0.5%, HL close paper cost-line 1%. Total roundtrip ~1.6% notional | `paper-resolver.mts`, `hedge-manager.mts`, `fr-executor.mts` |
+
+### Maradék nyitott
+
+| ID | Sev | Probléma | Indok |
+|----|-----|----------|-------|
+| §9.B | 🟡 | `placeHlEntry` TP leg failure-re entry+SL nem cancel-elődik | Order-manager logic, élesedés előtt low priority. |
+
+### Hova nyúlj legközelebb
+
+1. **§9.B**: 1 sor a `placeHlEntry`-ben — TP fail után az entry+SL cancel-elődjön ugyanúgy, mint az SL fail után. Element már megvan a kódban (`adapter.cancelOrder(...)`-t hívja az SL fail-en).
+2. **Live deploy** most már technikailag elérhető: a `live-readiness` gate viszont továbbra is védi (>=30 paper trade IC>=5%, Sharpe>=0.5, drawdown<25%, simVersion=2).
+
 ### Tizenhatodik session (2026-05-10) – HL + Funding-Arb full audit + paper/live parity fixes (sim v2)
 
 A felhasználó kérésére end-to-end audit a két Hyperliquid bot-on (directional perp + funding-arb): scan → signal → decision → entry → resolve, paper/live szinkron-ellenőrzéssel, minden trade funkció validálásával. **9 finding** (5 fix elvégezve, 4 dokumentálva).

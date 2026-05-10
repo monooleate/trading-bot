@@ -20,7 +20,7 @@ function fresh(paperMode: boolean): ArbSessionState {
     paperMode,
     positions:            [],
     totalFundingAllTime:  0,
-    totalFundingToday:    `${today()}:0`,
+    totalFundingToday:    { date: today(), amount: 0 },
     stopped:              false,
     stoppedReason:        null,
   };
@@ -30,12 +30,34 @@ function today(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+// Backwards-compat: older blobs stored totalFundingToday as a "YYYY-MM-DD:N"
+// string. Coerce to the typed shape on load so the rest of the codebase
+// only ever sees the object form.
+function migrateTodayShape(raw: any): { date: string; amount: number } {
+  if (raw && typeof raw === "object" && typeof raw.date === "string") {
+    return { date: raw.date, amount: Number(raw.amount) || 0 };
+  }
+  if (typeof raw === "string") {
+    const idx = raw.indexOf(":");
+    if (idx > 0) {
+      const date = raw.slice(0, idx);
+      const amount = parseFloat(raw.slice(idx + 1)) || 0;
+      return { date, amount };
+    }
+  }
+  return { date: today(), amount: 0 };
+}
+
 export async function loadArbSession(paperMode: boolean): Promise<ArbSessionState> {
   let store: any = null;
   try { store = getStore(STORE); } catch { return fresh(paperMode); }
   try {
     const raw = await store.get(keyOf(paperMode));
-    if (raw) return JSON.parse(raw) as ArbSessionState;
+    if (raw) {
+      const parsed = JSON.parse(raw) as ArbSessionState;
+      parsed.totalFundingToday = migrateTodayShape(parsed.totalFundingToday as any);
+      return parsed;
+    }
   } catch {}
   return fresh(paperMode);
 }
@@ -88,8 +110,10 @@ export function accrueFunding(
 ): ArbSessionState {
   const nowMs = now.getTime();
   const todayStr = today();
-  let todayTotal = s.totalFundingToday.startsWith(todayStr + ":")
-    ? parseFloat(s.totalFundingToday.slice(todayStr.length + 1)) || 0
+  // Roll over the daily total when the UTC date changes. The typed object
+  // makes this a single string compare instead of the previous prefix slice.
+  let todayTotal = s.totalFundingToday.date === todayStr
+    ? s.totalFundingToday.amount
     : 0;
   let allTimeDelta = 0;
 
@@ -132,7 +156,7 @@ export function accrueFunding(
     ...s,
     positions,
     totalFundingAllTime: parseFloat((s.totalFundingAllTime + allTimeDelta).toFixed(4)),
-    totalFundingToday:   `${todayStr}:${todayTotal.toFixed(4)}`,
+    totalFundingToday:   { date: todayStr, amount: parseFloat(todayTotal.toFixed(4)) },
   };
 }
 

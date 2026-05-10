@@ -1687,3 +1687,140 @@ internal-docs/
   └── README.md                       (math/ tábla bővítve 2 sorral)
 ```
 
+
+# 2026-05-10 (g) — HL bots: 6 maradt finding closeolva
+
+A "(f)" szekció audit-jából hat finding maradt nyitva. Mind closeolva.
+
+## §9.A — Live HL exit/reconcile (új `live-resolver.mts`)
+
+Eddig ha a HL TP/SL fillelt élesben, a session blob soha nem frissült —
+a következő cron tick `Already have open <COIN>` reason-nel blokkolt
+örökre. Ez tette a live mode-ot teljesen használhatatlanná.
+
+**Új modul** `live-resolver.mts`. Per cron tick:
+
+1. `tryLoadLiveAdapter()` → `wallet.address` (új `getAddress()` az
+   adapter interface-en).
+2. `getClearinghouseState({user})` → open positions HL-en (asset
+   positions[].position.coin set).
+3. Set diff a `session.openPositions` ellen → eltűnt coin = closed.
+4. `getUserFillsByTime(walletAddress, oldestOpenedAt)` → closing fillek.
+5. Match by `oid`: `tpOrderId === f.oid` → `closeReason: "tp"`,
+   `slOrderId === f.oid` → `"sl"`, egyébként `"manual"`.
+6. Size-weighted average exit price + `closedPnl` sum → `HlClosedTrade`.
+
+Edge cases: fill not visible yet → log + retry; adapter unavailable →
+skip; clearinghouseState blip → skip.
+
+A `runHyperliquidTraderInner` a tick elején most paper/live ágat fut:
+- paper: `resolveOpenHlPaperPositions(...)` (markprice TP/SL crossing)
+- live:  `resolveOpenHlLivePositions(...)` (HL fill matching)
+
+Mindkét ág után ugyanaz a post-close housekeeping (consec-loss pause,
+session loss limit).
+
+## F7 — Binance lot precision per symbol (`hedge-manager.mts`)
+
+`exchangeInfo` cache (6h TTL) a `BINANCE_SPOT_SYMBOL` symbolok-ra. Új
+`roundToStep(qty, sym)` minden SELL-en. SOL (stepSize 0.01) / AVAX (0.01)
+/ DOGE (1) most korrekt precíziójú quantity-vel megy.
+
+Cache miss → SELL refuse `LOT_SIZE rule unknown for X` reason-nel
+(NEM placeolja a hibás precíziójú order-t).
+
+## H4 — Cooldown Blobs persistence (`decision-engine.mts`)
+
+A cooldown map most kétréteg:
+- In-memory cache (avoid round-trip every read)
+- Blobs `hyperliquid-runtime / cooldowns-v1` key (durable)
+
+`setCooldown()` async — mindkettőbe ír. `isOnCooldown()` async — memory
+miss esetén Blobs reload (30s TTL). A `index.mts` for loop most
+`await isOnCooldown(coin)`-t hív.
+
+A `makeHlDecision` cooldown gate-je törölve — a callere már gate-eli a
+loop tetején, és a sync-async refactor egyszerűbb a duplikáció
+kivételével.
+
+## F8 — totalFundingToday typed shape (`fr-session.mts` + `types.mts`)
+
+`ArbSessionState.totalFundingToday: { date: string; amount: number }`
+typed object. Régi `"YYYY-MM-DD:N"` blobok automatikusan migrálódnak
+loadArbSession-ben (`migrateTodayShape` helper). `summarize()` nyitott
+`.amount` mezőre + `.date` mezőre.
+
+## H5 — Explicit warning maxLev clamp-en (`kelly-sizer.mts`)
+
+Új `HL_LEVERAGE_HARD_CAP = 3` const. Ha `HL_MAX_LEVERAGE > 3`, a sizer
+egyszer sessiononként `log("ERROR", ...)` warning-ot ír a clamp-ról:
+
+```
+{
+  configWarning: "HL_MAX_LEVERAGE=5 clamped to 3x hard cap",
+  hint: "Update HL_MAX_LEVERAGE to <=3 to silence this warning, ..."
+}
+```
+
+A `leverageWarningSent` flag akadályozza meg a spam-et.
+
+## F2/F3 — Paper slippage modelling
+
+Paper PnL most reflektálja a live IOC-bands slippage-et:
+
+**HL directional paper-resolver:**
+- TP fill: exact `tpPrice` (Gtc maker limit fillel ott)
+- SL fill: `slPrice × (1 ± 0.001)` (0.1% adverse — stop-market trigger)
+- Timeout exit: `markPrice × (1 ± 0.0005)` (0.05% adverse — IOC close band)
+
+**Funding-arb hedge-manager `paperFill`:**
+- BUY: `markPrice × 1.0005` (0.05% adverse)
+- SELL: `markPrice × 0.9995`
+
+**Funding-arb fr-executor open + close:**
+- HL SHORT entry paper: `markPrice × 0.995` (mátchel a live IOC band-del)
+- HL close paper-only cost line: `pos.sizeUSDC × 0.016` (1.6% total
+  roundtrip slippage: 0.5% HL entry + 1.0% HL close + 0.1% Binance)
+
+Healthy carry condition: `hourly_spread × hold_hours > 1.89%`
+(slippage 1.6% + fees 0.29%).
+
+## tsc
+
+```bash
+cd "C:/dev/trading-bot 2" && npx tsc --noEmit
+# EXIT=0
+```
+
+## Érintett fájlok
+
+```
+netlify/functions/auto-trader/hyperliquid/
+  ├── hl-client.mts                (HlExecutionAdapter.getAddress, getUserFillsByTime, HlFill type)
+  ├── live-resolver.mts            (NEW — live fill reconciliation)
+  ├── decision-engine.mts          (Blobs cooldown, async setCooldown/isOnCooldown)
+  ├── kelly-sizer.mts              (HL_LEVERAGE_HARD_CAP + warning log)
+  ├── paper-resolver.mts           (SL_SLIPPAGE 0.1% + TIMEOUT_SLIPPAGE 0.05%)
+  ├── index.mts                    (paper/live resolver branch, async isOnCooldown/setCooldown)
+  └── funding-arb/
+      ├── types.mts                (totalFundingToday typed)
+      ├── fr-session.mts           (migrateTodayShape, typed accrue + fresh)
+      ├── fr-executor.mts          (HL paper entry slippage, paperSlippage cost line)
+      ├── hedge-manager.mts        (exchangeInfo cache + roundToStep + paperFill slippage)
+      └── index.mts                (typed totalFundingToday in summarize)
+
+internal-docs/
+  ├── math/14-hl-directional.md    ($§10 + §10.1 (§9.A) frissítés, §12 file map)
+  └── math/15-funding-arb.md       ($§10 + §10.1 (F2/F3/F7/F8) frissítés)
+```
+
+## Nyitott kérdések most
+
+A directional bot-ban egyetlen open finding maradt:
+
+- **§9.B** (🟡): TP leg failure paper-ben silent (live-ban entry+SL marad).
+  Order-manager logic — `placeHlEntry`-ben a TP fail-re entry+SL nem
+  cancel-elődik. Élesedés előtt fix kell, low priority addig.
+
+A funding-arb bot-ban minden finding closeolva.
+

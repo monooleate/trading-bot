@@ -333,30 +333,32 @@ slight upper bound a live PnL-en.
 | H1 | 🔴 → ✅ | TP/SL clamp nélkül 40%/20%-os perp target | ✅ v2 (2026-05-10) |
 | H2 | 🟠 → ✅ | Vol gate paper-ben skipped | ✅ v2 (2026-05-10) |
 | H3 | 🟠 → ✅ | Paper nem könyveli a hourly funding-ot | ✅ v2 (2026-05-10) |
-| H4 | 🟡 | In-memory cooldown map (cold-start veszteséges) | ❌ Open position gate fed le, low priority |
-| H5 | 🟡 | `maxLeverage` silent clamp 3x-re | ❌ Konzervatív default — dokumentálva |
-| §9.A | 🔴 | Live exit / reconcile / settlement nincs | ❌ **Live-ra kapcsolni TILOS** amíg ez nem épül meg |
-| §9.B | 🟡 | TP leg failure paper-ben silent (live-ban entry+SL marad) | ❌ Order-manager logic |
+| H4 | 🟡 → ✅ | In-memory cooldown map (cold-start veszteséges) | ✅ Blobs-backed `hyperliquid-runtime` store, 30s reload TTL |
+| H5 | 🟡 → ✅ | `maxLeverage` silent clamp 3x-re | ✅ Explicit warning log + `HL_LEVERAGE_HARD_CAP` const dokumentálva |
+| §9.A | 🔴 → ✅ | Live exit / reconcile / settlement nincs | ✅ Új `live-resolver.mts` — `clearinghouseState` + `userFillsByTime` per cron tick |
+| F2/F3 | 🟠 → ✅ | Paper slippage nincs modellezve | ✅ SL=0.1%, timeout=0.05% adverse paper slippage |
+| §9.B | 🟡 | TP leg failure paper-ben silent (live-ban entry+SL marad) | ❌ Order-manager logic — followup |
 
-### §9.A blokker részletei
+### §9.A — RESOLVED (2026-05-10 follow-up)
 
-A `runHyperliquidTraderInner` paper módban hív `resolveOpenHlPaper
-Positions`-t — **live módban NINCS analóg**. Ha live módba átkapcsolsz:
+Új modul: `live-resolver.mts`. A `runHyperliquidTraderInner` minden tick-en:
+- paper módban: `resolveOpenHlPaperPositions(session, cfg)` (markPrice + funding)
+- live módban: `resolveOpenHlLivePositions(session)` (HL adapter-driven)
 
-- TP/SL trigger orderek a HL-en helyesen filllelnek (HL native).
-- DE: a session blob `openPositions` array nem frissül automatikusan,
-  mert nincs WebSocket / poll subscription a fillekre.
-- Eredmény: a session perpetuálisan "open"-nek tekinti a tradet, a
-  következő cron tick-ek `Already have open <COIN> position` reason-nel
-  blokkolnak.
+A live resolver:
+1. `getClearinghouseState({user: walletAddress})` — open positions HL-en.
+2. Set diff a `session.openPositions` ellen → eltűnt coin = closed.
+3. `getUserFillsByTime(walletAddress, oldestOpenedAt)` — closing fillek.
+4. Match by `oid`: ha `tpOrderId === f.oid` → `closeReason: "tp"`. Ha
+   `slOrderId === f.oid` → `"sl"`. Egyébként `"manual"` (UI-ról zárás).
+5. Size-weighted average exit price + `closedPnl` sum → `HlClosedTrade`.
 
-Live mode kapcsolása előtt szükséges:
-
-1. Live position monitor (`getClearinghouseState(WALLET)` query a session
-   open positions ellen, eltérés esetén closePosition).
-2. Per-trade fill price tracking (`exchange.userFills(...)` query).
-3. Funding settlement reconciliation (a live HL-en a funding órán fillel,
-   a session lokál sumját egyezteti).
+Edge cases:
+- Fill record nem látható még (HL data API eventually consistent few-sec):
+  → log `PAPER_RESOLVE_SKIP/live_position_closed_but_no_fill_yet`, retry
+  next tick. NEM bookol phantom close-t.
+- Adapter unavailable: silent skip (entry path egyébként is felszínre hozza).
+- `clearinghouseState` network blip: silent skip, retry next tick.
 
 ### §9.B részletei
 
@@ -407,7 +409,8 @@ curl https://mj-trading.netlify.app/.netlify/functions/auto-trader-api?action=st
 | `volatility-gate.mts` | 12h Binance klines RV |
 | `kelly-sizer.mts` | ¼-Kelly + leverage clamp + TP/SL formula |
 | `order-manager.mts` | Paper sim / live SDK entry placement |
-| `paper-resolver.mts` | Markprice + funding-rate paper close |
+| `paper-resolver.mts` | Markprice + funding-rate paper close + slippage model |
+| `live-resolver.mts` | Live HL fill reconciliation (`clearinghouseState` + `userFillsByTime`) |
 | `session-manager.mts` | Blobs persistence + simVersion archive |
 | `run-state.mts` | UI status pill state (Scanning/Idle/cron/last) |
 | `config.mts` | env defaults, `HL_PAPER_SIM_VERSION` const |

@@ -28,7 +28,12 @@ export async function openArbPosition(
 
   if (config.paperMode) {
     hlOrderId    = `paper-hl-${Date.now()}-${opp.coin}`;
-    hlEntryPrice = opp.markPrice;
+    // Live SHORT goes in via IOC at markPrice × 0.995 — a 0.5% adverse
+    // band so the order marries against the bid. Paper now mirrors that
+    // band so the closed-trade summary's `hlEntryPrice` doesn't pretend
+    // we always sold at mid.
+    const HL_ENTRY_SLIPPAGE = 0.005;
+    hlEntryPrice = opp.markPrice * (1 - HL_ENTRY_SLIPPAGE);
   } else {
     const adapter = await tryLoadLiveAdapter(false);
     if (!adapter) {
@@ -156,7 +161,22 @@ export async function closeArbPosition(
   }
 
   const fees   = pos.sizeUSDC * (config.feeRoundtripHl + config.feeRoundtripBinance);
-  const netPnl = pos.accumulatedFunding - fees;
+  // Paper slippage cost: our fee config only counts taker fees, not the
+  // price-leg loss from IOC slippage. In live mode the slippage is
+  // already baked into hlEntryPrice / hlExitPrice and binance fills, so
+  // booking it again would double-count. Paper has no real fills, so we
+  // approximate the live-equivalent slippage as a flat cost.
+  //
+  //   HL entry IOC at markPrice × 0.995 → 0.5% adverse
+  //   HL close IOC at closeRefPrice × 1.010 → 1.0% adverse
+  //   Binance MARKET BUY+SELL roundtrip → ~0.1% adverse (2 × 0.05%)
+  //
+  // Total paper slippage roundtrip ≈ 1.6% of notional. In a healthy carry
+  // (hourly spread × hold_hours > 1.6% + fees) this stays profitable.
+  const paperSlippage = config.paperMode
+    ? pos.sizeUSDC * 0.016
+    : 0;
+  const netPnl = pos.accumulatedFunding - fees - paperSlippage;
 
   pos.status          = "CLOSED";
   pos.closedAt        = new Date().toISOString();

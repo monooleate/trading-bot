@@ -333,34 +333,47 @@ A divergencia paper → live:
 |----|----------|----------|----------|
 | F1 | 🔴 → ✅ | Funding accrual entry sizeUSDC-vel (nem mark-to-market) | ✅ v2 (2026-05-10) |
 | F5 | 🟠 → ✅ | HL close IOC slippage 0.5% retry-loop volatilis ticken | ✅ v2 (2026-05-10) |
-| F2 | 🟠 | Delta-neutrality csak ~entry-szinten | ❌ Inherently non-atomic cross-venue |
-| F3 | 🟠 | Live close slippage cost paper-ben nincs modellezve | ❌ Konzervatív paper bias |
-| F7 | 🟠 | Binance SELL `quantity.toFixed(5)` pair-onkénti lot precision | ❌ Élesedés előtt fix kell |
-| F8 | 🟡 | totalFundingToday string format | ❌ Low priority |
+| F2/F3 | 🟠 → ✅ | Cross-venue slippage paper-ben nincs modellezve | ✅ Paper most 0.5% HL entry + 1.0% HL close + 0.05% Binance one-way slippage-et könyvel (1.6% roundtrip) |
+| F7 | 🟠 → ✅ | Binance SELL `quantity.toFixed(5)` pair-onkénti lot precision | ✅ `exchangeInfo` cache (6h TTL) + step-rounding minden SELL-en |
+| F8 | 🟡 → ✅ | `totalFundingToday` string format fragile | ✅ Typed `{ date, amount }` object, migrációs fallback a régi blobokról |
 
-### F2/F3 részletei
+### F2/F3 — RESOLVED (2026-05-10 follow-up)
 
-A két leg cross-venue, atomic execution nincs. A workflow:
-1. HL SHORT IOC (fillel vagy rejected)
-2. Binance LONG MARKET (fillel vagy rejected)
+Paper most explicitly modellezi a slippage-et:
+- HL SHORT entry: `markPrice × (1 − 0.005)` paper fill
+- HL close BUY: paper-only `1.0% × sizeUSDC` cost line a netPnl-en
+- Binance entry+close: `paperFill` most `markPrice × (1 ± 0.0005)` (0.05% spread)
 
-Ha (1) ✓ és (2) ✗ → HL unwind aggressive 1.005× IOC. **Marad ~0.5-1%
-slippage cost** (két IOC × 0.5%) — a paper ezt nem modellezi, így paper
-PnL `+0.5-1%` slight upper bound.
+Total roundtrip slippage: ~1.6% of notional. Egészséges carry:
+`hourly_spread × hold_hours > 1.6% + fees (0.29%) = 1.89%` szükséges
+nettó nyereséghez. 0.005%/h spread × 16d (7+ hours/day) ≈ 1.92% — épp
+elég.
 
-### F7 részletei
+### F7 — RESOLVED (2026-05-10 follow-up)
 
-Binance `LOT_SIZE` filter `stepSize` alapján lehet 0.00001 (BTC), 0.001
-(ETH), 0.01 (SOL/AVAX), 1 (DOGE). A `toFixed(5)` az utóbbi 2 esetén
-**precision-overshoot** rejection-t adhat. Élesedés előtt:
+`hedge-manager.mts` most karbantart egy `lotSizeCache: Map<string,
+LotSizeRule>` cache-t (6h TTL). A `roundToStep(qty, sym)`:
 
 ```ts
-GET /api/v3/exchangeInfo  → symbols[X].filters[LOT_SIZE].stepSize
-                         → roundDownToStep(sizeCoins, stepSize)
+GET https://api.binance.com/api/v3/exchangeInfo?symbols=[...]
+  → symbols[X].filters[LOT_SIZE].stepSize / minQty / maxQty
+
+stepped = floor(qty / stepSize) × stepSize
+if (stepped < minQty) → reject "qty < minQty"
+quantityStr = stepped.toFixed(decimals(stepSize))
 ```
 
-vagy a `fr-executor` build-time-ban map-elj le egy `BINANCE_LOT_PRECISION`
-táblát.
+A cache miss-en (pl. első cron tick cold start előtt) a SELL ok=false
+visszatér `LOT_SIZE rule unknown for X` reason-nel — **NEM** placeolja
+a hibás precíziójú order-t. A következő tickkor a cache betöltődik és
+megy tovább.
+
+### F8 — RESOLVED (2026-05-10 follow-up)
+
+`ArbSessionState.totalFundingToday: { date, amount }` typed object.
+A `loadArbSession` migrate-eli a régi `"YYYY-MM-DD:N"` formátumú
+blobokat (`migrateTodayShape` helper). UI summarize.fundingDate /
+.totalFundingToday változatlanul jelenik meg.
 
 ---
 

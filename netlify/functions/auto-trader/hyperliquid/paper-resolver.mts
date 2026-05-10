@@ -148,20 +148,35 @@ export async function resolveOpenHlPaperPositions(
     let reason: HlResolution["reason"] | null = null;
 
     // TP/SL crossing check — markPrice driven, NOT prediction-driven.
+    // Slippage model: TP fills at the exact limit (maker fill on a
+    // reduce-only Gtc limit), SL is a stop-MARKET trigger so live fills
+    // come back ~0.1% adverse to the trigger price; mirror that in paper
+    // so paper PnL matches what live HL would book.
+    const SL_SLIPPAGE = 0.001; // 0.1% adverse on stop-market fills
     if (isLong) {
       if (px >= pos.tpPrice)      { exitPrice = pos.tpPrice; reason = "tp"; }
-      else if (px <= pos.slPrice) { exitPrice = pos.slPrice; reason = "sl"; }
+      else if (px <= pos.slPrice) {
+        // Stop-market fires at slPrice but fills slightly worse.
+        exitPrice = pos.slPrice * (1 - SL_SLIPPAGE);
+        reason = "sl";
+      }
     } else {
       // SHORT: TP is below entry, SL is above
       if (px <= pos.tpPrice)      { exitPrice = pos.tpPrice; reason = "tp"; }
-      else if (px >= pos.slPrice) { exitPrice = pos.slPrice; reason = "sl"; }
+      else if (px >= pos.slPrice) {
+        exitPrice = pos.slPrice * (1 + SL_SLIPPAGE);
+        reason = "sl";
+      }
     }
 
-    // Timeout fallback at current markPrice if the position has aged out
+    // Timeout fallback at current markPrice if the position has aged out.
+    // Live timeout exit would go through a reduce-only IOC with a small
+    // slippage band; model 0.05% adverse to keep paper conservative.
     if (exitPrice === null) {
       const openedAtMs = new Date(pos.openedAt).getTime();
       if (now - openedAtMs >= cfg.maxPaperHoldMs) {
-        exitPrice = px;
+        const TIMEOUT_SLIPPAGE = 0.0005;
+        exitPrice = isLong ? px * (1 - TIMEOUT_SLIPPAGE) : px * (1 + TIMEOUT_SLIPPAGE);
         reason = "timeout";
       }
     }

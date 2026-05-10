@@ -27,6 +27,7 @@ import {
   placeHlEntry,
 } from "./order-manager.mts";
 import { resolveOpenHlPaperPositions } from "./paper-resolver.mts";
+import { resolveOpenHlLivePositions } from "./live-resolver.mts";
 import { markHlRunStart, markHlRunFinish, getHlRunStatus } from "./run-state.mts";
 import {
   loadHlSession,
@@ -138,28 +139,50 @@ async function runHyperliquidTraderInner(
     return { ok: true, action: "skipped", reason: `Paused until ${session.pausedUntil}`, session: summarize(session), liveReadiness };
   }
 
-  // ── Resolve any open paper positions FIRST. This replaces the old
-  // synthetic-close-in-the-same-run pattern with real HL markPrice driven
-  // TP/SL crossings. Any position that didn't cross stays open across cron
-  // ticks — so an ETH LONG opened at 12:00 with a 1% TP genuinely needs
-  // ETH to move 1% (the same way) before it counts as a winner.
+  // ── Resolve any open positions FIRST. Two paths share the same
+  // post-close session-housekeeping (consecutive-loss pause + session
+  // loss limit) so a TP/SL fill that pushes the bankroll over the limit
+  // stops further entries on the same tick:
+  //
+  //   • paper: resolveOpenHlPaperPositions — TP/SL crossing on HL
+  //     markPrice + funding accrual + 4h timeout safety net.
+  //   • live:  resolveOpenHlLivePositions — clearinghouseState +
+  //     userFillsByTime to detect actual TP/SL fills on HL itself.
+  //     Without this the session blob never books closes and every
+  //     subsequent tick refuses entries with "Already have open <COIN>"
+  //     until a manual reset. (CLAUDE.md §9.A blocker, fixed here.)
   const resolutions: any[] = [];
-  if (config.paperMode && session.openPositions.length > 0) {
-    const r = await resolveOpenHlPaperPositions(session, {
-      feeRoundtrip:   config.roundtripFeePct,
-      maxPaperHoldMs: DEFAULT_MAX_PAPER_HOLD_MS,
-    });
-    session = r.session;
-    for (const res of r.resolutions) {
-      resolutions.push({ coin: res.coin, action: "resolved", reason: res.reason, exit: res.exitPrice, pnl: res.pnlUSDC });
-    }
-    // Apply post-close session checks once after the batch resolution.
-    if (r.resolutions.length > 0) {
-      if (session.consecutiveLosses >= config.consecutiveLossLimit) {
-        session = applyConsecutiveLossPause(session, config.consecutiveLossPauseHours);
+  if (session.openPositions.length > 0) {
+    if (config.paperMode) {
+      const r = await resolveOpenHlPaperPositions(session, {
+        feeRoundtrip:   config.roundtripFeePct,
+        maxPaperHoldMs: DEFAULT_MAX_PAPER_HOLD_MS,
+      });
+      session = r.session;
+      for (const res of r.resolutions) {
+        resolutions.push({ coin: res.coin, action: "resolved", reason: res.reason, exit: res.exitPrice, pnl: res.pnlUSDC });
       }
-      if (session.sessionLoss >= config.sessionLossLimit) {
-        session = stopHlSession(session, "Session loss limit reached");
+      if (r.resolutions.length > 0) {
+        if (session.consecutiveLosses >= config.consecutiveLossLimit) {
+          session = applyConsecutiveLossPause(session, config.consecutiveLossPauseHours);
+        }
+        if (session.sessionLoss >= config.sessionLossLimit) {
+          session = stopHlSession(session, "Session loss limit reached");
+        }
+      }
+    } else {
+      const r = await resolveOpenHlLivePositions(session);
+      session = r.session;
+      for (const res of r.resolutions) {
+        resolutions.push({ coin: res.coin, action: "resolved", reason: res.reason, exit: res.exitPrice, pnl: res.pnlUSDC });
+      }
+      if (r.resolutions.length > 0) {
+        if (session.consecutiveLosses >= config.consecutiveLossLimit) {
+          session = applyConsecutiveLossPause(session, config.consecutiveLossPauseHours);
+        }
+        if (session.sessionLoss >= config.sessionLossLimit) {
+          session = stopHlSession(session, "Session loss limit reached");
+        }
       }
     }
   }
@@ -168,7 +191,7 @@ async function runHyperliquidTraderInner(
 
   for (const coin of SCAN_COINS) {
     try {
-      if (isOnCooldown(coin)) {
+      if (await isOnCooldown(coin)) {
         results.push({ coin, action: "skip", reason: "cooldown" });
         continue;
       }
@@ -351,7 +374,7 @@ async function runHyperliquidTraderInner(
       }
 
       session = addOpenPosition(session, entry.position);
-      setCooldown(coin, config.cooldownSeconds);
+      await setCooldown(coin, config.cooldownSeconds);
 
       log("ORDER_PLACED", config.paperMode, {
         venue: "hyperliquid",

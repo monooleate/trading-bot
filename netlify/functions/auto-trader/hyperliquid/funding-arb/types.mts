@@ -78,7 +78,11 @@ export interface ArbSessionState {
   paperMode:              boolean;
   positions:              ArbPosition[];  // both open and closed
   totalFundingAllTime:    number;
-  totalFundingToday:      string;         // "YYYY-MM-DD:amount"
+  // Typed daily funding tracker: previous shape was a "YYYY-MM-DD:amount"
+  // string that required brittle slicing on every read. The typed object
+  // is JSON-stable and tolerant of clock skew (re-rolls cleanly when the
+  // UTC date string differs from `date`).
+  totalFundingToday:      { date: string; amount: number };
   stopped:                boolean;
   stoppedReason:          string | null;
 }

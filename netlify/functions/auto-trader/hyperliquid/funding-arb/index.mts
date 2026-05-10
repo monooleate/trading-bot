@@ -433,8 +433,6 @@ export async function arbResume(): Promise<any> {
 
 function summarize(s: ArbSessionState) {
   const open = openArbPositions(s);
-  const todayStr = s.totalFundingToday.split(":")[0];
-  const todayAmount = parseFloat(s.totalFundingToday.split(":")[1] || "0");
   return {
     paperMode:            s.paperMode,
     stopped:              s.stopped,
@@ -442,8 +440,8 @@ function summarize(s: ArbSessionState) {
     openPositions:        open.length,
     deployedCapital:      parseFloat(deployedCapital(s).toFixed(2)),
     totalFundingAllTime:  parseFloat(s.totalFundingAllTime.toFixed(2)),
-    totalFundingToday:    parseFloat(todayAmount.toFixed(2)),
-    fundingDate:          todayStr,
+    totalFundingToday:    parseFloat(s.totalFundingToday.amount.toFixed(2)),
+    fundingDate:          s.totalFundingToday.date,
     startedAt:            s.startedAt,
     openDetails:          open.map((p: ArbPosition) => ({
       id:                 p.id,
