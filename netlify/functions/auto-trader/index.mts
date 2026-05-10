@@ -200,6 +200,7 @@ export default async function handler(req: Request, _ctx: Context) {
       case "resume":
         return await handleResume(config, cat);
       case "reconcile":
+        console.log("[DISPATCHER] reconcile case hit, cat=", cat);
         // Manual reconcile — force a settlement pass without waiting for the
         // next cron tick. Weather runs its dedicated runWeatherReconciler
         // (Polymarket + METAR fallback). Crypto runs resolvePendingPaperPositions
@@ -961,19 +962,19 @@ async function handleResume(config: ReturnType<typeof getTraderConfig>, category
 // from wrong-conditionId. Returns:
 //   { resolved: ResolutionRecord[], stillPending: PendingDiagnostic[] }
 async function handleCryptoReconcile(config: ReturnType<typeof getTraderConfig>) {
-  // Wrap the whole pipeline in a local try so the user sees the exact stage
-  // that failed (loadSession / resolve / save) instead of falling all the
-  // way through to the outer catch's generic message. The outer catch's
-  // "internal error" fallback didn't surface to the user — Netlify was
-  // returning its own 504 timeout body (no `error` field), so the frontend
-  // fell to its "Unknown error" string. The local try here returns a
-  // specific 500 with the stage so we can finally diagnose.
+  // DEBUG markers — pin a known sentinel so we can tell from the response
+  // body whether THIS handler ran, vs the response being mangled / cached /
+  // produced by Netlify infrastructure.
+  console.log("[RECONCILE] handler entered, paperMode=", config.paperMode);
+  const debugMarker = "v3-parallel-2026-05-11";
   try {
     const session = await loadSession(config.paperMode, DEFAULT_BANKROLL);
+    console.log("[RECONCILE] session loaded, openPositions=", session.openPositions.length);
     // Single pass: the resolver does ONE Gamma fetch per past-endDate
     // position and emits both the close decision AND the per-position
     // diagnostic.
     const r = await resolvePendingPaperPositions(session);
+    console.log("[RECONCILE] resolver done, resolutions=", r.resolutions.length, "pendingDiagnostics=", r.pendingDiagnostics?.length ?? 0);
     if (r.resolutions.length > 0) {
       await saveSession(r.session);
     }
@@ -981,17 +982,20 @@ async function handleCryptoReconcile(config: ReturnType<typeof getTraderConfig>)
       ok: true,
       action: "reconciled",
       category: "crypto",
+      _debugMarker: debugMarker,
       resolved: r.resolutions,
       stillPending: r.pendingDiagnostics ?? [],
       session: sessionSummary(r.session),
     });
   } catch (err: any) {
     const msg = (err && (err.message || err.toString?.() || String(err))) || "reconcile failed";
+    console.error("[RECONCILE] threw:", msg, err?.stack);
     log("ERROR", true, { event: "reconcile_failed", error: msg, stack: err?.stack });
     return jsonResponse({
       ok: false,
       action: "reconcile_failed",
       category: "crypto",
+      _debugMarker: debugMarker,
       error: `Reconcile failed: ${msg}`,
     }, 500);
   }
