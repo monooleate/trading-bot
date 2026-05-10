@@ -351,6 +351,43 @@ netlify deploy --prod --dir=dist
 
 ## AKTUÁLIS ÁLLAPOT (2026-05-10) – Claude Code folytatáshoz
 
+### Tizennyolcadik session (2026-05-10) – Auto-Trader UI: egységes "X/Y gates" chip + hover popover minden bot scan-rétegén
+
+A 4 bot scan-listájában (Crypto / Weather / HL Perp / Funding-Arb) eddig
+két különböző mintát használtunk a gate-vizibilitásra: Crypto+Weather a
+frontend `*EntryCriteria` mapperből építette, HL+F-Arb pedig
+`cfg=undefined`-del hívta → **a chip soha nem jelent meg ezen a két boton**.
+A user kérése: minden boton ugyanaz a "X/Y gates" chip + hover popover, mint
+amilyen a weather-ben már működik a nyitott pozíció "Why?" paneljén.
+
+**Backend változások (2 file):**
+
+| File | Változás |
+|------|----------|
+| `auto-trader/hyperliquid/index.mts` | Per-coin scan loop kibővítve **12-gates** (cooldown, signal, vol, session-loss, open-pos, consec-loss, coin-not-open, active-signals, resolution-risk, net-edge, hl-price, size). Minden gate független pass/fail evaluation, snap-helper padding "not evaluated"-del. Skip soron most jön `direction / edge / predictedProb / marketPrice` is. |
+| `auto-trader/hyperliquid/funding-arb/index.mts` | Loop átírva: minden 5 ARB_COIN egy sort kap (eddig csak viable+eligible coin). **6-gates** lista (spread, break-even, OI, uniqueness, pos-count, capital-cap). entryDecision snapshot most a coinGates listát reuse-olja az eddigi hardcoded `passed:true` helyett. |
+
+**Frontend változások (3 file):**
+
+| File | Változás |
+|------|----------|
+| `shared/TraderResults.tsx` | `CriteriaGate.actual` és `.required` opcionálisak (szinkron a backend `DecisionGate` shape-jével). `CriteriaSummary` chip új trail: nem all-pass-on "X/Y gates · N✗" expliciten mutatja a bukások számát. Popover header: "Belépési kritériumok • X / Y teljesült · N bukás". |
+| `trader/HyperliquidTrader.tsx` | `criteria` builder: ha `r.gates` non-empty → backend payload, egyébként `hlEntryCriteria(r, undefined)` legacy fallback. |
+| `trader/FundingArbPanel.tsx` | Ugyanaz, plus chip-set bővítve `OI $XXM` chippel + tone-os `spreadAnnualized` (≥30%/yr zöld, ≥5% narancs, alatta piros). |
+
+**Hatás a deploy után:**
+- HL Perp scan-row: minden 3 coin (BTC/ETH/SOL) "X/12 gates" chip + hover-en pontos checklist
+- Funding-Arb scan-row: minden 5 coin (BTC/ETH/SOL/XRP/AVAX) "X/6 gates" chip + hover, spread+OI értékkel
+- Crypto + Weather: változatlan viselkedés (frontend mapper marad)
+
+`tsc --noEmit` exit 0 + Astro build 9 page generated.
+Részletes leírás: `internal-docs/changelog/CHANGELOG-2026-05-10.md` "(h)" szekció.
+
+### Hova nyúlj legközelebb (gate UI)
+- Új scan-gate HL-en: `HL_GATE_LABELS` array + új `coinGates.push({...})` az index.mts-ben. Frontend automatikusan rendererel.
+- Új scan-gate F-Arb-en: `ARB_GATE_LABELS` + új gate evaluation a loop-ban.
+- Crypto + Weather migrálható backend-driven gate-hez a jövőben (a frontend mapper csak a row data subset-jét látja).
+
 ### Tizenhetedik session (2026-05-10) – HL bots: 6 nyitott finding closeolva (live exit, lot precision, cooldown, slippage, …)
 
 A 16. session-ben dokumentált 6 nyitott finding **mind javítva**.

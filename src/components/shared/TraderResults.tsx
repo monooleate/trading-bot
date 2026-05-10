@@ -88,35 +88,46 @@ export function SignalRow({ signals }: { signals: SignalArrow[] }) {
 // One pass/fail check applied to a scanned market row. Used by the
 // CriteriaSummary chip + popover below — the operator can hover any row
 // and see exactly which thresholds passed and which didn't.
+//
+// Mirror of the backend's `DecisionGate` shape (shared/types.mts) so HL
+// + funding-arb can ship gates straight from the scan loop and the UI
+// renders them without a per-bot translation.
 export interface CriteriaGate {
   /** Short label, e.g. "edge ≥ threshold". */
   label: string;
   /** Did this gate pass for this row? */
   passed: boolean;
-  /** Stringified actual value (e.g. "+13.0%", "0.07"). */
-  actual: string;
+  /** Stringified actual value (e.g. "+13.0%", "0.07"). Optional —
+   *  some gates (e.g. "not evaluated" placeholders) leave it blank. */
+  actual?: string;
   /** Stringified required threshold (e.g. "≥ 4.0%", "≤ 8.0%"). */
-  required: string;
+  required?: string;
   /** Optional one-line tooltip explaining the gate. */
   hint?: string;
 }
 
 /** Compact "X/Y gates ✓" chip with a hover popover that lists every gate.
- *  Pure CSS — no JS needed for the hover interaction. */
+ *  Pure CSS — no JS needed for the hover interaction. Rendered uniformly
+ *  on every scan-row across all four bots so the operator can compare
+ *  at a glance and hover for the breakdown. */
 function CriteriaSummary({ gates }: { gates: CriteriaGate[] }) {
   if (!gates.length) return null;
   const passed = gates.filter((g) => g.passed).length;
   const total  = gates.length;
+  const failed = total - passed;
   const allPass = passed === total;
   const tone = allPass ? "pos" : passed === 0 ? "neg" : "warn";
+  // Trail label spells out the failure count when not all pass — operator
+  // doesn't have to do mental math from "2/8".
+  const trail = allPass ? "✓" : `· ${failed}✗`;
   return (
     <span className={`ts-crit ts-crit-${tone}`} tabIndex={0}>
       <span className="ts-crit-chip">
-        {passed}/{total} gates {allPass ? "✓" : "—"}
+        {passed}/{total} gates {trail}
       </span>
       <div className="ts-crit-popover" role="tooltip">
         <div className="ts-crit-popover-head">
-          Belépési kritériumok • {passed} / {total} teljesült
+          Belépési kritériumok • {passed} / {total} teljesült{failed > 0 ? ` · ${failed} bukás` : ""}
         </div>
         {gates.map((g, i) => (
           <div
@@ -126,8 +137,8 @@ function CriteriaSummary({ gates }: { gates: CriteriaGate[] }) {
           >
             <span className="ts-crit-mark">{g.passed ? "✓" : "✗"}</span>
             <span className="ts-crit-label">{g.label}</span>
-            <span className="ts-crit-actual">{g.actual}</span>
-            <span className="ts-crit-req">{g.required}</span>
+            <span className="ts-crit-actual">{g.actual ?? "—"}</span>
+            <span className="ts-crit-req">{g.required ?? ""}</span>
           </div>
         ))}
       </div>
@@ -211,8 +222,8 @@ export function ScanResultRow(p: ScanRowProps) {
           <div className="ts-row-blocker" title={firstFail.hint}>
             <span className="ts-row-blocker-mark">✗</span>
             <span className="ts-row-blocker-label">{firstFail.label}</span>
-            <span className="ts-row-blocker-actual">{firstFail.actual}</span>
-            <span className="ts-row-blocker-req">{firstFail.required}</span>
+            <span className="ts-row-blocker-actual">{firstFail.actual ?? "—"}</span>
+            <span className="ts-row-blocker-req">{firstFail.required ?? ""}</span>
             {failedGates.length > 1 && (
               <span className="ts-row-blocker-more">+{failedGates.length - 1} további</span>
             )}
@@ -755,8 +766,8 @@ function RationaleBlock({ r }: { r: OpenPositionRationale }) {
             >
               <span className="ts-pos-why-gate-mark">{g.passed ? "✓" : "✗"}</span>
               <span className="ts-pos-why-gate-label">{g.label}</span>
-              <span className="ts-pos-why-gate-actual">{g.actual}</span>
-              <span className="ts-pos-why-gate-req">{g.required}</span>
+              <span className="ts-pos-why-gate-actual">{g.actual ?? "—"}</span>
+              <span className="ts-pos-why-gate-req">{g.required ?? ""}</span>
             </div>
           ))}
         </div>

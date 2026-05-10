@@ -13,6 +13,7 @@ import {
   OpportunitiesCard,
   arbEntryCriteria,
   type ResultChip,
+  type CriteriaGate,
   type OpenPositionRow,
   type OpenPositionRationale,
   type OpportunityRowLite,
@@ -195,11 +196,21 @@ export default function FundingArbPanel({ bankroll }: { bankroll?: number }) {
           {display.results.map((r: any, i: number) => {
             const chips: ResultChip[] = [];
             if (r.sizeUSDC !== undefined)         chips.push({ label: `$${Number(r.sizeUSDC).toFixed(0)}`, title: "Notional size" });
-            if (r.spreadAnnualized !== undefined) chips.push({ label: `${Number(r.spreadAnnualized).toFixed(1)}%/yr`, tone: "info", title: "Spread annualised" });
+            if (r.spreadAnnualized !== undefined) {
+              const ann = Number(r.spreadAnnualized);
+              const tone = ann >= 30 ? "pos" : ann >= 5 ? "warn" : "neg";
+              chips.push({ label: `${ann.toFixed(1)}%/yr`, tone, title: "Spread annualised" });
+            }
             if (r.spreadHourly !== undefined)     chips.push({ label: `${Number(r.spreadHourly).toFixed(4)}%/h`, title: "Hourly funding spread" });
+            if (r.openInterestM !== undefined)    chips.push({ label: `OI $${Number(r.openInterestM).toFixed(0)}M`, tone: "info", title: "Hyperliquid open interest in USD" });
 
             const pnlText = r.netPnl !== undefined ? `${r.netPnl >= 0 ? "+" : ""}$${Number(r.netPnl).toFixed(2)}` : undefined;
-            const criteria = arbEntryCriteria(r, undefined);
+            // Backend now attaches a per-row `gates: DecisionGate[]` covering
+            // spread / break-even / OI / uniqueness / position-count /
+            // capital-cap. Fallback path keeps older payloads rendering.
+            const criteria: CriteriaGate[] = Array.isArray(r.gates) && r.gates.length > 0
+              ? (r.gates as CriteriaGate[])
+              : arbEntryCriteria(r, undefined);
 
             return (
               <ScanResultRow

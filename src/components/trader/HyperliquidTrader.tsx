@@ -12,6 +12,7 @@ import {
   OpenPositionsCard,
   hlEntryCriteria,
   type ResultChip,
+  type CriteriaGate,
   type OpenPositionRow,
   type OpenPositionRationale,
 } from "../shared/TraderResults";
@@ -220,7 +221,13 @@ export default function HyperliquidTrader({ bankroll }: { bankroll?: number }) {
             }
 
             const pnlText = r.pnl !== undefined ? `${r.pnl >= 0 ? "+" : ""}$${Number(r.pnl).toFixed(2)}` : undefined;
-            const criteria = hlEntryCriteria(r, undefined);
+            // Backend now ships a per-row `gates: DecisionGate[]` for every
+            // scan result (cooldown / signal / vol / session / edge / size).
+            // Fallback to the lighter client-side mapper if a legacy payload
+            // arrives without gates so older deploys keep rendering.
+            const criteria: CriteriaGate[] = Array.isArray(r.gates) && r.gates.length > 0
+              ? (r.gates as CriteriaGate[])
+              : hlEntryCriteria(r, undefined);
 
             return (
               <ScanResultRow

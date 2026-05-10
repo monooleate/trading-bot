@@ -189,17 +189,70 @@ async function runHyperliquidTraderInner(
 
   const results: any[] = resolutions;
 
+  // Per-coin gate pipeline. Every scanned coin builds an ordered DecisionGate
+  // list so the UI's "X/Y gates ✓" chip + hover popover renders consistently
+  // across all four bots (crypto, weather, HL, F-Arb). Gates are evaluated
+  // greedily — once one fails, downstream gates that depend on the missing
+  // data are recorded with `passed: false, actual: "not evaluated"` so the
+  // total Y stays stable across rows.
+  const threshold = config.paperMode ? config.edgeThresholdPaper : config.edgeThresholdLive;
+  const HL_GATE_LABELS = [
+    "Coin cooldown",
+    "Signal forrás elérhető",
+    "Volatility (RV) ≤ küszöb",
+    "Session loss < limit",
+    "Open pozíciók < max",
+    "Consecutive losses < limit",
+    "Coin nincs már nyitva",
+    "Aktív signal források ≥ 3",
+    "Resolution risk ≠ SKIP",
+    "Net edge ≥ küszöb",
+    "HL price elérhető",
+    "Méret > 0",
+  ] as const;
+
+  function notEvaluatedGate(label: string, hint?: string): import("../shared/types.mts").DecisionGate {
+    return { label, passed: false, actual: "not evaluated", required: "—", hint };
+  }
+
   for (const coin of SCAN_COINS) {
+    const coinGates: import("../shared/types.mts").DecisionGate[] = [];
+    // Snapshot helper: returns the full Y-gate list, padding with
+    // "not evaluated" rows for any gate not yet checked. Keeps Y stable
+    // across all rows so the UI chip is comparable.
+    const snapGates = (): import("../shared/types.mts").DecisionGate[] => {
+      const list = [...coinGates];
+      for (let i = list.length; i < HL_GATE_LABELS.length; i++) {
+        list.push(notEvaluatedGate(HL_GATE_LABELS[i]));
+      }
+      return list;
+    };
     try {
-      if (await isOnCooldown(coin)) {
-        results.push({ coin, action: "skip", reason: "cooldown" });
+      // Gate 1 — Coin cooldown
+      const onCooldown = await isOnCooldown(coin);
+      coinGates.push({
+        label: HL_GATE_LABELS[0],
+        passed: !onCooldown,
+        actual: onCooldown ? "in cooldown" : "ready",
+        required: `${config.cooldownSeconds}s a legutóbbi trade óta`,
+        hint: "Ugyanazon a coin-on nem nyitunk pozíciót N másodpercen belül kétszer.",
+      });
+      if (onCooldown) {
+        results.push({ coin, action: "skip", reason: "cooldown", gates: snapGates() });
         continue;
       }
 
-      // 1. Signal
+      // Gate 2 — Signal source available
       const signal = await getHlSignalForCoin(coin);
+      coinGates.push({
+        label: HL_GATE_LABELS[1],
+        passed: !!signal,
+        actual: signal ? "elérhető" : "nincs adat",
+        required: "elérhető",
+        hint: "Combined signal: FR + VPIN + VOL + APEX + CP (Polymarket-driven).",
+      });
       if (!signal) {
-        results.push({ coin, action: "skip", reason: "no signal" });
+        results.push({ coin, action: "skip", reason: "no signal", gates: snapGates() });
         continue;
       }
 
@@ -212,35 +265,125 @@ async function runHyperliquidTraderInner(
         activeSignals: signal.activeSignals,
       });
 
-      // 2. Volatility gate (paper + live parity).
-      // Previously paper skipped the gate entirely, so paper trades through
-      // 200% RV days while live wouldn't — paper PnL drifted away from what
-      // live would have produced. Now both modes apply the same RV ceiling.
-      // If the underlying klines are unavailable the gate fails-open
-      // (returns pass:true with reason="vol data unavailable").
-      {
-        const volCheck = await volatilityGate(coin, config.volGateRvPct);
-        if (!volCheck.pass) {
-          results.push({ coin, action: "skip", reason: volCheck.reason });
-          continue;
-        }
+      // Gate 3 — Volatility (paper + live parity).
+      // Fail-open if klines unreachable: gate `pass:true, reason="vol data
+      // unavailable"`.
+      const volCheck = await volatilityGate(coin, config.volGateRvPct);
+      coinGates.push({
+        label: HL_GATE_LABELS[2],
+        passed: volCheck.pass,
+        actual: volCheck.rv > 0 ? `RV ${volCheck.rv.toFixed(0)}%/yr` : volCheck.reason,
+        required: `RV ≤ ${config.volGateRvPct}%/yr`,
+        hint: "12-candle 1h realised volatility. 200%+ napokon nem nyitunk.",
+      });
+      if (!volCheck.pass) {
+        results.push({
+          coin, action: "skip", reason: volCheck.reason,
+          direction: signal.direction, edge: signal.edge,
+          predictedProb: signal.finalProb, marketPrice: signal.marketPrice,
+          gates: snapGates(),
+        });
+        continue;
       }
 
-      // 3. Final decision gates
+      // Gates 4–9 — decision-engine layer. We evaluate each independently
+      // (instead of relying on makeHlDecision's first-failure short-circuit)
+      // so the gate list reflects the full pre-flight checklist.
+      const sessionLossOk = session.sessionLoss < config.sessionLossLimit;
+      coinGates.push({
+        label: HL_GATE_LABELS[3],
+        passed: sessionLossOk,
+        actual: `$${session.sessionLoss.toFixed(2)}`,
+        required: `< $${config.sessionLossLimit.toFixed(2)}`,
+        hint: "A futó session nettó vesztesége nem érheti el a felső határt.",
+      });
+      const openOk = session.openPositions.length < config.maxOpenPositions;
+      coinGates.push({
+        label: HL_GATE_LABELS[4],
+        passed: openOk,
+        actual: `${session.openPositions.length}`,
+        required: `< ${config.maxOpenPositions}`,
+        hint: "Egyszerre maximum N nyitott perp pozíció.",
+      });
+      const consecutiveOk = session.consecutiveLosses < config.consecutiveLossLimit;
+      coinGates.push({
+        label: HL_GATE_LABELS[5],
+        passed: consecutiveOk,
+        actual: `${session.consecutiveLosses}`,
+        required: `< ${config.consecutiveLossLimit}`,
+        hint: "N egymás utáni veszteség után pause.",
+      });
+      const notAlreadyOpen = !session.openPositions.some((p) => p.coin === coin);
+      coinGates.push({
+        label: HL_GATE_LABELS[6],
+        passed: notAlreadyOpen,
+        actual: notAlreadyOpen ? "no open position" : "already open",
+        required: "no duplicate",
+        hint: "Egy coinra max 1 nyitott perp pozíció.",
+      });
+      const activeSignalsOk = signal.activeSignals >= 3;
+      coinGates.push({
+        label: HL_GATE_LABELS[7],
+        passed: activeSignalsOk,
+        actual: `${signal.activeSignals}/5`,
+        required: "≥ 3",
+        hint: "HL-en a magasabb költség miatt min. 3 signal konvergenciája kell.",
+      });
+      const resolutionOk = signal.resolutionCategory !== "SKIP";
+      coinGates.push({
+        label: HL_GATE_LABELS[8],
+        passed: resolutionOk,
+        actual: signal.resolutionCategory ?? "OK",
+        required: "≠ SKIP",
+        hint: "Az alapul szolgáló piac resolution kockázata nem lehet SKIP.",
+      });
+
+      // Gate 10 — Net edge. Evaluated independently of session gates so
+      // the user can see "edge passed but session loss tripped".
+      const netEdgePre = signal.edge - config.roundtripFeePct;
+      const netEdgeOk = netEdgePre >= threshold;
+      coinGates.push({
+        label: HL_GATE_LABELS[9],
+        passed: netEdgeOk,
+        actual: `${netEdgePre >= 0 ? "+" : ""}${(netEdgePre * 100).toFixed(2)}% (gross ${(signal.edge * 100).toFixed(2)}% − fees ${(config.roundtripFeePct * 100).toFixed(2)}%)`,
+        required: `≥ ${(threshold * 100).toFixed(1)}%`,
+        hint: `Edge − roundtrip taker fees. ${config.paperMode ? "Paper" : "Live"} küszöb.`,
+      });
+
+      // Now invoke makeHlDecision for the actual short-circuit verdict.
+      // It uses the same logic as gates 4–10, so its `shouldTrade` and our
+      // gate list agree. We re-use its `reason` string for the row footer.
       const decision = makeHlDecision(signal, session, config);
       if (!decision.shouldTrade) {
-        results.push({ coin, action: "skip", reason: decision.reason });
+        results.push({
+          coin, action: "skip", reason: decision.reason,
+          direction: signal.direction, edge: netEdgePre,
+          predictedProb: signal.finalProb, marketPrice: signal.marketPrice,
+          gates: snapGates(),
+        });
         continue;
       }
 
-      // 4. Live price from HL
+      // Gate 11 — HL price available
       const hlPrice = await getCurrentPrice(coin, config.paperMode);
+      coinGates.push({
+        label: HL_GATE_LABELS[10],
+        passed: !!hlPrice,
+        actual: hlPrice ? `$${hlPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : "nincs adat",
+        required: "elérhető",
+        hint: "HL allMids markPrice — paper-on testnet, live-on mainnet.",
+      });
       if (!hlPrice) {
-        results.push({ coin, action: "skip", reason: "no HL price" });
+        results.push({
+          coin, action: "skip", reason: "no HL price",
+          direction: signal.direction, edge: netEdgePre,
+          predictedProb: signal.finalProb, marketPrice: signal.marketPrice,
+          gates: snapGates(),
+        });
         continue;
       }
 
-      // 5. Size
+      // Gate 12 — Size > 0 after Kelly + tick-step rounding
       const sized = kellyToPerpSize({
         bankrollUSDC:   session.bankrollCurrent,
         kellyFraction:  signal.kellyFraction,
@@ -250,79 +393,34 @@ async function runHyperliquidTraderInner(
         maxPctBankroll: config.maxPctBankroll,
         coin,
       });
-      if (sized.sizeCoins <= 0) {
-        results.push({ coin, action: "skip", reason: "size rounds to zero" });
+      const sizeOk = sized.sizeCoins > 0;
+      coinGates.push({
+        label: HL_GATE_LABELS[11],
+        passed: sizeOk,
+        actual: sizeOk
+          ? `${sized.sizeCoins.toFixed(4)} ${coin} ($${sized.sizeUSDC.toFixed(0)} · ${sized.leverageUsed}× lev)`
+          : `0 ${coin}`,
+        required: "> 0",
+        hint: "Kelly × bankroll × leverage, lefelé kerekítve a coin tick-step-jére.",
+      });
+      if (!sizeOk) {
+        results.push({
+          coin, action: "skip", reason: "size rounds to zero",
+          direction: signal.direction, edge: netEdgePre,
+          predictedProb: signal.finalProb, marketPrice: signal.marketPrice,
+          gates: snapGates(),
+        });
         continue;
       }
 
       // 6a. Build the entry-decision snapshot before placing the order.
-      // All previous gates passed (we wouldn't be here otherwise), so the
-      // rationale popover renders a fully-green gate list. Same shape as
-      // crypto/index.mts so the UI's RationaleBlock works without a HL
-      // branch. The signal carries finalProb (combiner YES prob) and
-      // marketPrice (the underlying Polymarket YES price) directly.
+      // All gates passed → reuse the per-coin gate list verbatim for the
+      // frozen entry rationale popover ("Why?").
       const grossEdgeRationale = Math.abs(signal.edge);
       const netEdgeRationale   = decision.edge;
       const kellyCapRationale  = config.maxPctBankroll;
       const kellyCappedRationale = Math.min(signal.kellyFraction, kellyCapRationale);
-      const gatesRationale: import("../shared/types.mts").DecisionGate[] = [
-        {
-          label: "Session loss limit",
-          passed: true,
-          actual:   `$${session.sessionLoss.toFixed(2)}`,
-          required: `< $${config.sessionLossLimit.toFixed(2)}`,
-          hint: "A futó session nettó vesztesége nem érheti el a megadott felső határt.",
-        },
-        {
-          label: "Open positions ≤ max",
-          passed: true,
-          actual:   `${session.openPositions.length}`,
-          required: `≤ ${config.maxOpenPositions}`,
-          hint: "Egyszerre maximum N nyitott perp pozíció.",
-        },
-        {
-          label: "Consecutive losses < limit",
-          passed: true,
-          actual:   `${session.consecutiveLosses}`,
-          required: `< ${config.consecutiveLossLimit}`,
-          hint: "N egymás utáni veszteség után kötelező pause.",
-        },
-        {
-          label: "Coin cooldown",
-          passed: true,
-          actual:   "ready",
-          required: `${config.cooldownSeconds}s a legutóbbi trade óta`,
-          hint: "Ugyanazon a coin-on nem nyitunk pozíciót N másodpercen belül kétszer.",
-        },
-        {
-          label: "Aktív signal források",
-          passed: true,
-          actual:   `${signal.activeSignals}/5`,
-          required: "≥ 3",
-          hint: "HL-en a magasabb costa miatt minimum 3 signal konvergenciája kell.",
-        },
-        {
-          label: "Resolution risk ≠ SKIP",
-          passed: true,
-          actual:   signal.resolutionCategory ?? "OK",
-          required: "≠ SKIP",
-          hint: "Az alapul szolgáló piac resolution kockázata nem lehet SKIP.",
-        },
-        {
-          label: "Net edge ≥ küszöb",
-          passed: true,
-          actual:   `${netEdgeRationale >= 0 ? "+" : ""}${(netEdgeRationale * 100).toFixed(2)}% (gross ${(grossEdgeRationale * 100).toFixed(2)}% − fees ${(config.roundtripFeePct * 100).toFixed(2)}%)`,
-          required: `≥ ${(decision.threshold * 100).toFixed(1)}%`,
-          hint: "Edge - roundtrip taker fees, paper küszöb 12%, live 18%.",
-        },
-        {
-          label: "Méret > 0",
-          passed: true,
-          actual:   `${sized.sizeCoins.toFixed(4)} ${coin} ($${sized.sizeUSDC.toFixed(0)} · ${sized.leverageUsed}× lev)`,
-          required: "> 0",
-          hint: "Kelly × bankroll × leverage, lefelé kerekítve a coin tick-step-jére.",
-        },
-      ];
+      const gatesRationale = [...coinGates];
       const entryDecision: import("../shared/types.mts").EntryDecisionSnapshot = {
         decidedAt:        new Date().toISOString(),
         finalProb:        signal.finalProb,
@@ -369,7 +467,12 @@ async function runHyperliquidTraderInner(
         entryDecision,
       });
       if (!entry.ok || !entry.position) {
-        results.push({ coin, action: "error", reason: entry.error || "entry failed" });
+        results.push({
+          coin, action: "error", reason: entry.error || "entry failed",
+          direction: signal.direction, edge: netEdgePre,
+          predictedProb: signal.finalProb, marketPrice: signal.marketPrice,
+          gates: snapGates(),
+        });
         continue;
       }
 
@@ -395,17 +498,23 @@ async function runHyperliquidTraderInner(
       // favorably (paper bias documented in paper-pnl-analysis.md).
       results.push({
         coin,
-        action:    "position_opened",
-        direction: signal.direction,
-        entry:     entry.position.entryPrice,
-        tp:        entry.position.tpPrice,
-        sl:        entry.position.slPrice,
-        size:      entry.position.sizeCoins,
+        action:        "position_opened",
+        direction:     signal.direction,
+        entry:         entry.position.entryPrice,
+        tp:            entry.position.tpPrice,
+        sl:            entry.position.slPrice,
+        size:          entry.position.sizeCoins,
+        notionalUSD:   sized.sizeUSDC,
+        leverage:      sized.leverageUsed,
+        edge:          netEdgeRationale,
+        predictedProb: signal.finalProb,
+        marketPrice:   signal.marketPrice,
+        gates:         snapGates(),
       });
     } catch (err: any) {
       log("ERROR", config.paperMode, { venue: "hyperliquid", coin, error: err.message });
       await alertError(`[hyperliquid] ${coin}: ${err.message}`);
-      results.push({ coin, action: "error", error: err.message });
+      results.push({ coin, action: "error", error: err.message, gates: snapGates() });
     }
   }
 

@@ -164,20 +164,147 @@ async function runFundingArbInner(): Promise<any> {
       }
     }
 
-    // 4. Open-check new positions
+    // 4. Per-coin scan: every coin emits a result row with the full gate
+    //    list, regardless of whether we end up opening a position. This
+    //    feeds the unified "X/Y gates ✓" chip + hover popover on the
+    //    FundingArbPanel — same UX as the other 3 bots.
     const bankroll = (await loadHlSession(config.paperMode)).bankrollCurrent;
     const maxCapital = bankroll * config.maxCapitalPct;
-    const openNow = openArbPositions(session);
-    const openCoinSet = new Set(openNow.map(p => p.coin));
+    const openCoinSet = new Set(openArbPositions(session).map((p) => p.coin));
+    const viableCoinSet = new Set(viable.map((o) => o.coin));
+    const oppByCoin = new Map(opportunities.map((o) => [o.coin, o]));
+    const ARB_GATE_LABELS = [
+      "Spread ≥ küszöb",
+      "Break-even hold ≤ max",
+      "Open interest ≥ küszöb",
+      "Per-coin uniqueness",
+      "Pozíció szám < max",
+      "Capital cap (sizing)",
+    ] as const;
+    function arbNotEval(label: string, hint?: string): import("../../shared/types.mts").DecisionGate {
+      return { label, passed: false, actual: "not evaluated", required: "—", hint };
+    }
+    type Gate = import("../../shared/types.mts").DecisionGate;
 
-    for (const opp of viable) {
-      if (openArbPositions(session).length >= config.maxArbPositions) break;
-      if (openCoinSet.has(opp.coin)) continue;
+    for (const coin of ARB_COINS) {
+      // Note: a coin may have been closed earlier this tick (its row is
+      // already in `results`). We still evaluate it here so the operator
+      // sees the post-close scan verdict — typically "skip" because the
+      // spread that just triggered the close is below the open threshold.
+      const opp = oppByCoin.get(coin);
+      const coinGates: Gate[] = [];
+      const snapGates = (): Gate[] => {
+        const list = [...coinGates];
+        for (let i = list.length; i < ARB_GATE_LABELS.length; i++) {
+          list.push(arbNotEval(ARB_GATE_LABELS[i]));
+        }
+        return list;
+      };
 
+      // No funding data at all (scan failed for this coin).
+      if (!opp) {
+        coinGates.push(arbNotEval(ARB_GATE_LABELS[0], "Funding rate scan failed for this coin."));
+        results.push({
+          coin, action: "skip", reason: "no funding data", gates: snapGates(),
+        });
+        continue;
+      }
+
+      // Gate 1 — Spread ≥ minimum hourly
+      const spreadOk = opp.spread >= config.minSpreadHourly;
+      coinGates.push({
+        label: ARB_GATE_LABELS[0],
+        passed: spreadOk,
+        actual: `${(opp.spread * 100).toFixed(4)}%/h`,
+        required: `≥ ${(config.minSpreadHourly * 100).toFixed(4)}%/h`,
+        hint: "HL hourly funding − Binance hourly funding.",
+      });
+
+      // Gate 2 — Fee-aware break-even hold
+      const totalFees = config.feeRoundtripHl + config.feeRoundtripBinance;
+      const breakEvenH = totalFees / Math.max(opp.spread, 1e-9);
+      const breakEvenDays = breakEvenH / 24;
+      const beOk = spreadOk && breakEvenDays <= config.maxHoldDays;
+      coinGates.push({
+        label: ARB_GATE_LABELS[1],
+        passed: beOk,
+        actual: spreadOk ? `${breakEvenDays.toFixed(1)}d` : "spread fail",
+        required: `≤ ${config.maxHoldDays}d`,
+        hint: "Spread × holdHours fedezze a teljes roundtrip fee-t.",
+      });
+
+      // Gate 3 — Open interest floor
+      const oiOk = opp.openInterestUSD >= config.minOpenInterestUSD;
+      coinGates.push({
+        label: ARB_GATE_LABELS[2],
+        passed: oiOk,
+        actual: `$${(opp.openInterestUSD / 1e6).toFixed(1)}M`,
+        required: `≥ $${(config.minOpenInterestUSD / 1e6).toFixed(0)}M`,
+        hint: "Vékony piacon a hedge nem fillel slippage nélkül.",
+      });
+
+      // Gate 4 — Per-coin uniqueness (no existing arb position)
+      const uniqOk = !openCoinSet.has(coin);
+      coinGates.push({
+        label: ARB_GATE_LABELS[3],
+        passed: uniqOk,
+        actual: uniqOk ? "no existing arb position" : "already open",
+        required: "no duplicate",
+        hint: "Egy coinra max 1 nyitott arb pozíció.",
+      });
+
+      // Gate 5 — Position-count cap
+      const posCount = openArbPositions(session).length;
+      const posOk = posCount < config.maxArbPositions;
+      coinGates.push({
+        label: ARB_GATE_LABELS[4],
+        passed: posOk,
+        actual: `${posCount}`,
+        required: `< ${config.maxArbPositions}`,
+        hint: "Egyszerre legfeljebb N arb pozíció.",
+      });
+
+      // Coin must pass gates 1–5 to be opening-eligible.
+      const isViable = viableCoinSet.has(coin);
+      const eligible = isViable && uniqOk && posOk;
+
+      if (!eligible) {
+        // Build a row reason — prefer the detector's wording, then the
+        // session-level fail.
+        let reason = opp.reason || "not viable";
+        if (!uniqOk) reason = `Already have open arb position on ${coin}`;
+        else if (!posOk) reason = `Max arb positions (${config.maxArbPositions}) reached`;
+        // Fill gate 6 as not-evaluated (no sizing attempted).
+        coinGates.push(arbNotEval(ARB_GATE_LABELS[5], "Sizing only happens on viable+open-eligible rows."));
+        results.push({
+          coin, action: "skip", reason,
+          spreadHourly:    parseFloat((opp.spread * 100).toFixed(4)),
+          spreadAnnualized: parseFloat(opp.spreadAnnualized.toFixed(1)),
+          openInterestM:   parseFloat((opp.openInterestUSD / 1e6).toFixed(1)),
+          gates: snapGates(),
+        });
+        continue;
+      }
+
+      // Gate 6 — Capital cap + sizing.
       const used = deployedCapital(session);
       const headroom = maxCapital - used;
       if (headroom <= 0) {
-        results.push({ coin: opp.coin, action: "skip", reason: `Capital cap reached ($${maxCapital.toFixed(0)})` });
+        coinGates.push({
+          label: ARB_GATE_LABELS[5],
+          passed: false,
+          actual: `headroom $${headroom.toFixed(0)}`,
+          required: `headroom ≥ $${config.minPositionUSDC} · ≤ ${(config.maxCapitalPct * 100).toFixed(0)}% bankroll`,
+          hint: "min(headroom × 0.5, OI × 0.1%) sizing.",
+        });
+        results.push({
+          coin, action: "skip", reason: `Capital cap reached ($${maxCapital.toFixed(0)})`,
+          spreadHourly:    parseFloat((opp.spread * 100).toFixed(4)),
+          spreadAnnualized: parseFloat(opp.spreadAnnualized.toFixed(1)),
+          openInterestM:   parseFloat((opp.openInterestUSD / 1e6).toFixed(1)),
+          gates: snapGates(),
+        });
+        // Capital is shared across coins — once cap is hit, no further opens.
         break;
       }
 
@@ -189,9 +316,29 @@ async function runFundingArbInner(): Promise<any> {
         : headroom;
       const sizeUSDC = Math.min(headroom * 0.5, oiCap);
       if (sizeUSDC < config.minPositionUSDC) {
-        results.push({ coin: opp.coin, action: "skip", reason: `Size $${sizeUSDC.toFixed(0)} < min $${config.minPositionUSDC}` });
+        coinGates.push({
+          label: ARB_GATE_LABELS[5],
+          passed: false,
+          actual: `$${sizeUSDC.toFixed(2)} (headroom $${headroom.toFixed(0)})`,
+          required: `≥ $${config.minPositionUSDC} · ≤ ${(config.maxCapitalPct * 100).toFixed(0)}% bankroll`,
+          hint: "min(headroom × 0.5, OI × 0.1%) sizing.",
+        });
+        results.push({
+          coin, action: "skip", reason: `Size $${sizeUSDC.toFixed(0)} < min $${config.minPositionUSDC}`,
+          spreadHourly:    parseFloat((opp.spread * 100).toFixed(4)),
+          spreadAnnualized: parseFloat(opp.spreadAnnualized.toFixed(1)),
+          openInterestM:   parseFloat((opp.openInterestUSD / 1e6).toFixed(1)),
+          gates: snapGates(),
+        });
         continue;
       }
+      coinGates.push({
+        label: ARB_GATE_LABELS[5],
+        passed: true,
+        actual: `$${sizeUSDC.toFixed(2)} (${bankroll > 0 ? ((sizeUSDC / bankroll) * 100).toFixed(1) : "0"}% of bankroll)`,
+        required: `≥ $${config.minPositionUSDC} · ≤ ${(config.maxCapitalPct * 100).toFixed(0)}% bankroll`,
+        hint: "min(headroom × 0.5, OI × 0.1%) sizing.",
+      });
 
       // Build the spread-flavor entry-decision snapshot — same
       // `EntryDecisionSnapshot` shape as crypto/weather/HL, so the
@@ -223,50 +370,15 @@ async function runFundingArbInner(): Promise<any> {
         activeSignals:    0,
         signalBreakdown:  null,
         obImbalance:      null,
-        gates: [
-          {
-            label: "Spread ≥ küszöb",
-            passed: true,
-            actual:   `${(opp.spread * 100).toFixed(4)}%/h`,
-            required: `≥ ${(config.minSpreadHourly * 100).toFixed(4)}%/h`,
-            hint: "HL hourly funding − Binance hourly funding, fee-aware küszöb felett.",
-          },
-          {
-            label: "Open interest ≥ küszöb",
-            passed: true,
-            actual:   `$${(opp.openInterestUSD / 1e6).toFixed(1)}M`,
-            required: `≥ $${(config.minOpenInterestUSD / 1e6).toFixed(0)}M`,
-            hint: "Vékony piacon a hedge nem fillel slippage nélkül.",
-          },
-          {
-            label: "Per-coin uniqueness",
-            passed: true,
-            actual:   "no existing arb position on this coin",
-            required: "no duplicate",
-            hint: "Egy coinra max 1 nyitott arb pozíció.",
-          },
-          {
-            label: "Position count ≤ max",
-            passed: true,
-            actual:   `${session.positions.filter(p => !p.closedAt).length}`,
-            required: `≤ ${config.maxArbPositions}`,
-            hint: "Egyszerre legfeljebb N arb pozíció.",
-          },
-          {
-            label: "Capital cap (sizing)",
-            passed: true,
-            actual:   `$${sizeUSDC.toFixed(2)} (${(usedFracBankroll * 100).toFixed(1)}% of bankroll)`,
-            required: `headroom ≥ $${config.minPositionUSDC} · ≤ ${(capPct * 100).toFixed(0)}% bankroll`,
-            hint: "min(headroom × 0.5, OI × 0.1%) — soha nem leszünk a könyv értékelhető része.",
-          },
-        ],
+        // Reuse the per-coin gate list — all 6 already passed at this point.
+        gates: [...coinGates],
         reason: `Spread ${(opp.spread * 100).toFixed(4)}%/h (${opp.spreadAnnualized.toFixed(1)}%/yr ann.) ` +
                 `· OI $${(opp.openInterestUSD / 1e6).toFixed(1)}M · size $${sizeUSDC.toFixed(0)}`,
       };
 
       const resp = await openArbPosition(opp, sizeUSDC, config, entryDecision);
       if (!resp.ok || !resp.position) {
-        results.push({ coin: opp.coin, action: "error", error: resp.error });
+        results.push({ coin: opp.coin, action: "error", error: resp.error, gates: snapGates() });
         continue;
       }
       session = addArbPosition(session, resp.position);
@@ -285,6 +397,8 @@ async function runFundingArbInner(): Promise<any> {
         sizeUSDC:         parseFloat(sizeUSDC.toFixed(2)),
         spreadHourly:     opp.spread,
         spreadAnnualized: parseFloat(opp.spreadAnnualized.toFixed(1)),
+        openInterestM:    parseFloat((opp.openInterestUSD / 1e6).toFixed(1)),
+        gates:            snapGates(),
       });
     }
 

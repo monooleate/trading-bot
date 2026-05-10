@@ -1867,3 +1867,142 @@ A 16. session 9 finding-jéből most **mind closeolva**:
 | HL Directional | H1, H2, H3, H4, H5, §9.A, F2/F3, §9.B |
 | Funding-Arb | F1, F5, F2/F3, F7, F8 |
 
+
+# 2026-05-10 (h) — Auto-Trader: egységes "X/Y gates" chip minden bot scan-rétegén
+
+## Mit kért a felhasználó
+
+A 4 bot scan-listájában (Crypto / Weather / HL Perp / Funding-Arb) eddig
+két különböző mintát használtunk a gate-vizibilitásra:
+
+- **Crypto + Weather**: a `cryptoEntryCriteria` / `weatherEntryCriteria`
+  frontend mapper a row data + display.config alapján épített gate-listát,
+  és a `<CriteriaSummary>` chip ("X/Y gates ✓") + hover popover működött
+  minden soron.
+- **HL + Funding-Arb**: a `hlEntryCriteria(r, undefined)` /
+  `arbEntryCriteria(r, undefined)` hívás `cfg=undefined`-del jött, ezért
+  a mapper üres tömböt adott vissza → **a chip soha nem jelent meg**.
+
+A user kifejezetten kérte, hogy "minden bot-nál a scanned részen a
+lehetséges trade-knél minddnél egységesen látszódjon, hogy hányból hány
+gaten megy van nem ment át. ugyanúgy hooverrel, mint a weather éles
+trade-nél". Egységes UI a 4 boton.
+
+## Tervezés
+
+Két architektúra-alternatíva:
+
+- **A**: Backend ship-eli a per-row gate listát minden scan eredményen
+  (HL + F-Arb új field: `r.gates: DecisionGate[]`).
+- **B**: Frontend mapper kiterjesztése — backend külön shippeli a
+  szükséges field-eket (`signal.edge`, `signal.activeSignals`, ...) minden
+  skip soron, és a `hlEntryCriteria` / `arbEntryCriteria` ez alapján
+  építi a listát.
+
+A választás **A**: a HL/F-Arb decision-engine-ek pontosan tudják melyik
+gate bukott el elsőre (short-circuit pattern), és a session-state +
+config közvetlenül elérhető backend-en. Frontend-re shippelve duplikálnánk
+a gate definíciókat. Crypto/Weather is **változatlanul marad**, mert a
+frontend mapper-jeik már megfelelően működnek a row data-ból.
+
+## Backend változások
+
+### `auto-trader/hyperliquid/index.mts`
+
+Per-coin scan loop kibővítve egy 12-elemes ordered gate listával:
+
+1. Coin cooldown · 2. Signal forrás · 3. Volatility (RV) ≤ küszöb
+4. Session loss < limit · 5. Open pozíciók < max · 6. Consecutive losses < limit
+7. Coin nincs már nyitva · 8. Aktív signal források ≥ 3 · 9. Resolution risk ≠ SKIP
+10. Net edge ≥ küszöb · 11. HL price elérhető · 12. Méret > 0
+
+Minden gate **független evaluation** (nem short-circuit, mert a UI-nak
+pontos pass/fail kell minden gate-en). A `makeHlDecision` továbbra is
+short-circuit a tényleges trade-döntéshez, csak a gate-evaluation fut
+mellette párhuzamosan.
+
+Egy `snapGates()` helper minden `results.push()`-on egy padded snapshot-ot
+csinál: a már kiértékelt gate-ek pontos pass/fail-jét szállítja, a még
+ki-nem-értékelt gate-eket `passed: false, actual: "not evaluated"` mező-
+értékkel tölti, hogy az Y érték (összes gate) **stabil legyen** minden
+soron. Az operator szempontjából: 12/12 az ideális; 9/12 ⇒ 3 gate bukott
+vagy nem futott le.
+
+Skip soron most extra mezők is jönnek (ahol elérhetők):
+`direction`, `edge` (net), `predictedProb`, `marketPrice` — így a
+`ScanResultRow` chips-ek (model %, edge %, YES/NO chip) skip soron is
+megjelennek, nem csak a `position_opened` soron.
+
+### `auto-trader/hyperliquid/funding-arb/index.mts`
+
+A loop átírva — eddig csak a viable+open-eligible coinok kerültek a
+`results[]`-be, ezentúl **minden ARB_COIN egy sort kap** a teljes gate
+listával:
+
+1. Spread ≥ küszöb · 2. Break-even hold ≤ max · 3. Open interest ≥ küszöb
+4. Per-coin uniqueness · 5. Pozíció szám < max · 6. Capital cap (sizing)
+
+Egy coin akkor is megjelenik a scan-listában, ha az `arb-detector`
+`isViable: false`-t adott vissza (pl. spread túl alacsony) — eddig ezeket
+csak a `OpportunitiesCard` mutatta. Ennek köszönhetően a "Last Run" card
+most végre a teljes scan-state-et tükrözi, gate-ekkel.
+
+## Frontend változások
+
+### `shared/TraderResults.tsx`
+
+- `CriteriaGate.actual` és `CriteriaGate.required` mostantól **opcionális** —
+  szinkronban a backend `DecisionGate` shape-jével (egyes "not evaluated"
+  gate-ek üresen jönnek). Render side-on `?? "—"` / `?? ""` fallback.
+- `CriteriaSummary` chip új trail formátum: ha nem all-pass, "X/Y gates · N✗"
+  expliciten kiírja a bukott gate-ek számát (eddig csak "—" volt). Popover
+  header is mutatja: "Belépési kritériumok • X / Y teljesült · N bukás".
+
+### `trader/HyperliquidTrader.tsx` + `trader/FundingArbPanel.tsx`
+
+Mindkét panel első helyen ellenőrzi a backend `r.gates` mezőt:
+
+```typescript
+const criteria: CriteriaGate[] = Array.isArray(r.gates) && r.gates.length > 0
+  ? (r.gates as CriteriaGate[])
+  : hlEntryCriteria(r, undefined);  // legacy fallback
+```
+
+Régi deploy-ok (gates nélküli payload) továbbra is renderlik a frontend
+mapper-ből, csak üresen — fallback szerep.
+
+F-Arb panel chip set bővítve: `OI $XXM` chip + `spreadAnnualized` tone-os
+színkódolása (≥30%/yr zöld, ≥5%/yr narancs, alatta piros).
+
+## Hatás a deploy után
+
+- **Crypto + Weather**: változatlan viselkedés (frontend mapper marad).
+- **HL Perp**: minden 3 scan-elt coin (BTC/ETH/SOL) sora kap egy "X/12 gates"
+  chipet, hover-en a teljes pre-flight checklist `actual` és `required`
+  oszloppal. Cooldown-os coin: `0/12 ✓` chip + popover első sora ✗ Coin
+  cooldown.
+- **Funding-Arb**: minden 5 scan-elt coin (BTC/ETH/SOL/XRP/AVAX) sor egy
+  "X/6 gates" chippel. Spread<küszöb mind az 5 coinon ⇒ "0/6" chipek a
+  hover-en a pontos spread × required threshold-dal.
+
+## Mit nem változtattam
+
+- A 4 bot Tab 1 stat grid + control row + Reset/Export gomb stb. — nem
+  érintve.
+- A scan-row inline blocker-line (✗ first failed gate) marad — a chip
+  összegez, a blocker-line "elrontás-fókuszú".
+- A `OpenPositionsCard` "Why?" panel — már korábban kapott gate-listát az
+  `entryDecision` snapshot-on keresztül (15. session); most a F-Arb
+  side-on a coinGates-et reuse-olja az entryDecision építésekor (eddig
+  hardcoded passed:true volt).
+- TS check zöld (`tsc --noEmit` exit 0), Astro build zöld (9 page).
+
+## Hova nyúlj legközelebb
+
+- Új scan-gate hozzáadása HL-en: `HL_GATE_LABELS` array + új
+  `coinGates.push({...})` blokk a megfelelő helyen az index.mts-ben.
+  A frontend automatikusan rendererel.
+- Új scan-gate F-Arb-en: `ARB_GATE_LABELS` + új gate evaluation a loop-ban.
+- Crypto + Weather is migrálható backend-driven gate-hez a jövőben (a
+  jelenlegi frontend mapper csak a row data subset-jét látja, a backend
+  gate-pipeline pontosabb és bővíthetőbb).
