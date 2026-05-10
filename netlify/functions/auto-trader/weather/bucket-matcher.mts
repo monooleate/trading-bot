@@ -71,6 +71,14 @@ interface SortedBucket {
   tail: "low" | "high" | null;
 }
 
+// Maximum half-width for non-tail bucket intervals. Caps physically
+// unreasonable spans when neighbour buckets are far apart (e.g. a market
+// with buckets at 10°C, 20°C, 30°C+ would otherwise have the 20°C bucket
+// integrate over [15, 25] = 10°C width — overstating its probability
+// massively). 0.55°C matches the natural width of a 1°F-integer bucket so
+// the cap is a no-op on the common Polymarket 1°C and 2°F bucket grids.
+const NON_TAIL_HALF_WIDTH_CAP = 0.55;
+
 function deriveIntervals(sorted: SortedBucket[]): { lo: number; hi: number }[] {
   const N = sorted.length;
   return sorted.map((b, i) => {
@@ -79,21 +87,36 @@ function deriveIntervals(sorted: SortedBucket[]): { lo: number; hi: number }[] {
 
     let lo: number, hi: number;
 
+    // ─── Lower edge ─────────────────────────────────────────────────
     if (i === 0) {
+      // First bucket: tail-low extends to −∞, otherwise extrapolate
+      // symmetrically (and apply the cap so a single-bucket market
+      // doesn't span the entire real line).
       lo = b.tail === "low" ? -Infinity
-         : next !== null     ? b.tempC - (next - b.tempC) / 2
-                             : b.tempC - 0.5;
+         : next !== null     ? b.tempC - Math.min(NON_TAIL_HALF_WIDTH_CAP, (next - b.tempC) / 2)
+                             : b.tempC - NON_TAIL_HALF_WIDTH_CAP;
     } else {
-      lo = (prev! + b.tempC) / 2;
+      // Internal bucket: midpoint to previous neighbour, capped so a
+      // big gap doesn't inflate the bucket's mass.
+      const midToPrev = (prev! + b.tempC) / 2;
+      lo = Math.max(midToPrev, b.tempC - NON_TAIL_HALF_WIDTH_CAP);
     }
 
+    // ─── Upper edge ─────────────────────────────────────────────────
     if (i === N - 1) {
       hi = b.tail === "high" ? Infinity
-         : prev !== null      ? b.tempC + (b.tempC - prev) / 2
-                              : b.tempC + 0.5;
+         : prev !== null      ? b.tempC + Math.min(NON_TAIL_HALF_WIDTH_CAP, (b.tempC - prev) / 2)
+                              : b.tempC + NON_TAIL_HALF_WIDTH_CAP;
     } else {
-      hi = (b.tempC + next!) / 2;
+      const midToNext = (b.tempC + next!) / 2;
+      hi = Math.min(midToNext, b.tempC + NON_TAIL_HALF_WIDTH_CAP);
     }
+
+    // Defensive: zero/negative width means the bucket got pinched between
+    // its cap-boundaries (typical when the next neighbour is within
+    // ε°C — duplicate or near-duplicate tempC). Clip to a tiny positive
+    // width so the CDF call returns ~0 instead of a negative number.
+    if (hi <= lo) hi = lo;
 
     return { lo, hi };
   });

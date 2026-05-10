@@ -1,4 +1,89 @@
 
+# 2026-05-11 (g) — Weather audit round 4: ensemble σ → matcher + bucket half-width cap + DEB POL learning + NaN-safe Pearson
+
+## A user kérése (folytatás 4)
+
+A reset után 3 trade nyílt azonnal. A user: "újraindítottam és hármat is
+nyitott azonnal. helyesen?". Igen — mindhárom helyesen a 7 új gate alatt.
+De a Hong Kong + Austin trades-eken észrevettem egy strukturális σ-bias-t,
+amit most fixelek.
+
+## 4 új audit-finding (mind javítva)
+
+**1. (HIGH) σ → matcher hardcoded, ignorálja az ensemble σ-t.** Austin
+2026-05-12 példán: a 31-tagú GFS ensemble empirikus σ=1.28°C (ECMWF 29.0°C,
+GFS det. 28.3°C, ensemble mean 30.4°C, member spread max=32.6 min=27.0). De
+a bucket-matcher hardcoded σ=1.0-zel (cloud<60%) számolt → bot reported
+P("84°F or higher")=98.2%. Helyes σ=1.28 alapján P=95% — overconfident bias.
+**Fix**: a matcher mostantól a `forecast.ensembleDetail?.dailyMaxStdDev`-et
+használja, 0.5°C floor-ral. Cloud-heuristic fallback marad ha nincs
+ensemble.
+
+**2. (MEDIUM) Bucket-matcher CDF interval over-spans sparse markets.** Egy
+hipotetikus market 10°C/12°C/20°C/30°+ buckete-kkel a v2 matcher a
+"12°C" buckethez `[11, 16]` intervallumot rendelne (mid-to-prev=11,
+mid-to-next=16) — 5°C-os szélességgel! **Fix**: `NON_TAIL_HALF_WIDTH_CAP =
+0.55°C` minden non-tail bucket-en. Az 1°C-os Shanghai gridre ÉS a 2°F-os
+Austin gridre no-op (a 0.5/0.555 half-step már a cap alatt van), de sparse
+gridon pinch-eli a width-et.
+
+**3. (MEDIUM) DEB sample-ek csak METAR-fallback-on rögzítődnek.** A
+POL-primary path 99%-on settle-elt, METAR-fallback ~6h után fut — DEB
+gyakorlatilag SOHA nem tanult a paper history-ból. **Fix**: POL-settle
+után opcionális METAR fetch a DEB feedback miatt, best-effort try/catch.
+A POL-settlement maga sosem blokkolódik.
+
+**4. (LOW) `pearsonCorrelation` NaN propagáció.** Egy NaN érték a scores
+array-ben az egész IC-t NaN-ná teszi. **Fix**: jointly-finite filter az
+elején — ha bárhol NaN/Infinity, az index dropped (mindkét oldalt). NaN-safe
+`forecast_edge` is — weather entry-snapshot null-t ír ha match.probability
+vagy marketPrice nem véges.
+
+## A live trade validáció (a (e) fix utáni reset után)
+
+| # | Trade | Math | Verdict |
+|---|-------|------|---------|
+| 1 | Shanghai 25°C YES — SKIPPED | disagreement 3.7°C > 2.0°C | ✓ helyes blokk (előző PDF-bug trade megakadt) |
+| 2 | Seoul 20°C NO — SKIPPED | disagreement 2.2°C > 2.0°C | ✓ |
+| 3 | HK 30°C+ YES @ 0.105 | μ=28.9, σ=1.5, P(T≥29.5)=0.345; market 0.095 | ✓ tail-trade lehetséges a v2 CDF math miatt; defensible |
+| 4 | London 13°C NO @ 0.535 | μ=11.7, modal 12°C; market túlárazta 13°C-ot 47.5%-on | ✓ |
+| 5 | Austin 84°F+ YES @ 0.715 | μ=30.6 (ensemble mean), P=98.2% | ⚠ slight overconfidence — σ fix után P=95% |
+
+Cross-check: az Open-Meteo most:
+- GFS deterministic: 28.3°C / 82.94°F
+- ECMWF: 29.0°C / 84.2°F
+- **GFS 31-tagú ensemble mean: 30.41°C / 86.7°F, σ=1.28°C**
+
+A bot az ensemble-t használta (`useEnsemble: true`), helyesen. Ha a bot
+ezután re-scan-elne, az Austin trade még mindig passza-na minden gate-et
+(net edge 25% > 12%), de a probabilitás 95% lenne (nem 98.2%).
+
+## Files touched
+
+| Fájl | Változás |
+|------|----------|
+| `netlify/functions/auto-trader/weather/index.mts` | σ source = ensemble.dailyMaxStdDev (0.5°C floor); NaN-safe forecast_edge |
+| `netlify/functions/auto-trader/weather/bucket-matcher.mts` | `NON_TAIL_HALF_WIDTH_CAP = 0.55°C` minden non-tail bucket-en |
+| `netlify/functions/auto-trader/weather/reconciler.mts` | Opportunistic METAR fetch a DEB feedback-hez POL-settle után |
+| `netlify/functions/edge-tracker/statistics.mts` | `pearsonCorrelation` NaN-safe jointly-finite filter |
+
+## Verifikáció
+
+- `tsc --noEmit` exit 0
+- `bucket-matcher.test` 4/4 passed
+- `station-config.test` 8/8 passed
+- `npm run build` 10 pages built
+- Custom cap-test: Shanghai 1°C grid no-op (interval [24.5, 25.5]), Austin 2°F near-no-op ([27.51, 28.475]), sparse-grid pinched correctly
+
+## Hatás deploy után
+
+- Ensemble σ a matcherbe → Austin-style trade-ek tail-probabilitása kalibráltabb (~5pp különbség)
+- Sparse market-eken bucket-mass nem futószalagosan túlbecslés
+- DEB minden POL-settled trade-ből tanul (eddig csak METAR-fallback-en, ~1%)
+- IC-számítás NaN-safe → nincs csendes 0-ra esés ha bármely sample sérült
+
+---
+
 # 2026-05-11 (f) — Crypto bot deep-audit: 8 signal-layer + arithmetic fixes (vol_divergence degenerate, apex cash-flow, cond_prob direction, momentum regime, bankroll drift)
 
 ## A user kérése

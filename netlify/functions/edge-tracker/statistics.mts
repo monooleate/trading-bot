@@ -16,18 +16,30 @@ function stdDev(xs: number[]): number {
 
 /**
  * Pearson correlation between two numeric arrays.
- * Returns 0 if either array is constant or length mismatch.
+ * Returns 0 if either array is constant, length mismatches, or fewer than
+ * 2 finite pairs remain after dropping NaN/Infinity. Pairs are kept
+ * jointly: dropping requires BOTH values to be finite, otherwise the index
+ * is excluded from both sides.
  */
 export function pearsonCorrelation(xs: number[], ys: number[]): number {
   if (xs.length !== ys.length || xs.length < 2) return 0;
-  const mx = mean(xs);
-  const my = mean(ys);
+  // Drop indexes where either side is non-finite, jointly.
+  const fx: number[] = [];
+  const fy: number[] = [];
+  for (let i = 0; i < xs.length; i++) {
+    if (Number.isFinite(xs[i]) && Number.isFinite(ys[i])) {
+      fx.push(xs[i]); fy.push(ys[i]);
+    }
+  }
+  if (fx.length < 2) return 0;
+  const mx = mean(fx);
+  const my = mean(fy);
   let num = 0;
   let dx = 0;
   let dy = 0;
-  for (let i = 0; i < xs.length; i++) {
-    const a = xs[i] - mx;
-    const b = ys[i] - my;
+  for (let i = 0; i < fx.length; i++) {
+    const a = fx[i] - mx;
+    const b = fy[i] - my;
     num += a * b;
     dx += a * a;
     dy += b * b;

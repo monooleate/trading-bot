@@ -228,8 +228,20 @@ export async function runWeatherReconciler(paperMode: boolean = true): Promise<R
       pnl,
     });
 
-    // Record DEB sample only when we know the actual METAR (Polymarket
-    // resolution doesn't tell us the exact temperature, just the bucket).
+    // Record DEB sample so the model-weight tuner gets per-city feedback on
+    // which forecast model (GFS/ECMWF/NOAA) was closest to the actual
+    // outcome. Two paths:
+    //   - METAR-fallback already knows the precise dailyMaxC → record
+    //     immediately.
+    //   - Polymarket-primary doesn't ship the exact temperature, just which
+    //     bucket won. Fire an opportunistic METAR fetch (best-effort, may
+    //     fail or return null in which case DEB skips this sample).
+    //
+    // Before this fix (2026-05-11 round-4): DEB only learned from METAR
+    // fallback ticks, which fire only when Polymarket hadn't settled within
+    // 6h of endDate — i.e. ~1% of trades. So DEB effectively never updated
+    // its weights from the bot's own paper history. Now it learns from
+    // every settled trade.
     if (actualMaxC !== null) {
       try {
         await recordDebSample(
@@ -238,10 +250,18 @@ export async function runWeatherReconciler(paperMode: boolean = true): Promise<R
         );
       } catch { /* DEB is best-effort */ }
     } else if (source === "polymarket") {
-      // We could fire a separate METAR fetch just for the DEB feedback even
-      // when Polymarket already settled the trade. Out of scope for this
-      // first iteration — DEB will start learning from METAR-fallback ticks
-      // and from real recordings the user makes manually.
+      try {
+        const station = getStation(meta.city);
+        if (station) {
+          const metar = await fetchMetarDailyMax(meta.stationIcao, meta.date, station.tz);
+          if (metar && Number.isFinite(metar.dailyMaxC)) {
+            await recordDebSample(
+              meta.city, meta.date, metar.dailyMaxC,
+              { gfs: meta.rawGfsMaxC, ecmwf: meta.rawEcmwfMaxC, noaa: meta.rawNoaaMaxC },
+            );
+          }
+        }
+      } catch { /* DEB is best-effort; POL settled trade is unaffected */ }
     }
 
     details.push({

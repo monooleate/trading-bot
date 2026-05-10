@@ -297,7 +297,19 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
       });
 
       // 5. Match to bucket
-      const sigma = forecast.cloudCoverPct > 60 ? 1.5 : 1.0;
+      //
+      // σ choice (2026-05-11 follow-up): when the 31-member GFS ensemble is
+      // available, its empirical stddev is the right uncertainty estimate
+      // for the matcher. Falls back to the cloud-cover heuristic when
+      // ensemble fetch fails or returns fewer than 5 members. The 0.5°C
+      // floor protects against ensemble agreement-overshoot (members
+      // accidentally clustering into a tight σ doesn't mean the true
+      // forecast skill is sub-half-a-degree).
+      const ensembleSigma = forecast.ensembleDetail?.dailyMaxStdDev;
+      const sigma =
+        typeof ensembleSigma === "number" && Number.isFinite(ensembleSigma) && ensembleSigma > 0
+          ? Math.max(0.5, ensembleSigma)
+          : (forecast.cloudCoverPct > 60 ? 1.5 : 1.0);
       const match = matchBucket(forecast.predictedMaxC, market.outcomes, sigma);
       if (!match) {
         results.push({
@@ -400,6 +412,10 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
         // signal-vs-outcome correlation specific to weather. Without it the
         // gate could never pass since signalBreakdown was null and IC was
         // structurally 0 — blocking weather from ever reaching live mode.
+        // NaN-safe: if either input is non-finite, leave forecast_edge null
+        // so the IC computation skips this sample instead of polluting the
+        // Pearson sum with NaN.
+        const rawForecastEdge = match.probability - decision.marketPrice;
         const weatherSignals: SignalBreakdown = {
           funding_rate:    null,
           orderflow:       null,
@@ -409,7 +425,7 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
           momentum:        null,
           contrarian:      null,
           pairs_spread:    null,
-          forecast_edge:   match.probability - decision.marketPrice,
+          forecast_edge:   Number.isFinite(rawForecastEdge) ? rawForecastEdge : null,
         };
         const entryDecision: EntryDecisionSnapshot = {
           decidedAt:        new Date().toISOString(),
