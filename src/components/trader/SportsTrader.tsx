@@ -85,7 +85,10 @@ export default function SportsTrader({ bankroll }: { bankroll?: number }) {
 
   const doAction = useCallback(async (action: string) => {
     setError(null);
-    const extras = action === "reset" && typeof bankroll === "number"
+    // Send bankroll on both reset (always) and run (so the first run on
+    // a fresh session — e.g. after a simVersion bump — picks up the
+    // user's UI bankroll value instead of the hardcoded $50 default).
+    const extras = (action === "reset" || action === "run") && typeof bankroll === "number"
       ? { bankroll }
       : undefined;
     const r = await run(action, extras);

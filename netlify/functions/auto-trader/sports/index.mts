@@ -35,11 +35,21 @@ const CATEGORY = "sports" as const;
 
 // ─── Main run loop ────────────────────────────────────────────────────
 
-async function runSportsTrader(source: "manual" | "cron"): Promise<any> {
+async function runSportsTrader(
+  source: "manual" | "cron",
+  initialBankroll?: number,
+): Promise<any> {
   await markRunStart(source).catch(() => {});
 
   const config = getSportsConfig();
-  let session = await loadSportsSession(config.paperMode, SPORTS_DEFAULT_BANKROLL);
+  // User's bankroll-input wins on first-load (session never existed or
+  // just got auto-archived by a simVersion bump). Once the session is
+  // alive, loadSportsSession ignores `initialBankroll` and reads the
+  // persisted bankrollCurrent — use Reset to change a live bankroll.
+  let session = await loadSportsSession(
+    config.paperMode,
+    initialBankroll && initialBankroll > 0 ? initialBankroll : SPORTS_DEFAULT_BANKROLL,
+  );
 
   if (session.stopped) {
     const result = {
@@ -289,7 +299,7 @@ const botDefinition: BotDefinition = {
   label:    "Sports",
   subtitle: "Contrarian fan-bias fade • Polymarket sports markets",
   venue:    "Polymarket",
-  run:      ({ source }) => runSportsTrader(source),
+  run:      ({ source, bankrollOverride }) => runSportsTrader(source, bankrollOverride),
   getStatus: getSportsStatus,
   reset:    sportsReset,
   stop:     sportsStop,

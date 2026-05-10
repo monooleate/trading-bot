@@ -9,6 +9,31 @@ import type { SportsMarket, SportsLeague } from "./types.mts";
 
 const FETCH_TIMEOUT = 8000;
 
+// Question patterns matching mutex tournament/award markets where the
+// underlying outcome space is exclusive — only ONE team/player wins the
+// championship, MVP, etc. On Polymarket these often appear as ONE event
+// per candidate ("Will Arsenal win the 2025-26 EPL?" — 1 market each),
+// so the event-level liveCount filter doesn't catch them. The
+// contrarian fan-bias fade is invalid here: implied YES prices sum to
+// 1.0 across all candidates, and a sub-15¢ YES is a RATIONAL long-tail
+// prior, not bias.
+const MUTEX_QUESTION_PATTERNS: RegExp[] = [
+  /\bwin\s+the\s+\d{4}(?:[-–]\d{2,4})?\b/i,                // "win the 2026" / "win the 2025-26"
+  /\bwin\s+the\s+(?:nba|nfl|mlb|nhl|epl|premier\s+league|champions\s+league|world\s+cup|world\s+series|stanley\s+cup|super\s+bowl|nba\s+finals?)\b/i,
+  /\bmvp\b/i,                                              // any MVP race
+  /\b(?:player|rookie|coach)\s+of\s+the\s+(?:year|month)\b/i,
+  /\bchampion(?:ship)?\s+winner\b/i,
+  /\bdivision\s+(?:champion|winner)\b/i,
+  /\b(?:conference|league)\s+(?:champion|winner)\b/i,
+  /\bfinals?\s+(?:winner|champion|mvp)\b/i,
+  /\bplayer\s+won\s+the\b/i,
+  /\bto\s+win\s+(?:the\s+)?(?:nba|nfl|mlb|nhl|epl|premier|champions|world)/i,
+];
+
+export function isMutexQuestion(q: string): boolean {
+  return MUTEX_QUESTION_PATTERNS.some((p) => p.test(q));
+}
+
 // League detection from question text. Returns "Other" if no match —
 // the bot still considers these markets but reports a generic label.
 function detectLeague(q: string): SportsLeague {
@@ -101,6 +126,16 @@ export async function findSportsMarkets(opts: FinderOptions): Promise<SportsMark
     for (const m of markets) {
       if (m.closed === true || m.active === false) continue;
 
+      const question = String(m.question || m.title || evtQuestion);
+
+      // Per-market mutex question filter (2026-05-11 (l)): even if the
+      // event has only 1 sub-market, the underlying outcome may be
+      // mutex with other separate events — e.g. "Will Arsenal win
+      // 2025-26 EPL?" + "Will Man City win 2025-26 EPL?" are two
+      // independent events but exclusive outcomes. Block by keyword
+      // pattern.
+      if (isMutexQuestion(question)) continue;
+
       // End-date gate: skip markets too close to settlement.
       const endDate = String(m.endDate || "");
       if (!endDate) continue;
@@ -139,7 +174,6 @@ export async function findSportsMarkets(opts: FinderOptions): Promise<SportsMark
       // Skip already-resolved (price snapped to extremes).
       if (yp <= 0.001 || yp >= 0.999) continue;
 
-      const question = String(m.question || m.title || evtQuestion);
       out.push({
         slug:          String(m.slug || ""),
         conditionId:   String(m.conditionId || ""),

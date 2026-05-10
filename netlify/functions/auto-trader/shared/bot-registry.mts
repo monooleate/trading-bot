@@ -92,8 +92,16 @@ export interface BotDefinition {
    * Main scan/decide/execute loop.
    * @param ctx.source - "manual" (user click) vs "cron" (scheduled tick)
    * @param ctx.bodyOverride - rare: any-shape overrides from POST body
+   * @param ctx.bankrollOverride - user's bankroll input value, applied
+   *        if the bot's session is fresh (just archived or never existed).
+   *        After the session exists, bankrollOverride is ignored on run
+   *        — use Reset to change a live session's bankroll.
    */
-  run(ctx: { source: "manual" | "cron"; bodyOverride?: unknown }): Promise<unknown>;
+  run(ctx: {
+    source: "manual" | "cron";
+    bodyOverride?: unknown;
+    bankrollOverride?: number;
+  }): Promise<unknown>;
 
   /** Status snapshot for the UI. Must include `session: BotSessionBase` at minimum. */
   getStatus(): Promise<BotStatusResponse | unknown>;
@@ -180,7 +188,7 @@ export async function dispatchToRegistry(
 
   try {
     switch (input.action) {
-      case "run":     return { handled: true, result: await bot.run({ source: input.source, bodyOverride: input.bodyOverride }) };
+      case "run":     return { handled: true, result: await bot.run({ source: input.source, bodyOverride: input.bodyOverride, bankrollOverride: input.bankrollOverride }) };
       case "status":  return { handled: true, result: await bot.getStatus() };
       case "reset":   return { handled: true, result: await bot.reset(input.bankrollOverride) };
       case "stop":    return { handled: true, result: await bot.stop() };

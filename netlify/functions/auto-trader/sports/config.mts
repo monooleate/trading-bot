@@ -54,6 +54,11 @@ export function getSportsConfig(): SportsConfig {
 export const SPORTS_DEFAULT_BANKROLL = 50;  // $50 USDC paper-mode start
 // 2026-05-11 (k) bump: v1 sessions allowed mutex events (FIFA WC 32-way)
 // to slip through fan-bias-fade, opening systematically losing long-tail
-// YES positions. v2 adds the maxMarketsPerEvent filter; loading a v1
-// session auto-archives + starts fresh.
-export const SPORTS_SIM_VERSION      = 2;
+// YES positions. v2 added the maxMarketsPerEvent filter.
+//
+// 2026-05-11 (l) bump: v2 still let through per-event 1-market mutex
+// patterns like "Will Arsenal win the 2025-26 EPL?" — separate events
+// per candidate but mutually exclusive outcomes (only ONE team wins
+// EPL). v3 adds isMutexQuestion() — keyword filter on the question
+// text. Loading a v2 session auto-archives + starts fresh.
+export const SPORTS_SIM_VERSION      = 3;
