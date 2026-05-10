@@ -32,3 +32,7 @@ Thumbs.db
 # Logs
 *.log
 npm-debug.log*
+
+# External reference material (matekmegoldasok.hu structure — nem ehhez a projekthez tartozik)
+internal-docs/mathSEO_reference/
+

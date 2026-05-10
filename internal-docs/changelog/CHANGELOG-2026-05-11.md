@@ -1,5 +1,139 @@
 
-# 2026-05-11 (e) — Weather bot deep-audit round 2: NaN guards + reconciler tail boundary + weather live-readiness IC unblock
+# 2026-05-11 (f) — Crypto bot deep-audit: 8 signal-layer + arithmetic fixes (vol_divergence degenerate, apex cash-flow, cond_prob direction, momentum regime, bankroll drift)
+
+## A user kérése
+
+A 2026-05-11 (d) crypto audit (6 gate-layer fix) után a user: "crypto botra
+mélyelemzést! mindent, frontend, backend, jelek validsága amik alapján
+trade történik!". Az audit a 8 trading signal matematikai validitására,
+a session-state aritmetikájára és a UI rétegre fókuszált.
+
+## 8 új audit-finding (mind javítva)
+
+| # | Réteg | Probléma | Severity |
+|---|-------|----------|----------|
+| **A** | Signal: `vol_divergence` | A `iv = 2 × \|yp-0.5\| / √T × 100` Black-Scholes-szerű képlet rövid horizonton (T → 0) hatalmas IV-t számol — 15min BTC piacon yp=0.3 mellett iv ≈ 7,490%, ami RV (60%) ellenében minden esetben clamp 0.1-re esik. **A signal a BTC 5m/15m piacokon konstans 0.1**, NEM signal — szisztematikus NO-bias a combinerben. | 🔴 HIGH |
+| **B** | Session arithmetic | `closePosition` a `bankrollCurrent`-et `shares × exitPrice` (gross proceeds) képlettel növelte, miközben a `sessionPnL` a `trade.pnl` (fee-vel csökkentett) értékkel. `bankrollStart + sessionPnL ≠ bankrollCurrent` invariáns sértve — bankroll trade-enként ~3.6% × notional optimist drift. | 🟠 MEDIUM |
+| **C** | Signal: `apex_consensus` | A "wallet PnL" képlet csak a `/trades` feed cash flow-ját összegzi (`SELL → +cash, BUY → -cash`). A settlement-bevételt NEM látja → "top 10 wallets" valójában "top sellers". Egy 100% BUY wallet ami nyer is negatív "PnL"-t mutat. | 🟠 MEDIUM |
+| **D** | Signal: `cond_prob` | `violationDir` csak a `complement-check` előjelét vette, a `monoton-violation` magnitúdóját VAKON adta hozzá. Két különböző irányú violation kioltása nem működött — egy "YES overpriced via complement" + "YES underpriced via earlier related" rosszul kombinálódott. | 🟠 MEDIUM |
+| **E** | Signal: `momentum` | A Polymarket YES midpoint Rcum-ját trend-folytatásként interpretálta (`prob = 0.5 + rcum × 2.0`). DE a prediction market microstructure-ben gyors (>5%) mozgások tipikusan likviditás-driven, NEM informált → mean-reverting. A momentum-signal ezeken rossz irányba húz. | 🟡 LOW |
+| **F** | Statistics chart | `computeCumulativePnl` EV baseline `predictedProb`-ot direkt használja win-probability-ként, de NO trade-en a tényleges win-prob `1 - predictedProb`. Az EV vonal rossz irányba mutatott minden NO trade-en. | 🟡 LOW |
+| **G** | Frontend | `${activeSignals}/5 signals` chip a régi 5-signal max-ot mutatja; subtitle 5 signalt sorol fel (a 8 helyett); `RunResult.config` interface hiányolja az új `minPositionSizeUSDC` és `combinerConfidenceMin` mezőket. | 🟡 Cosmetic |
+| **H** | (G-vel együtt) | UI félrevezetés. | 🟡 Cosmetic |
+
+## A 8 fix
+
+### Fix A — `vol_divergence` horizon gate
+
+`signal-combiner.mts:getVolSignal`. Új `VOL_MIN_HORIZON_HOURS = 1`
+konstans. Ha a piac endDate-je <1h-n belül van → `prob: null` +
+`detail.skipped` reason. A combiner null-okat kihagy a súlyozott
+átlagból, `activeSignals` csökken egyel a rövid BTC piacokon.
+
+Empirikus impact: a 3 jelenleg nyitott pozíció `vol_divergence: 0.1`
+értéke onnan jött, hogy minden BTC 5m/15m piacon a clamp lefutott.
+A fix után a `vol_divergence: null` és az `activeSignals` 8 → 7 (még
+mindig ≥ 2 gate-en pass-ol).
+
+### Fix B — `closePosition` bankroll-konzisztencia
+
+`session-manager.mts:closePosition`. Most a `pos.costBasis`-t lookup-olja
+a `buyOrderId` szerint, és `bankrollCurrent += trade.pnl + costBasis`.
+
+Bizonyítás:
+- addOpenPosition: `bankrollCurrent -= costBasis`
+- closePosition: `bankrollCurrent += pnl_net + costBasis`
+- net effect: `+ pnl_net` → invariáns `bankrollStart + sessionPnL === bankrollCurrent` ✓
+
+### Fix C — `apex_consensus` activity score
+
+`signal-combiner.mts:getApexSignal`. A "PnL" képlet helyett:
+- per-wallet `notional = Σ size × price` (total $ traded)
+- per-wallet `markets = distinct conditionIds traded`
+- score = `notional × √markets` (diminishing returns a market-diverzitásra)
+
+A "top 10" mostantól a leg-aktívabb traderek a 8h trade-window-on belül,
+amik tipikusan informált flow-t hordoznak. A részletes per-wallet PnL
+analysis (settlement-bevétel együtt) a `/apex-wallets` endpoint
+(Tab 8) dolga.
+
+### Fix D — `cond_prob` direction-aware
+
+`signal-combiner.mts:getCondProbSignal`. Új `complementSigned` és
+`monotonSigned` változók:
+- `complementSigned = -dev` (YES+NO > 1 → -1; YES+NO < 1 → +1)
+- `monotonSigned`: per-related-market signed contribution, externally
+  accumulated
+- `netSigned = complementSigned + monotonSigned` — két egymás-ellenes
+  violation **kiolthatja egymást**, az iránya a SUM-ből ered
+
+Magnitude a `|netSigned|`-en alapszik, 0.3-en cap-elve. A detail
+mezőben mind a 3 érték kiírva.
+
+### Fix E — `momentum` regime-aware
+
+`signal-combiner.mts:getMomentumSignal`. Új `REGIME_THRESHOLD = 0.05`:
+- `|rcum| < 5%` → trend (Jegadeesh-Titman): `prob = 0.5 + rcum × 2.0`
+- `|rcum| ≥ 5%` → mean-revert (likviditás-driven gyors mozgás):
+  `prob = 0.5 − rcum × 1.0` (kisebb multiplier — regime detection nem
+  tökéletes)
+
+`detail.regime` mező mostantól pontosan jelzi a UI-on.
+
+### Fix F — EV baseline direction-aware
+
+`statistics.mts:computeCumulativePnl`. `winProb = direction === "NO" ? 1
+- predictedProb : predictedProb`. A `evCum` chart mostantól helyes
+irányba mutat NO trade-eken is. Csak az Edge Tracker UI vonalat érinti
+— az IC számítás már korábban direction-aware volt.
+
+### Fix G+H — Frontend cosmetics
+
+`CryptoTrader.tsx`:
+- L253: subtitle mostantól mind a 8 signalt sorolja fel (FR/VPIN/VOL/APEX/CP/MOM/CTR/PRS).
+- L432: chip "X/8 signals" a régi "X/5" helyett, tooltip új 8-signal listával.
+- L140-153: `RunResult.config` interface bővítve `minPositionSizeUSDC?` és `combinerConfidenceMin?` opcionális mezőkkel.
+
+## Files touched
+
+| Fájl | Változás |
+|------|----------|
+| `netlify/functions/signal-combiner.mts` | 4 signal fix (A vol, C apex, D condprob, E momentum) — együtt ~120 LOC delta |
+| `netlify/functions/auto-trader/crypto/session-manager.mts` | `closePosition` bankroll képlet (B) |
+| `netlify/functions/edge-tracker/statistics.mts` | `computeCumulativePnl` EV winProb (F) |
+| `src/components/trader/CryptoTrader.tsx` | subtitle + chip max + config interface (G+H) |
+
+## Verifikáció
+
+| Lépés | Eredmény |
+|-------|----------|
+| `npx tsc --noEmit` (project files, sports-bot kivételével) | exit 0 |
+| `npm run build` | 10 pages built |
+| Logical sanity check a 8 fix-re egyenként | OK |
+
+## Hatás deploy után
+
+**Signal layer**:
+- A `vol_divergence` mostantól csak a daily / weekly BTC piacokon járul
+  hozzá a combinerhez. A 5m/15m piacokon `activeSignals` 8 → 7. Az IC
+  kalibráció pontosabb lesz, mert a konstans 0.1-es noise eltűnt.
+- `apex_consensus` top-N most a leg-aktívabb traders, NEM a top-sellers.
+- `cond_prob` direction-aware — ellentétes violation-ök kioltják egymást.
+- `momentum` regime-aware — gyors mozgásokon contrarian.
+
+**Session arithmetic**:
+- A `bankrollCurrent` mostantól PRECÍZEN követi a `bankrollStart + sessionPnL`-t. A jövőbeli closed trade-ek nem drift-elnek.
+- A 3 meglévő open pozíción a fix close-kor lép életbe — a régi
+  `bankrollCurrent` érték enyhén túlbecsült marad, de a sessionPnL helyes.
+
+**UI**:
+- "X/8 signals" pontosan tükrözi a backendet.
+- "Why?" panel hibátlan.
+
+`tsc --noEmit` exit 0 (project files), Astro build 10 page generated.
+
+---
+
 
 ## A user kérése (folytatás 2)
 

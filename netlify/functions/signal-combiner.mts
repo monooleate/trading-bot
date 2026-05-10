@@ -278,9 +278,34 @@ async function fetchCloses(limit: number): Promise<number[]> {
 }
 
 // ─── 1. VOL DIVERGENCE SIGNAL ─────────────────────────────────────────────────
-// Market-specific: az adott piac IV-jét hasonlítja a BTC RV-hez
+// Market-specific: az adott piac IV-jét hasonlítja a BTC RV-hez.
+//
+// Time-horizon gate (2026-05-11 audit fix #A): a Black-Scholes-szerű
+// `iv = 2 × |yp − 0.5| / √T × 100` képlet rövid horizonton (T → 0)
+// hatalmas IV-t számol — egy 15min BTC piacon yp=0.3 mellett iv ≈ 7,490%,
+// ami RV-vel (60%) szembe minden esetben clamp 0.1-re esik. Ez nem signal,
+// hanem konstans NO-bias minden 5m/15m BTC piacon. A vol-divergence
+// strukturálisan csak ≥ 1h horizonton értelmes, ezért az 1h alatti
+// piacokra null-t adunk vissza → a combiner kihagyja a súlyozott
+// átlagból, `activeSignals` csökken.
+const VOL_MIN_HORIZON_HOURS = 1;
+
 async function getVolSignal(market: MarketInfo): Promise<{ prob: number | null; detail: any }> {
   try {
+    // Time horizon hours-ban
+    let timeH = 0.25; // default 15min
+    if (market.endDate) {
+      const rem = (new Date(market.endDate).getTime() - Date.now()) / 3600000;
+      if (rem > 0 && rem < 720) timeH = rem; // max 30 days
+    }
+    // Short-horizon gate: a képlet T → 0 limit-en degenerált, mindig clamp-re esik.
+    if (timeH < VOL_MIN_HORIZON_HOURS) {
+      return {
+        prob: null,
+        detail: { skipped: "horizon < 1h, vol-divergence formula degenerate", timeH: timeH.toFixed(3) },
+      };
+    }
+
     const closes = await fetchCloses(15);
     if (closes.length < 3) return { prob: null, detail: { error: "no price data" } };
 
@@ -290,17 +315,12 @@ async function getVolSignal(market: MarketInfo): Promise<{ prob: number | null; 
 
     // IV from market price
     const yp = market.yesPrice;
-    let timeH = 0.25; // default 15min
-    if (market.endDate) {
-      const rem = (new Date(market.endDate).getTime() - Date.now()) / 3600000;
-      if (rem > 0 && rem < 720) timeH = rem; // max 30 days
-    }
     const T = timeH / (365 * 24);
     const iv = T > 0 ? (2 * Math.abs(yp - 0.5) / Math.sqrt(T)) * 100 : rv15;
 
     const spread = iv - rv15;
     const prob = Math.max(0.1, Math.min(0.9, 0.5 - (spread / 100) * 0.4));
-    return { prob, detail: { rv15: rv15.toFixed(1), iv: iv.toFixed(1), spread: spread.toFixed(1) } };
+    return { prob, detail: { rv15: rv15.toFixed(1), iv: iv.toFixed(1), spread: spread.toFixed(1), timeH: timeH.toFixed(2) } };
   } catch { return { prob: null, detail: null }; }
 }
 
@@ -342,7 +362,17 @@ async function getOrderflowSignal(market: MarketInfo): Promise<{ prob: number | 
 }
 
 // ─── 3. APEX CONSENSUS SIGNAL ─────────────────────────────────────────────────
-// Market-specific: top walletok trade-jeit szűri az adott piac conditionId-jára
+// Market-specific: top walletok trade-jeit szűri az adott piac conditionId-jára.
+//
+// Wallet ranking (2026-05-11 audit fix #C): a régi képlet a "PnL"-t úgy
+// számolta, hogy `SELL → +cash`, `BUY → -cash`. Ez csak a CASH FLOW, NEM a
+// realised PnL — egy 100% BUY wallet ami nyer a settlement-en is negatív
+// "PnL"-t mutatott (mert a settlement-bevétel nem szerepel a /trades
+// feedben). Így a "top 10" valójában a "top sellers" volt. Az új ranking
+// a wallet **aktivitását** méri: total notional traded × distinct markets,
+// ami a "honnan vannak az informált trader-ek" arányos proxy-ja. A
+// részletes per-wallet PnL kalkuláció a /apex-wallets endpoint dolga
+// (Tab 8) — ez a signal csak quick aggregate consensus.
 async function getApexSignal(market: MarketInfo): Promise<{ prob: number | null; detail: any }> {
   try {
     const tradesRes = await fetch(
@@ -353,22 +383,35 @@ async function getApexSignal(market: MarketInfo): Promise<{ prob: number | null;
     const allTrades: any[] = await tradesRes.json().then(d => Array.isArray(d) ? d : []);
     if (!allTrades.length) return { prob: null, detail: null };
 
-    // Aggregate PnL per wallet
-    const walletMap: Record<string, { pnl: number; trades: any[] }> = {};
+    // Aggregate activity per wallet — total notional + distinct markets.
+    // Distinct-markets count is a better diversity proxy than raw trade
+    // count (single-market spammers get filtered out by the multiplier).
+    const walletMap: Record<string, { notional: number; markets: Set<string>; trades: any[] }> = {};
     for (const t of allTrades) {
       const addr = t.proxyWallet || t.maker || "";
       if (!addr) continue;
-      if (!walletMap[addr]) walletMap[addr] = { pnl: 0, trades: [] };
+      if (!walletMap[addr]) walletMap[addr] = { notional: 0, markets: new Set(), trades: [] };
       const size  = parseFloat(t.size  || 0);
       const price = parseFloat(t.price || 0);
-      walletMap[addr].pnl += (t.side || "").toUpperCase() === "SELL" ? size * price : -(size * price);
+      walletMap[addr].notional += size * price;
+      const cid = String(t.conditionId || t.market || "");
+      if (cid) walletMap[addr].markets.add(cid);
       walletMap[addr].trades.push(t);
     }
 
-    // Top 10 wallets
+    // Top 10 wallets by activity score = notional × √distinctMarkets.
+    // √ shrinks the bonus so a wallet trading 100 markets isn't 10× a
+    // wallet trading 10 markets — diminishing returns matches the
+    // empirical "informed trader" pattern.
     const topWallets = Object.entries(walletMap)
-      .sort((a, b) => b[1].pnl - a[1].pnl)
-      .slice(0, 10);
+      .map(([addr, w]) => ({
+        addr,
+        score: w.notional * Math.sqrt(w.markets.size),
+        data: w,
+      }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 10)
+      .map((w) => [w.addr, w.data] as [string, { notional: number; markets: Set<string>; trades: any[] }]);
 
     // Filter trades for THIS market's conditionId
     const cid = market.conditionId;
@@ -419,17 +462,34 @@ async function getApexSignal(market: MarketInfo): Promise<{ prob: number | null;
 }
 
 // ─── 4. CONDITIONAL PROBABILITY SIGNAL ────────────────────────────────────────
-// Market-specific: az adott piac complement check + related markets monotonicity
+// Market-specific: az adott piac complement check + related markets monotonicity.
+//
+// Direction-aware violation (2026-05-11 audit fix #D): a régi kód a
+// `violationDir`-t csak a complement-check előjeléből származtatta, és
+// a monoton-violation magnitúdóját VAKON adta hozzá. Két különböző
+// violation-irány kioltása NEM működött — egy "YES overpriced via
+// complement" + "YES underpriced via earlier related" nettó signed
+// 0-ra konvergált volna a helyes képletben, de a régi kódban az
+// abszolút értékeket összeadta. Most:
+//
+//   - complementDir = ha complement > 1 → YES overpriced → -1 (NO bias)
+//                     ha complement < 1 → YES underpriced → +1 (YES bias)
+//   - monotonDir:   per-related-market signed contribution
+//   - netDir × magnitude → signed shift a 0.5-ről
 async function getCondProbSignal(market: MarketInfo): Promise<{ prob: number | null; detail: any }> {
   try {
-    // 1. Complement check for THIS market
+    // 1. Complement check for THIS market — signed
     const complement = market.yesPrice + market.noPrice;
     const dev = complement - 1.0;
+    // dev > 0 (YES+NO > 1) → YES overpriced → NO bias (−1)
+    // dev < 0 (YES+NO < 1) → YES underpriced → YES bias (+1)
+    const complementSigned = -dev;  // signed contribution toward p(YES)
 
     // 2. Search related markets for monotonicity violations
     const q = market.question.toLowerCase();
     const keywords = q.split(/\s+/).filter(w => w.length > 3).slice(0, 3);
-    let monotonViolation = 0;
+    let monotonSigned = 0;  // signed contribution from related markets
+    let monotonAbsSum = 0;  // for detail display only
     let relatedCount = 0;
 
     if (keywords.length > 0) {
@@ -452,14 +512,21 @@ async function getCondProbSignal(market: MarketInfo): Promise<{ prob: number | n
               const op = typeof r.outcomePrices === "string" ? JSON.parse(r.outcomePrices) : r.outcomePrices;
               const rYes = parseFloat(op?.[0] || 0.5);
               relatedCount++;
-              // If related market has earlier deadline, its price should be ≤ later deadline
+              // Monotonicity: P(YES by earlier deadline) ≤ P(YES by later deadline).
+              // Each violation contributes a SIGNED nudge toward the correct direction.
               if (r.endDate && market.endDate) {
                 const rEnd = new Date(r.endDate).getTime();
                 const mEnd = new Date(market.endDate).getTime();
                 if (rEnd < mEnd && rYes > market.yesPrice + 0.03) {
-                  monotonViolation = Math.max(monotonViolation, rYes - market.yesPrice);
+                  // Earlier related > our YES → our YES underpriced → +1
+                  const violation = rYes - market.yesPrice;
+                  monotonSigned += violation;
+                  monotonAbsSum += violation;
                 } else if (rEnd > mEnd && rYes < market.yesPrice - 0.03) {
-                  monotonViolation = Math.max(monotonViolation, market.yesPrice - rYes);
+                  // Later related < our YES → our YES overpriced → -1
+                  const violation = market.yesPrice - rYes;
+                  monotonSigned -= violation;
+                  monotonAbsSum += violation;
                 }
               }
             } catch {}
@@ -468,17 +535,27 @@ async function getCondProbSignal(market: MarketInfo): Promise<{ prob: number | n
       } catch {}
     }
 
-    const totalViolation = Math.abs(dev) + monotonViolation;
-    if (totalViolation < 0.02) return { prob: 0.5, detail: { complement: complement.toFixed(3), monotonicity: "ok", related: relatedCount } };
+    // Net signed signal — direction emerges from the SUM, not from a
+    // single component. Magnitude capped at 0.3 (±30% from 0.5).
+    const netSigned = complementSigned + monotonSigned;
+    const totalMagnitude = Math.abs(netSigned);
+    if (totalMagnitude < 0.02) {
+      return {
+        prob: 0.5,
+        detail: { complement: complement.toFixed(3), monotonicity: "ok", related: relatedCount },
+      };
+    }
 
-    const violationDir = dev > 0 ? -1 : 1;
-    const prob = Math.max(0.1, Math.min(0.9, 0.5 + violationDir * Math.min(totalViolation, 0.3)));
+    const shift = Math.sign(netSigned) * Math.min(totalMagnitude, 0.3);
+    const prob = Math.max(0.1, Math.min(0.9, 0.5 + shift));
     return {
       prob,
       detail: {
         complement: complement.toFixed(3),
-        complement_dev: (dev * 100).toFixed(1) + "¢",
-        monoton_violation: (monotonViolation * 100).toFixed(1) + "¢",
+        complement_signed: (complementSigned * 100).toFixed(1) + "¢",
+        monoton_signed:    (monotonSigned    * 100).toFixed(1) + "¢",
+        monoton_abs_sum:   (monotonAbsSum    * 100).toFixed(1) + "¢",
+        net_signed:        (netSigned        * 100).toFixed(1) + "¢",
         related: relatedCount,
       },
     };
@@ -605,14 +682,33 @@ async function getMomentumSignal(market: MarketInfo): Promise<{ prob: number | n
     }
 
     // Rcum = (P_now - P_past) / P_past — Kakushadze Eq. 3.1
+    //
+    // Regime-aware interpretation (2026-05-11 audit fix #E): a Polymarket
+    // YES midpoint mozgása reflexív — a saját piacunkat mérjük, NEM a BTC
+    // árat. Empirikus szabály: kis mozgások (|Rcum| < 5%) trend-folytatást
+    // jeleznek (Jegadeesh & Titman), de >5% gyors mozgások a prediction
+    // market microstructure-ben tipikusan likviditás-driven és
+    // mean-reverting. A momentum-signalt ezért két regime-re osztjuk:
+    //
+    //   |rcum| < 5%  → momentum mode: prob = 0.5 + rcum × 2.0   (trend follow)
+    //   |rcum| ≥ 5%  → contrarian mode: prob = 0.5 − rcum × 1.0 (mean revert)
+    //
+    // A kisebb multiplier a contrarian ágban azt tükrözi, hogy a regime
+    // detection nem tökéletes — ne reagáljunk túl agresszíven egyik
+    // irányba sem.
     const rcum = snap.yes > 0.01 ? (currentMid - snap.yes) / snap.yes : 0;
-    const prob = Math.max(0.1, Math.min(0.9, 0.5 + rcum * 2.0));
+    const REGIME_THRESHOLD = 0.05;
+    const isContrarian = Math.abs(rcum) >= REGIME_THRESHOLD;
+    const prob = isContrarian
+      ? Math.max(0.1, Math.min(0.9, 0.5 - rcum * 1.0))
+      : Math.max(0.1, Math.min(0.9, 0.5 + rcum * 2.0));
     return {
       prob,
       detail: {
         current: currentMid.toFixed(3),
         past:    snap.yes.toFixed(3),
         rcum:    (rcum * 100).toFixed(1) + "%",
+        regime:  isContrarian ? "contrarian (large move)" : "momentum (small move)",
         ageSec:  Math.round(ageMs / 1000),
         source:  "blobs_anchor",
       },

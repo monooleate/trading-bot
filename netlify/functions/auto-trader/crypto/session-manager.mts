@@ -129,11 +129,24 @@ export function closePosition(
   buyOrderId: string,
   trade: ClosedTrade,
 ): SessionState {
+  const closedPos = session.openPositions.find((p) => p.buyOrderId === buyOrderId);
   const remaining = session.openPositions.filter((p) => p.buyOrderId !== buyOrderId);
   const newPnL = session.sessionPnL + trade.pnl;
   const newLoss = trade.pnl < 0
     ? session.sessionLoss + Math.abs(trade.pnl)
     : session.sessionLoss;
+
+  // Bankroll arithmetic (2026-05-11 audit fix #B): the previous formula
+  // `bankrollCurrent + shares × exitPrice` returned the GROSS proceeds,
+  // which silently bypassed the roundtrip fee the resolver subtracts from
+  // `trade.pnl`. Result: bankrollCurrent drifted ~3.6% × notional optimist
+  // per trade vs sessionPnL — after 30 trades the discrepancy was several
+  // dollars on a $250 paper bankroll. Use `pnl + costBasis` instead: the
+  // costBasis "returns" (cancelling the addOpenPosition debit) and the
+  // net pnl applies on top, keeping `bankrollStart + sessionPnL ===
+  // bankrollCurrent` invariant.
+  const costBasis = closedPos?.costBasis ?? 0;
+  const bankrollDelta = trade.pnl + costBasis;
 
   return {
     ...session,
@@ -142,7 +155,7 @@ export function closePosition(
     tradeCount: session.tradeCount + 1,
     sessionPnL: newPnL,
     sessionLoss: newLoss,
-    bankrollCurrent: session.bankrollCurrent + trade.shares * trade.exitPrice,
+    bankrollCurrent: session.bankrollCurrent + bankrollDelta,
   };
 }
 

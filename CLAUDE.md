@@ -375,6 +375,51 @@ Részletek: `internal-docs/changelog/CHANGELOG-2026-05-11.md` "(e)" szekció.
 - **Bucket-matcher °F-rounding bias**: integer °C buckete-k szűkebbek (~0.55°C) mint a matcher CDF intervalluma (1.0°C), 2°F buckete-k szélesebbek (1.11°C) — alternáló ~10% bias. TODO: explicit °F-integer modellezés.
 - **σ kalibráció**: hardcoded 1.0/1.5 a matcherben, az ensemble σ csak a `confidence` mezőbe folyik. TODO: ensemble σ-t a matchernek is átadni.
 
+### Harmincadik session (2026-05-11) – Crypto bot mély-audit: 8 signal-layer + aritmetika fix (vol_divergence degenerate, apex cash-flow, cond_prob direction, momentum regime, bankroll drift, EV baseline, frontend cosmetics)
+
+A user a 6-fix (28. session, gate-layer) után **mély-elemzést** kért minden
+rétegre: frontend, backend, és a 8 signal matematikai validitására. Az audit
+**8 új hibát** tárt fel a signal layer + session arithmetic + UI rétegekben.
+Mind javítva.
+
+**8 fix dióhéjban:**
+
+| # | Réteg | Bug | Fix |
+|---|-------|-----|-----|
+| **A** | Signal | `vol_divergence` képlet rövid horizonton degenerált (T → 0 → IV ≈ 7,490%, mindig clamp 0.1). | `getVolSignal`: `VOL_MIN_HORIZON_HOURS = 1` gate. <1h piacokon `prob: null`. |
+| **B** | Session | `closePosition` `bankrollCurrent` képletet `shares × exitPrice` (gross proceeds) használta — bankroll drift `sessionPnL`-től. | `bankrollCurrent += trade.pnl + costBasis`. Invariáns: `bankrollStart + sessionPnL === bankrollCurrent`. |
+| **C** | Signal | `apex_consensus` "wallet PnL" csak cash flow (`/trades` feed, settlement nincs benne) → "top 10" valójában top sellers. | Activity score: `notional × √distinct markets`. Részletes per-wallet PnL a Tab 8 dolga. |
+| **D** | Signal | `cond_prob` `violationDir` csak complement-irányt vett, monoton-violation iránya elveszett. | Direction-aware: `complementSigned + monotonSigned` SUM-ja adja az irányt. |
+| **E** | Signal | `momentum` reflexív (Polymarket-ár saját mozgása), de minden mozgásra trend-folytatást jelzett. | Regime-aware: `\|rcum\| < 5%` → trend, `≥ 5%` → mean-revert (kisebb multiplier). |
+| **F** | Statistics | `computeCumulativePnl` EV baseline NEM kezelte `direction = NO` esetet (winProb `1 - predictedProb` kellett). | Direction-aware `winProb`. |
+| **G** | Frontend | `${activeSignals}/5 signals` chip, subtitle 5 signalt sorol — most 8 van. | Frissítve "X/8 signals", subtitle 8 signalra. |
+| **H** | Frontend | `RunResult.config` interface hiányolta `minPositionSizeUSDC + combinerConfidenceMin` mezőket. | Opcionálisként hozzáadva. |
+
+**A leghatásosabb fix az A**: a `vol_divergence` minden BTC 5m/15m piacon
+konstans 0.1 volt — szisztematikus NO-bias ami torzította a combiner-t.
+Most a `activeSignals` 8 → 7 a rövid piacokon, de a maradék 7 jel
+tisztább. A `Calibration Health` mostantól érdemi IC-t mérhet a
+`vol_divergence` zaj nélkül.
+
+**A B fix az invariánsra**: a `bankrollCurrent` mostantól pontosan
+követi a `bankrollStart + sessionPnL`-t. A meglévő 3 open pozíción
+close-kor lép életbe.
+
+`tsc --noEmit` exit 0 (project files), Astro build 10 page.
+Részletek: `internal-docs/changelog/CHANGELOG-2026-05-11.md` "(f)" szekció.
+
+### Hova nyúlj legközelebb (signal layer iteráció)
+
+1. **Paper validation 30+ trade**: a fixek után az IC ki kell jöjjön a
+   gyengébb signal-okra is. `Calibration Health` badge zöldnek kellene
+   lennie 30-50 trade után.
+2. **A meglévő 3 open pozíció settle-el endDate-en** (16:00Z) a fee +
+   helyes bankroll-update-tel. Új scan-tickek a fixek után indulnak.
+3. **Top wallet ranking finomítása** (C-fix follow-up): a `√markets`
+   diminishing returns multiplier empirikus — esetleg `markets^0.6`
+   pontosabb lehet. 100+ trade után érdemes Re-validate-elni a wallet
+   compositiont.
+
 ### Huszonkilencedik session (2026-05-11) – Weather bot audit + 5 strukturális fix (tail-bucket CDF v2, market-disagreement gate, ensemble default, cloud avg, per-category log filter)
 
 A user a `/trade/weather/` 2 nyitott pozíciójára (Shanghai 25°C YES,

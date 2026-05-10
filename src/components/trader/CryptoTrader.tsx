@@ -144,6 +144,10 @@ interface RunResult {
     sessionLossLimit: number;
     minOpenInterest:  number;
     roundtripFeePct:  number;
+    // 2026-05-11 audit additions — surfaced so the configLine can show
+    // the current convergence/size thresholds the engine is using.
+    minPositionSizeUSDC?:   number;
+    combinerConfidenceMin?: number;
     paperMode:        boolean;
     btcTpTarget:      number;
     btcSlTarget:      number;
@@ -250,7 +254,7 @@ export default function CryptoTrader({ bankroll }: { bankroll?: number }) {
   return (
     <TraderShell
       title="Crypto Auto-Trader"
-      subtitle="BTC short markets (5m / 15m up/down) · signal-combiner: funding · orderflow · vol-div · apex · cond-prob · OB-imbalance gate"
+      subtitle="BTC short markets (5m / 15m up/down) · signal-combiner: funding · orderflow · vol-div · apex · cond-prob · momentum · contrarian · pairs-spread + OB-imbalance gate"
       mode={{ label: session?.paperMode ? "PAPER" : "LIVE", tone: session?.paperMode ? "paper" : "live" }}
       cron={{ enabled: !!status?.cronEnabled, intervalLabel: "3 min", title: "Configured in netlify.toml (auto-trader */3 * * * *)" }}
       isRunning={isRunning}
@@ -429,7 +433,7 @@ export default function CryptoTrader({ bankroll }: { bankroll?: number }) {
               chips.push({ label: `kelly ${(r.kellyUsed * 100).toFixed(1)}%`, tone: "info", title: "¼-Kelly fraction of bankroll" });
             }
             if (r.activeSignals !== undefined) {
-              chips.push({ label: `${r.activeSignals}/5 signals`, title: "Number of signal sources contributing this tick" });
+              chips.push({ label: `${r.activeSignals}/8 signals`, title: "Number of signal sources contributing this tick (out of 8: FR/VPIN/VOL/APEX/CP/MOM/CTR/PRS)" });
             }
             if (r.obImbalance) {
               const arrow = r.obImbalance.direction === "UP" ? "↑" : r.obImbalance.direction === "DOWN" ? "↓" : "·";

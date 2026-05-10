@@ -830,7 +830,79 @@ egyszer).
 
 ## 9. Audit findings + fix history
 
-### 2026-05-11 audit — 6 új hiba
+### 2026-05-11 mély-audit round 2 — 8 új signal-layer + arithmetic hiba
+
+A 6-fix gate-layer audit után a user mély-elemzést kért minden rétegre.
+Az audit a **signal matematikai validitását** és a **session arithmetic
+invariánsát** vizsgálta. 8 új hiba, mind javítva.
+
+| ID | Réteg | Pre-fix bug | Fix |
+|----|-------|-------------|-----|
+| **A** | Signal: `vol_divergence` | `iv = 2 × \|yp − 0.5\| / √T × 100` rövid horizonton degenerált (T → 0). 15min BTC piacon iv ≈ 7,490%, mindig clamp 0.1 → konstans NO-bias. | `VOL_MIN_HORIZON_HOURS = 1` gate. `<1h` piacokon `prob: null`. |
+| **B** | Session arithmetic | `closePosition` `bankrollCurrent += shares × exitPrice` (gross proceeds, fee nélkül), `sessionPnL` viszont net pnl. Invariáns sértve, drift ~3.6%/trade. | `bankrollCurrent += trade.pnl + costBasis`. Lookup a `buyOrderId`-vel. |
+| **C** | Signal: `apex_consensus` | `walletMap.pnl` cash flow only (`SELL → +cash, BUY → -cash`). Settlement-bevétel nincs benne → "top 10" = top sellers. | Activity-score: `notional × √distinct markets`. |
+| **D** | Signal: `cond_prob` | `violationDir` csak complement-irányt vett. Monoton-violation magnitúdó vakon hozzáadva, ellentétes irányok nem oltották ki egymást. | `complementSigned + monotonSigned` signed SUM. |
+| **E** | Signal: `momentum` | Polymarket YES-midpoint Rcum-ja minden mozgásra trend-folytatást jelzett (`prob = 0.5 + rcum × 2.0`). Gyors mozgások (>5%) likviditás-driven, mean-revert. | Regime-aware: `\|rcum\| < 5%` → trend (× 2.0), `≥ 5%` → contrarian (× 1.0). |
+| **F** | Statistics chart | `computeCumulativePnl` EV baseline NEM kezelte NO-trade direction-t. | `winProb = direction === "NO" ? 1 − predictedProb : predictedProb`. |
+| **G** | Frontend | `${activeSignals}/5 signals` chip; subtitle 5 signalt sorol; config interface hiányos. | `/8`, full 8-signal subtitle, interface bővítve. |
+| **H** | (G-vel együtt) | UI félrevezetés. | Lásd G. |
+
+#### Részletek
+
+**A — vol_divergence horizon gate**. A `getVolSignal` képlete a Black-
+Scholes binary option pricing közelítése, ami `T → 0` limit-en
+divergens (√T → 0 a nevezőben). A BTC 5m piacon `T = 5min / (365 × 24 × 60)
+= 9.5e-6`, `√T = 0.003`. Bármely `yp ≠ 0.5` esetén az iv hatalmas (több
+ezer %), spread = iv − rv_60% szintén nagy, prob = clamp 0.1. **A
+signal a teljes BTC short-piac univerzumban konstans 0.1.**
+
+Empirikus verifikáció: a 3 nyitott pozíció (28. session) mindegyikén
+`vol_divergence: 0.1` volt. A fix után `null` → `activeSignals` 8 → 7.
+
+**B — bankroll invariáns**. Bizonyítás:
+- `addOpenPosition`: `bankrollCurrent ← bankrollCurrent − costBasis`
+- `closePosition` (régi): `bankrollCurrent ← bankrollCurrent + shares × exitPrice = bankrollCurrent + proceeds`
+- `sessionPnL ← sessionPnL + trade.pnl` (= `proceeds − fee − costBasis`)
+- net: `Δbankroll = proceeds − costBasis = pnl + fee`
+- `ΔsessionPnL = pnl`
+- **drift per trade = fee** (~3.6% × notional)
+
+Új képlet: `bankrollCurrent ← bankrollCurrent + (trade.pnl + costBasis)`
+→ `Δbankroll = pnl + costBasis − costBasis = pnl`. ✓
+
+**C — apex activity score**. A `/data-api.polymarket.com/trades` feed
+NEM tartalmaz settlement-eseményeket. Egy wallet ami csak BUY-olt és
+nyert nem mutat realised PnL-t ezen az endpoint-on. A régi képlet
+ezért szisztematikusan a **top sellers**-t hozta vissza, NEM a top
+profitable wallets-et. Az új score `notional × √markets` a wallet
+**aktivitását + diverzitását** méri, ami arányos proxy az informált
+flow-ra.
+
+**D — cond_prob direction-aware**. A monotonicity violation
+matematikailag: ha P(A by t_earlier) > P(A by t_later) + ε →
+arbitrage. A korábbi market YES > later market YES → vagy a later
+underpriced (YES bias erre) vagy a earlier overpriced (NO bias arra).
+Az adott piacunk irányát a relatív pozíció határozza meg. A régi kód a
+magnitúdót vette, de az irányt csak a complement-check-ből származtatta
+→ a két komponens **mismatched** vehetett.
+
+**E — momentum regime**. Empirikus megfigyelés a Polymarket
+microstructure-ben: a YES midpoint kis (\|Rcum\| < 5%) mozgásai
+információ-driven (Jegadeesh-Titman trend), nagy mozgásai likviditás-
+shock (mean-revert). A két regime ellentétes irányba prediktál ugyanazon
+piacra; nem szabad ugyanazt a coefficient-et használni.
+
+#### Hatás a paper-validációra
+
+A 8 fix után a `Calibration Health` badge mostantól érdemi IC-t kellene
+mérnie 30+ trade után. A jelek tisztábbak (vol nincs konstans bias,
+apex top-N pontosabb, cond_prob és momentum direction-aware). Ha a
+badge továbbra is `noise`, a `signal-aggregator` IC-súlyok kalibrálása
+következik (Hova nyúlj legközelebb #1 a 30. session-ben).
+
+---
+
+### 2026-05-11 audit round 1 — 6 új hiba (gate layer)
 
 A bot live `mj-trading.netlify.app/trade/crypto/` 3 nyitott paper pozícióját
 vizsgáltam. A 9-gates rendszer mindhárom trade-et átengedte azonos mintázat

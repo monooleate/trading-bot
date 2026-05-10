@@ -181,11 +181,20 @@ export function computeCumulativePnl(trades: ClosedTrade[]): CumulativePoint[] {
     const randomExpected = t.shares * 0.5 * (1 - 2 * t.entryPrice);
     randomCum += randomExpected;
 
-    // EV baseline: if predicted prob is correct
+    // EV baseline: if predicted prob is correct (direction-aware).
+    //
+    // Fix #F (2026-05-11): the legacy formula used `predictedProb` (which
+    // is always the YES probability) directly as the win-probability,
+    // ignoring `t.direction`. For NO trades the actual win-probability is
+    // `1 - predictedProb` — without this correction the EV baseline
+    // chart pointed in the wrong direction for every NO trade, making
+    // the trader's signal-fidelity comparison meaningless on mixed sides.
     if (t.predictedProb !== undefined) {
+      const winProb =
+        t.direction === "NO" ? 1 - t.predictedProb : t.predictedProb;
       const winPayoff = t.shares * (1 - t.entryPrice);
       const lossPayoff = -costBasis;
-      const evExpected = t.predictedProb * winPayoff + (1 - t.predictedProb) * lossPayoff;
+      const evExpected = winProb * winPayoff + (1 - winProb) * lossPayoff;
       evCum += evExpected;
     } else {
       evCum += t.pnl; // fall back to actual
