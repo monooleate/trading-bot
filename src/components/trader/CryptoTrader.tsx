@@ -9,10 +9,12 @@ import TraderShell, {
 import {
   ScanResultsCard,
   ScanResultRow,
+  PendingPositionsCard,
   DroppedCard,
   cryptoEntryCriteria,
   type ResultChip,
   type SignalArrow,
+  type PendingPositionLite,
 } from "../shared/TraderResults";
 import { useTradeExport } from "../shared/useTradeExport";
 import type { LiveReadinessReport } from "../shared/LiveReadinessBadge";
@@ -74,6 +76,25 @@ interface DroppedMarket {
   reason: string;
 }
 
+interface PendingPosition {
+  market: string;
+  title: string | null;
+  direction: "YES" | "NO";
+  size: number;
+  endDate: string;
+  marketPriceAtEntry: number | null;
+  predictedProb: number | null;
+  ageMs: number;
+}
+
+function formatAgeAgo(ms: number): string {
+  const sec = Math.floor(ms / 1000);
+  if (sec < 60)    return `${sec}s ago`;
+  if (sec < 3600)  return `${Math.floor(sec / 60)}m ago`;
+  if (sec < 86400) return `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m ago`;
+  return `${Math.floor(sec / 86400)}d ${Math.floor((sec % 86400) / 3600)}h ago`;
+}
+
 interface RunResult {
   ok: boolean;
   action: string;
@@ -130,6 +151,9 @@ export default function CryptoTrader() {
   const isRunning = loading || (rs?.isRunning ?? false);
   const display = lastResult ?? (rs?.lastResult as RunResult | null) ?? null;
   const readiness = lastResult?.liveReadiness ?? (status as any)?.liveReadiness ?? null;
+  const pending = (status as any)?.pending as
+    | { count: number; nextReconcileAt: string | null; positions: PendingPosition[] }
+    | undefined;
 
   const doAction = useCallback(async (action: string) => {
     setError(null);
@@ -191,6 +215,24 @@ export default function CryptoTrader() {
       onExportTrades={exportTrades}
       exportingTrades={exporting}
     >
+      {pending && pending.count > 0 && (
+        <PendingPositionsCard
+          title={`${pending.count} pending paper position${pending.count > 1 ? "s" : ""} past endDate — awaiting Polymarket resolution`}
+          positions={pending.positions.map<PendingPositionLite>((p) => ({
+            primary: p.title || p.market,
+            secondary: `expired ${formatAgeAgo(p.ageMs)}`,
+            direction: p.direction,
+            predictionText: p.predictedProb !== null
+              ? `pred ${(p.predictedProb * 100).toFixed(0)}%`
+              : undefined,
+            sizeText: `$${p.size.toFixed(2)}`,
+            whenText: "awaiting Polymarket resolution",
+            isReady: true,
+          }))}
+          footnote="simVersion 3: paper positions close only on real Gamma outcomePrices. UMA resolution typical 5–60 min, longer during disputes."
+        />
+      )}
+
       {display && (display.results || display.reason) && (
         <ScanResultsCard
           headerText={

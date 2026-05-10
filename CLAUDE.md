@@ -349,7 +349,40 @@ netlify deploy --prod --dir=dist
 
 ---
 
-## AKTUÁLIS ÁLLAPOT (2026-05-09) – Claude Code folytatáshoz
+## AKTUÁLIS ÁLLAPOT (2026-05-10) – Claude Code folytatáshoz
+
+### Hatodik session (2026-05-10) – Paper resolvers: real Polymarket only, no simulator (simVersion 3)
+
+A live `mj-trading.netlify.app/trade/crypto/` paper-tracker validációja megmutatta, hogy a 9 closed trade-en kimutatott 88.9% WR / IC=0.453 / +$7.44 PnL **fake szám**: két bug együttese miatt egyetlen valós Polymarket resolution sem fut le, és minden close egy instant-trigger Brownian sim-ből származott.
+
+**Bug A — Gamma URL filter hiányos** (`paper-resolver.mts:45`, `weather/polymarket-resolver.mts:42`):
+```
+?condition_ids=0xABC...           → []     (Gamma filterezi a closed market-eket!)
+?condition_ids=0xABC...&closed=true → [{ outcomePrices: ["1","0"] }]
+```
+A `closed=true` flag nélkül egyetlen lezárult market sem található meg → `info.resolved` mindig `false` → soha nem trigger-el a "real" branch.
+
+**Bug B — Brownian sim instant-trigger deep-OTM-en** (`paper-resolver.mts:99-149` v2):
+A bound-ok fixek (tpTarget=0.75, slTarget=0.35), entry-független. Ha entry yesPrice a `[0.25, 0.65]` tartományon kívül van, az első iteráció után triggerel — a path nem szimulálódik. NO entry 0.20 → yesPrice 0.80 → upperYes=0.65 felett → instant exit NO=0.35 → garantált +75% profit minden NO < 0.35-nél.
+
+**Empirikus bizonyíték** a 9 trade-en: 8/9 exit price = 0.35 (slTarget bound), 1/9 = 0.75 (tpTarget bound). A `bitcoin-up-or-down-on-may-9-2026` valós outcome = YES ([1,0]); paper NO entry 0.35-ön $0 break-event könyvelt el a valós −$1.00 helyett.
+
+**Fix (simVersion 3):**
+
+1. **Crypto** `paper-resolver.mts` teljes átírás: csak `fetchMarketResolution()` + `closed=true` query. Brownian-bridge sim és a `simulateBrownianBridgeExit()` export törölve. A pozíció nyitva marad amíg Gamma `outcomePrices` ∈ `{0,1}`-et nem ad vissza. **Paper PnL == live PnL.**
+2. **Weather** `polymarket-resolver.mts:42` `&closed=true` hozzá. A METAR fallback (6h után) marad — fizikai mérés, nem szimuláció, és pontosan ezt használja az UMA settlement-hez.
+3. **HL directional + funding-arb** auditálva, **változtatás nem szükséges**: `getAllMids()` valós markPrice, `scanFundings()` valós HL+Binance funding rate. Az hedge-manager paper `paperFill()` a markPrice-on tölt slippage nélkül (idealizálás, nem szimuláció).
+4. `PAPER_SIM_VERSION` 2 → 3. A live deploy után az első cron tickkor a 9 v2-paper trade automatikusan archiválódik az `auto-trader-session-archive-paper-v2` Blobs key-be, és tiszta crypto session indul.
+5. `auto-trader/index.mts` paper-resolver hívás egyszerűsítve (cfg paraméter törölve), `paperFallbackAfterMs`/`paperBrownianSigma` env-loadolás törölve.
+6. `trader-settings.mts` SCHEMA: `paperFallbackAfterMs` + `paperBrownianSigma` field-ek kiszedve. Régi Blobs override-ok automatikusan ignorálva (`if (!(k in SCHEMA)) continue` a `loadRuntimeOverrides`-ban).
+
+Részletes leírás: `internal-docs/changelog/CHANGELOG-2026-05-10.md`.
+
+### Hova nyúlj legközelebb (paper validáció)
+
+- **Crypto**: a deploy utáni első cron tickkor a 9 fake trade archiválódik. Új paper trade-ek innentől csak akkor zárulnak, ha a market Polymarketen resolve-olt → 5–60 perc tipikusan a 5m/1h BTC piacokon. Nyitott trade-ek "PAPER_RESOLVE_SKIP/polymarket_not_resolved_yet" log-bejegyzéssel várják a Gamma update-et.
+- **Weather**: ugyanezt a fix-et kapta. A METAR fallback 6h után aktiválódik, ha az UMA késik.
+- **Tesztelési protokoll** új paper sessionre: hagyni a botot 24-48h-t nyugiban futni → ellenőrizni hogy a closedTrades exit-ei mind 0 vagy 1 (real resolution) vagy 0/1 (METAR fallback weather-en). Ha bármelyik trade exit-e a [0.01, 0.99] tartományban van (kivéve weather METAR-fallback resolved 1.0/0.0-t), bug.
 
 ### Ötödik session (2026-05-09) – Auto-Trader UX: reset safety + trade export + per-row criteria gates
 

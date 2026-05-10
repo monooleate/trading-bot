@@ -39,7 +39,10 @@ export async function fetchPolymarketResolution(
 ): Promise<PolymarketResolution | null> {
   if (!conditionId) return null;
 
-  const url = `${GAMMA_API}/markets?condition_ids=${encodeURIComponent(conditionId)}`;
+  // `closed=true` is required: without it Gamma hides resolved markets and
+  // the response is `[]` even for legit conditionIds. This was the silent
+  // bug in v2 of the crypto paper-resolver too.
+  const url = `${GAMMA_API}/markets?condition_ids=${encodeURIComponent(conditionId)}&closed=true`;
 
   let raw: any;
   try {

@@ -13,8 +13,15 @@ const LIVE_STORE_KEY = "auto-trader-session-live";
 //   v1: halfway-toward-prediction sim (before 2026-05-09). Produced the
 //       143-trade / 98.6% WR artefact described in paper-pnl-analysis.md.
 //   v2: real Polymarket resolution + finalProb-independent Brownian-bridge
-//       fallback. First active in this session.
-export const PAPER_SIM_VERSION = 2;
+//       fallback. The Gamma URL was missing `&closed=true` so the real-
+//       resolution path silently never fired; every close ran through the
+//       Brownian sim, which itself instant-triggered on deep-OTM entries
+//       (entry yesPrice outside the [SL,TP] band fired on iteration 0).
+//       Net: 9-trade artefact with 88.9% WR, all exits clamped to 0.35
+//       or 0.75 — none matching real Polymarket outcomes.
+//   v3: Polymarket resolution ONLY. No simulator. Positions stay open
+//       until Gamma reports outcomePrices ∈ {0,1}. Paper PnL == live PnL.
+export const PAPER_SIM_VERSION = 3;
 const ARCHIVE_KEY_PREFIX = "auto-trader-session-archive";
 
 function sessionKey(paperMode: boolean, category?: string): string {

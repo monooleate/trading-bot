@@ -49,8 +49,10 @@ const SCHEMA: Record<string, FieldSpec> = {
   btcHoldToEndCutoffMs: { default: 60000,   min: 10000,   max: 300000,  label: "Hold-to-end cutoff",         step: 5000,  unit: "ms",    category: "crypto", group: "BTC short-market exit", help: "Ha kevesebb mint ennyi ms van resolution-ig, NE zárjuk a pozíciót — hagyjuk lejárni (a Polymarket settles-en pörög le)." },
   obImbalanceUpRatio:   { default: 1.80,    min: 1.10,    max: 5.00,    label: "OB imbalance UP threshold",  step: 0.05,  unit: "ratio", category: "crypto", group: "OB imbalance", help: "Binance top-10 bid/ask depth ratio. Felette → UP irány konfirmált. Magasabb = szigorúbb konvergencia, kevesebb trade." },
   obImbalanceDownRatio: { default: 0.55,    min: 0.20,    max: 0.95,    label: "OB imbalance DOWN threshold",step: 0.05,  unit: "ratio", category: "crypto", group: "OB imbalance", help: "Bid/ask ratio alsó küszöb. Alatta → DOWN irány konfirmált. 0.55 = kb. inverze az UP threshold-nak (1/1.8)." },
-  paperFallbackAfterMs: { default: 1800000, min: 60000,   max: 21600000,label: "Paper resolver fallback delay", step: 60000, unit: "ms",   category: "crypto", group: "Paper resolver", help: "Mennyi időt várunk a tényleges Polymarket resolution-re a market endDate után, mielőtt a Brownian-bridge szimulátorra esünk vissza. Hosszabb = realisztikusabb paper PnL, de később zárul." },
-  paperBrownianSigma:   { default: 0.45,    min: 0.10,    max: 1.50,    label: "Brownian σ per √min",        step: 0.05,  unit: "σ",     category: "crypto", group: "Paper resolver", help: "A finalProb-tól FÜGGETLEN random-walk σ-ja. 0.45 / √min ~ a Polymarket BTC 5m piacok empirikus volatilitása. Magasabb = nagyobb pnl-szórás." },
+  // Paper-resolver knobs (paperFallbackAfterMs, paperBrownianSigma)
+  // were retired in simVersion 3 — paper closes only on real Polymarket
+  // resolution, no simulator. Old Blobs overrides are silently ignored
+  // by `loadRuntimeOverrides()` since the keys are no longer in SCHEMA.
   btcMinPriceBand:      { default: 0.10,    min: 0.02,    max: 0.30,    label: "Min YES price (deep-OTM cut)", step: 0.01, unit: "frac", category: "crypto", group: "Market finder", help: "Az olyan piacokat skippeljük, ahol a YES ár 0.10 alatt vagy 0.90 felett van — ezeken a depth alig 1-2 share, nem realisztikus paper-ben filltetni. A 141 paper trade $0.01 entry probléma fő javítása." },
   // ─── Live-readiness gates (apply to every trader) ──────────────
   // The cron loop refuses to honor PAPER_MODE=false until a session has

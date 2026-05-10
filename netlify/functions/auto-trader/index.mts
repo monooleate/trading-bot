@@ -198,11 +198,11 @@ async function runCryptoTrader(
   // to true if the session hasn't met validation thresholds yet.
   const config: typeof baseConfig = { ...baseConfig };
   const btcExit = await getEffectiveBtcExitConfig();
-  // P1.3 OB-imbalance thresholds + paper-resolver / market-finder knobs +
-  // live-readiness thresholds (all override-able via /trader-settings).
+  // P1.3 OB-imbalance thresholds + market-finder knobs + live-readiness
+  // thresholds (all override-able via /trader-settings). The paper-resolver
+  // no longer takes any tunable: simVersion 3 closes paper positions only
+  // on real Polymarket resolution, no simulator path.
   let obUp = 1.8, obDown = 0.55;
-  let paperFallbackAfterMs = 30 * 60 * 1000;
-  let paperBrownianSigma   = 0.45;
   let btcMinPriceBand      = 0.10;
   const readyOv: Record<string, number> = {};
   try {
@@ -210,8 +210,6 @@ async function runCryptoTrader(
     const ov = await mod.loadRuntimeOverrides();
     if (typeof ov.obImbalanceUpRatio    === "number") obUp                 = ov.obImbalanceUpRatio;
     if (typeof ov.obImbalanceDownRatio  === "number") obDown               = ov.obImbalanceDownRatio;
-    if (typeof ov.paperFallbackAfterMs  === "number") paperFallbackAfterMs = ov.paperFallbackAfterMs;
-    if (typeof ov.paperBrownianSigma    === "number") paperBrownianSigma   = ov.paperBrownianSigma;
     if (typeof ov.btcMinPriceBand       === "number") btcMinPriceBand      = ov.btcMinPriceBand;
     for (const k of ["liveReadyMinTrades", "liveReadyMinWinRate", "liveReadyMinIC", "liveReadyMaxCalibDev", "liveReadyMinSharpe", "liveReadyMaxDrawdownPct"]) {
       if (typeof ov[k] === "number") readyOv[k] = ov[k];
@@ -267,17 +265,12 @@ async function runCryptoTrader(
     return jsonResponse(enriched, status);
   };
 
-  // Resolve any open paper positions whose markets have ended. Real
-  // Polymarket resolution is preferred; the Brownian-bridge fallback is
-  // only used after `paperFallbackAfterMs` ms past endDate and is itself
-  // independent of `finalProb`, so the IC computation remains meaningful.
+  // Resolve any open paper positions whose markets have resolved on
+  // Polymarket. Positions whose underlying market hasn't published an
+  // outcome yet stay open — paper PnL must equal what live PnL would have
+  // been, so no simulator runs.
   if (config.paperMode && session.openPositions.length > 0) {
-    const r = await resolvePendingPaperPositions(session, {
-      tpTarget:        btcExit.tpTarget,
-      slTarget:        btcExit.slTarget,
-      fallbackAfterMs: paperFallbackAfterMs,
-      brownianSigma:   paperBrownianSigma,
-    });
+    const r = await resolvePendingPaperPositions(session);
     session = r.session;
     if (r.resolutions.length > 0) {
       // Best-effort Telegram for closed paper trades — re-use the existing helper.
@@ -566,8 +559,44 @@ async function getStatus(config: ReturnType<typeof getTraderConfig>, category: s
     // the same fields regardless of venue.
     base.runStatus   = await getCryptoRunStatus();
     base.cronEnabled = true; // crypto cron (auto-trader */3) is always on
+    // Past-endDate paper positions awaiting Polymarket resolution. simVersion
+    // 3 has no simulator fallback — positions stay open until Gamma publishes
+    // outcomePrices ∈ {0,1}.
+    base.pending = getCryptoPendingPositions(session);
   }
   return jsonResponse(base);
+}
+
+// Pending paper-position view for the crypto bot.
+//
+// Lists open positions whose endDate has elapsed but Polymarket hasn't
+// published a resolved outcome yet. Each */3 auto-trader cron tick re-queries
+// Gamma; when the market settles the position closes on the next tick. There
+// is no simulator fallback — a position can sit here for the full UMA
+// resolution window (5–60 min typical, occasionally hours during disputes).
+function getCryptoPendingPositions(session: SessionState) {
+  const now = Date.now();
+  const past = session.openPositions
+    .filter((p) => p.endDate && new Date(p.endDate).getTime() < now)
+    .map((p) => {
+      const endTs = new Date(p.endDate!).getTime();
+      return {
+        market:             p.market,
+        title:              (p as any).title ?? null,
+        direction:          p.direction,
+        size:               p.costBasis,
+        endDate:            p.endDate!,
+        marketPriceAtEntry: p.marketPriceAtEntry ?? null,
+        predictedProb:      p.predictedProb ?? null,
+        ageMs:              now - endTs,
+      };
+    })
+    .sort((a, b) => a.endDate.localeCompare(b.endDate));
+  return {
+    count: past.length,
+    nextReconcileAt: past[0]?.endDate ?? null,
+    positions: past,
+  };
 }
 
 // ─── Reset session ────────────────────────────────────────
