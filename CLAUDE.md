@@ -367,14 +367,20 @@ A 16. session-ben dokumentált 6 nyitott finding **mind javítva**.
 
 ### Maradék nyitott
 
-| ID | Sev | Probléma | Indok |
-|----|-----|----------|-------|
-| §9.B | 🟡 | `placeHlEntry` TP leg failure-re entry+SL nem cancel-elődik | Order-manager logic, élesedés előtt low priority. |
+A 16. session 9 finding-je mind closeolva. **0 nyitott audit-finding.**
 
 ### Hova nyúlj legközelebb
 
-1. **§9.B**: 1 sor a `placeHlEntry`-ben — TP fail után az entry+SL cancel-elődjön ugyanúgy, mint az SL fail után. Element már megvan a kódban (`adapter.cancelOrder(...)`-t hívja az SL fail-en).
-2. **Live deploy** most már technikailag elérhető: a `live-readiness` gate viszont továbbra is védi (>=30 paper trade IC>=5%, Sharpe>=0.5, drawdown<25%, simVersion=2).
+**Live deploy most már technikailag elérhető:**
+- A `live-readiness` gate továbbra is védi (>=30 paper trade IC>=5%, Sharpe>=0.5, drawdown<25%, simVersion=2).
+- A `live-resolver.mts` reconciliálja a TP/SL fillet a session blob-bal.
+- A `placeHlEntry` mostantól mindkét rollback ágat lefedi (TP fail → cancel entry; SL fail → cancel entry+TP).
+- A `hedge-manager` Binance lot precíziót automatikusan rounding.
+
+További hardening lehetőségek (nem audit-finding):
+- HL websocket subscription a fill-eventekre (a tick-driven `userFillsByTime` polling helyett).
+- Funding-arb: explicit price-leg PnL tracking a closeArbPosition-ben (most a paperSlippage cost-line proxy-zza).
+- F8 follow-up: timezone-aware day rollover (currently UTC midnight).
 
 ### Tizenhatodik session (2026-05-10) – HL + Funding-Arb full audit + paper/live parity fixes (sim v2)
 

@@ -157,10 +157,12 @@ sizeCoins     = (sizeUSDC × leverage) / currentPrice
 sizeCoinsStr  = formatSize(coin, sizeCoins)         // per-coin tick (0.001-0.001 BTC)
 ```
 
-> ⚠ **Lev hard cap:** a `kellyToPerpSize` `Math.min(p.leverage, 3)`-mal
-> clamp-eli a `maxLeverage` env-et. Ha `HL_MAX_LEVERAGE=5`-öt állítasz,
-> silent 3x marad. Konzervatív default — magasabb csak akkor érdemes ha
-> a session SR > 1 paperben.
+> ⚠ **Lev hard cap:** a `kellyToPerpSize` `Math.min(p.leverage,
+> HL_LEVERAGE_HARD_CAP=3)`-mal clamp-eli a `maxLeverage` env-et. Ha
+> `HL_MAX_LEVERAGE>3`-öt állítasz, a sizer egyszer sessiononként
+> `log("ERROR", { configWarning: "..." })` warning-ot ír, és továbbra is
+> 3x-szel megy. Konzervatív default — magasabb csak akkor érdemes ha a
+> session SR > 1 paperben.
 
 ### TP / SL — clamp-elt edge-multiplier (2026-05-10 v2)
 
@@ -337,7 +339,7 @@ slight upper bound a live PnL-en.
 | H5 | 🟡 → ✅ | `maxLeverage` silent clamp 3x-re | ✅ Explicit warning log + `HL_LEVERAGE_HARD_CAP` const dokumentálva |
 | §9.A | 🔴 → ✅ | Live exit / reconcile / settlement nincs | ✅ Új `live-resolver.mts` — `clearinghouseState` + `userFillsByTime` per cron tick |
 | F2/F3 | 🟠 → ✅ | Paper slippage nincs modellezve | ✅ SL=0.1%, timeout=0.05% adverse paper slippage |
-| §9.B | 🟡 | TP leg failure paper-ben silent (live-ban entry+SL marad) | ❌ Order-manager logic — followup |
+| §9.B | 🟡 → ✅ | TP leg failure paper-ben silent (live-ban entry+SL marad) | ✅ `placeHlEntry` most TP fail-on cancel-eli az entry-t (és nem placeolja az SL-t), tükrözve az SL fail meglévő rollback-jét |
 
 ### §9.A — RESOLVED (2026-05-10 follow-up)
 

@@ -1824,3 +1824,46 @@ A directional bot-ban egyetlen open finding maradt:
 
 A funding-arb bot-ban minden finding closeolva.
 
+
+# 2026-05-10 (h) — §9.B closed: TP leg fail rollback
+
+A "(g)" után egyetlen finding maradt nyitva: §9.B (`placeHlEntry`-ben a TP
+leg failure-re entry+SL nem cancel-elődik, tükrözve az SL fail meglévő
+rollback-jét).
+
+**Fix** (`order-manager.mts`):
+
+```ts
+// 2. Take-profit
+const tp = await adapter.placeOrder({ ... });
+if (!tp.ok) {
+  await adapter.cancelOrder(p.coin, entry.orderId).catch(() => {});
+  return { ok: false, error: `TP placement failed — entry cancelled. ...` };
+}
+
+// 3. Stop-loss
+const sl = await adapter.placeOrder({ ... });
+if (!sl.ok) {
+  await adapter.cancelOrder(p.coin, entry.orderId).catch(() => {});
+  if (tp.orderId) await adapter.cancelOrder(p.coin, tp.orderId).catch(() => {});
+  return { ok: false, error: `SL placement failed — entry cancelled. ...` };
+}
+```
+
+A `tpOrderId` ternary egyszerűsítve: mivel TP fail mostantól bail előtte,
+a `tp.ok` mindig true a position record-építésnél.
+
+`internal-docs/math/14-hl-directional.md` §10 + §5 (Lev hard cap warning)
+frissítve.
+
+`tsc --noEmit` exit 0.
+
+## Audit-state
+
+A 16. session 9 finding-jéből most **mind closeolva**:
+
+| Bot | ✅ |
+|-----|----|
+| HL Directional | H1, H2, H3, H4, H5, §9.A, F2/F3, §9.B |
+| Funding-Arb | F1, F5, F2/F3, F7, F8 |
+

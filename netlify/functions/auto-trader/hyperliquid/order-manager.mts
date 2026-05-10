@@ -107,6 +107,16 @@ export async function placeHlEntry(p: PlaceEntryInput): Promise<PlaceEntryResult
     tif:        "Gtc",
   });
 
+  // Per the prompt: "TP/SL mindig be van állítva." If TP fails, the
+  // upside is uncapped — bail and cancel the entry rather than open a
+  // half-protected position. (Previously this branch only logged a
+  // warning, leaving entry+SL active without a TP leg — §9.B in
+  // CLAUDE.md.)
+  if (!tp.ok) {
+    await adapter.cancelOrder(p.coin, entry.orderId).catch(() => {});
+    return { ok: false, error: `TP placement failed — entry cancelled. TP error: ${tp.error}` };
+  }
+
   // 3. Stop-loss (reduce only, stop-market)
   const sl = await adapter.placeOrder({
     coin:       p.coin,
@@ -120,11 +130,10 @@ export async function placeHlEntry(p: PlaceEntryInput): Promise<PlaceEntryResult
     tpsl:       "sl",
   });
 
-  // Per the prompt: "TP/SL mindig be van állítva." If SL failed, cancel
-  // the entry rather than leave an unprotected position.
+  // SL fails: cancel entry + the TP leg that's already resting.
   if (!sl.ok) {
     await adapter.cancelOrder(p.coin, entry.orderId).catch(() => {});
-    if (tp.ok && tp.orderId) await adapter.cancelOrder(p.coin, tp.orderId).catch(() => {});
+    if (tp.orderId) await adapter.cancelOrder(p.coin, tp.orderId).catch(() => {});
     return { ok: false, error: `SL placement failed — entry cancelled. SL error: ${sl.error}` };
   }
 
@@ -139,7 +148,7 @@ export async function placeHlEntry(p: PlaceEntryInput): Promise<PlaceEntryResult
     entryOrderId: entry.orderId,
     tpPrice:      parseFloat(pricedTp),
     slPrice:      parseFloat(pricedSl),
-    tpOrderId:    tp.ok ? (tp.orderId || null) : null,
+    tpOrderId:    tp.orderId || null,
     slOrderId:    sl.orderId || null,
     predictedProb:   p.predictedProb,
     edgeAtEntry:     p.edge,
