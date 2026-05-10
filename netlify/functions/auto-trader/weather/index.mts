@@ -17,7 +17,7 @@ import {
   addOpenPosition,
   PAPER_SIM_VERSION,
 } from "../crypto/session-manager.mts";
-import type { MarketInfo, Position } from "../shared/types.mts";
+import type { MarketInfo, Position, EntryDecisionSnapshot } from "../shared/types.mts";
 
 const DEFAULT_BANKROLL = 100;
 
@@ -333,6 +333,31 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
 
         const station = getStation(market.city)!;
 
+        // Frozen entry-decision snapshot — same shape the crypto bot uses,
+        // so the UI's `RationaleBlock` can render this without per-bot
+        // branches. Weather is forecast-driven (no signal-combiner mix), so
+        // signalBreakdown / obImbalance / activeSignals stay null/0 and
+        // the popover collapses those rows automatically.
+        const entryDecision: EntryDecisionSnapshot = {
+          decidedAt:        new Date().toISOString(),
+          finalProb:        match.probability,
+          marketPrice:      decision.marketPrice,
+          grossEdge:        decision.grossEdge ?? Math.abs(match.edge),
+          netEdge:          decision.netEdge ?? decision.edge,
+          feePct:           config.roundtripFeePct,
+          direction:        decision.direction,
+          kellyRaw:         decision.kellyRaw    ?? 0,
+          kellyCapped:      decision.kellyCapped ?? 0,
+          kellyCap:         decision.kellyCap    ?? 0.15,
+          positionSizeUSDC: decision.positionSizeUSDC,
+          entryPrice,
+          activeSignals:    0,
+          signalBreakdown:  null,
+          obImbalance:      null,
+          gates:            decision.gates ?? [],
+          reason:           decision.reason,
+        };
+
         const position: Position = {
           market: market.slug,
           tokenId: decision.tokenId,
@@ -347,6 +372,7 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
           marketPriceAtEntry: decision.marketPrice,
           predictedProb: match.probability,
           category: "weather",
+          entryDecision,
           weatherMeta: {
             city:           market.city,
             date:           market.date,

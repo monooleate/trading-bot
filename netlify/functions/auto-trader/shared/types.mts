@@ -77,19 +77,36 @@ export interface TradeDecision {
 // long after the original scan tick payload is gone.
 export interface EntryDecisionSnapshot {
   decidedAt: string;              // ISO timestamp of the decision
-  // Probability + edge (the "thesis")
-  finalProb: number;              // signal-combiner output (YES probability)
-  marketPrice: number;            // YES market price at entry
-  grossEdge: number;              // |finalProb - marketPrice|
-  netEdge: number;                // grossEdge - roundtripFeePct
-  feePct: number;                 // roundtrip fee deducted
-  direction: "YES" | "NO";
+  // Discriminator for the UI's thesis renderer:
+  //   "prob"   — crypto / weather / HL perp: model finalProb vs market
+  //              price → bot took YES/NO/LONG/SHORT.
+  //   "spread" — funding-arb: HL pays X%/h, Binance Y%/h → spread Z%/h.
+  // Optional for backward compat; undefined ⇒ "prob".
+  flavor?: "prob" | "spread";
+  // Probability + edge (the "thesis"). For "spread" flavor these carry
+  // the HL hourly rate (finalProb) and Binance hourly rate (marketPrice)
+  // respectively, with the gross/net edge being the entry spread.
+  finalProb: number;
+  marketPrice: number;
+  grossEdge: number;
+  netEdge: number;
+  feePct: number;
+  direction: "YES" | "NO" | "LONG" | "SHORT";
   // Sizing
   kellyRaw: number;               // signal.kellyFraction (¼-Kelly from combiner)
   kellyCapped: number;            // decision.kellyUsed (after maxKellyFraction cap)
   kellyCap: number;               // config.maxKellyFraction
   positionSizeUSDC: number;
   entryPrice: number;
+  // Optional pre-formatted entry-price label for venues whose entry
+  // price is not a 0..1 probability (HL perp = USD, funding-arb = bp
+  // spread). When absent the UI falls back to "(entryPrice * 100)¢".
+  entryPriceLabel?: string;
+  marketPriceLabel?: string;
+  // Optional spread-flavor extras. Surfaced by the funding-arb bot so
+  // the popover can show the annualized spread + open-interest cap.
+  spreadAnnualizedPct?: number;   // e.g. 84.3 for 84.3%/yr
+  openInterestUSD?: number;
   // Signal mix
   activeSignals: number;          // count of non-null signals
   signalBreakdown: SignalBreakdown | null;

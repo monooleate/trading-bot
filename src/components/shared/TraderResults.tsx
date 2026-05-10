@@ -551,6 +551,9 @@ export function PendingPositionsCard(p: PendingPositionsCardProps) {
 // (or non-crypto categories that don't fill it in) get a "no data" panel.
 export interface OpenPositionRationale {
   decidedAt: string;
+  /** "prob"   = crypto / weather / HL perp (model finalProb vs market price).
+   *  "spread" = funding-arb (HL hourly rate vs Binance hourly rate). */
+  flavor?: "prob" | "spread";
   finalProb: number;
   marketPrice: number;
   grossEdge: number;
@@ -562,6 +565,16 @@ export interface OpenPositionRationale {
   kellyCap: number;
   positionSizeUSDC: number;
   entryPrice: number;
+  /** Optional pre-formatted entry-price label. If absent, falls back to
+   *  "(entryPrice * 100).toFixed(0)¢" — correct for prob-space bots
+   *  (crypto, weather). HL perp passes "$108,432" so the thesis line
+   *  reads naturally without converting USD prices to cents. */
+  entryPriceLabel?: string;
+  /** Optional pre-formatted market-price label. Same fallback rule. */
+  marketPriceLabel?: string;
+  /** Spread-flavor extras (funding-arb). */
+  spreadAnnualizedPct?: number;
+  openInterestUSD?: number;
   activeSignals: number;
   signalBreakdown: {
     funding_rate?: number | null;
@@ -609,48 +622,87 @@ const SIGNAL_LABELS: Array<[
 ];
 
 function RationaleBlock({ r }: { r: OpenPositionRationale }) {
-  const dirNo = r.direction === "NO" || r.direction === "SHORT";
   const passed = r.gates.filter((g) => g.passed).length;
   const total  = r.gates.length;
   const allPass = total > 0 && passed === total;
+  const isSpread = r.flavor === "spread";
   return (
     <div className="ts-pos-why">
       <div className="ts-pos-why-thesis">
         <span className="ts-pos-why-label">Tézis</span>
         <span className="ts-pos-why-thesis-text">
-          A modell szerint a YES esélye <strong>{(r.finalProb * 100).toFixed(1)}%</strong>,
-          a piac <strong>{(r.marketPrice * 100).toFixed(1)}%</strong>-ot árazott
-          → bot {dirNo ? <strong>NO</strong> : <strong>YES</strong>}-t vett
-          {" "}@<strong>{(r.entryPrice * 100).toFixed(0)}¢</strong>,
-          {" "}<strong>${r.positionSizeUSDC.toFixed(2)}</strong>-ért.
+          {isSpread ? (
+            <>
+              HL <strong>{(r.finalProb * 100).toFixed(4)}%</strong>/h funding-ot fizet,
+              a Binance <strong>{(r.marketPrice * 100).toFixed(4)}%</strong>/h-t fogad
+              → spread <strong>{(r.grossEdge * 100).toFixed(4)}%</strong>/h
+              {r.spreadAnnualizedPct !== undefined && (
+                <> (<strong>{r.spreadAnnualizedPct.toFixed(1)}%</strong>/yr ann.)</>
+              )}
+              {" "}→ bot SHORT HL + LONG Binance,
+              {" "}<strong>${r.positionSizeUSDC.toFixed(2)}</strong>-ért
+              {" "}@<strong>{r.entryPriceLabel ?? `$${r.entryPrice.toFixed(2)}`}</strong>.
+            </>
+          ) : (
+            <>
+              A modell szerint a YES esélye <strong>{(r.finalProb * 100).toFixed(1)}%</strong>,
+              a piac <strong>
+                {r.marketPriceLabel ?? `${(r.marketPrice * 100).toFixed(1)}%`}
+              </strong>-ot árazott
+              → bot <strong>{r.direction}</strong>-t vett
+              {" "}@<strong>{r.entryPriceLabel ?? `${(r.entryPrice * 100).toFixed(0)}¢`}</strong>,
+              {" "}<strong>${r.positionSizeUSDC.toFixed(2)}</strong>-ért.
+            </>
+          )}
         </span>
       </div>
 
       <div className="ts-pos-why-grid">
         <div className="ts-pos-why-cell">
-          <span className="ts-pos-why-cell-label">Gross edge</span>
-          <span className="ts-pos-why-cell-val">{(r.grossEdge * 100).toFixed(2)}%</span>
-        </div>
-        <div className="ts-pos-why-cell">
-          <span className="ts-pos-why-cell-label">Net edge (− fees)</span>
-          <span className={`ts-pos-why-cell-val ${r.netEdge >= 0 ? "ts-pos-why-pos" : "ts-pos-why-neg"}`}>
-            {r.netEdge >= 0 ? "+" : ""}{(r.netEdge * 100).toFixed(2)}%
-          </span>
-        </div>
-        <div className="ts-pos-why-cell">
-          <span className="ts-pos-why-cell-label">Kelly raw → capped</span>
+          <span className="ts-pos-why-cell-label">{isSpread ? "Spread (h)" : "Gross edge"}</span>
           <span className="ts-pos-why-cell-val">
-            {(r.kellyRaw * 100).toFixed(2)}% → {(r.kellyCapped * 100).toFixed(2)}%
-            <span className="ts-pos-why-cell-sub"> · cap {(r.kellyCap * 100).toFixed(1)}%</span>
+            {(r.grossEdge * 100).toFixed(isSpread ? 4 : 2)}%
           </span>
         </div>
         <div className="ts-pos-why-cell">
-          <span className="ts-pos-why-cell-label">Aktív signal-ok</span>
-          <span className="ts-pos-why-cell-val">{r.activeSignals}/5</span>
+          <span className="ts-pos-why-cell-label">{isSpread ? "Net spread (− fees)" : "Net edge (− fees)"}</span>
+          <span className={`ts-pos-why-cell-val ${r.netEdge >= 0 ? "ts-pos-why-pos" : "ts-pos-why-neg"}`}>
+            {r.netEdge >= 0 ? "+" : ""}{(r.netEdge * 100).toFixed(isSpread ? 4 : 2)}%
+          </span>
+        </div>
+        <div className="ts-pos-why-cell">
+          <span className="ts-pos-why-cell-label">
+            {isSpread ? "Capital % bankroll" : "Kelly raw → capped"}
+          </span>
+          <span className="ts-pos-why-cell-val">
+            {isSpread ? (
+              <>
+                {(r.kellyCapped * 100).toFixed(1)}%
+                <span className="ts-pos-why-cell-sub"> · cap {(r.kellyCap * 100).toFixed(0)}%</span>
+              </>
+            ) : (
+              <>
+                {(r.kellyRaw * 100).toFixed(2)}% → {(r.kellyCapped * 100).toFixed(2)}%
+                <span className="ts-pos-why-cell-sub"> · cap {(r.kellyCap * 100).toFixed(1)}%</span>
+              </>
+            )}
+          </span>
+        </div>
+        <div className="ts-pos-why-cell">
+          <span className="ts-pos-why-cell-label">
+            {isSpread ? "OI" : "Aktív signal-ok"}
+          </span>
+          <span className="ts-pos-why-cell-val">
+            {isSpread
+              ? r.openInterestUSD !== undefined
+                ? `$${(r.openInterestUSD / 1e6).toFixed(1)}M`
+                : "—"
+              : `${r.activeSignals}/5`}
+          </span>
         </div>
       </div>
 
-      {r.signalBreakdown && (
+      {!isSpread && r.signalBreakdown && (
         <div className="ts-pos-why-signals">
           <span className="ts-pos-why-label">Signal-bontás</span>
           <div className="ts-pos-why-signals-row">

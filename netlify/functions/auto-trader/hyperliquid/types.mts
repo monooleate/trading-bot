@@ -4,7 +4,7 @@
 // architecture (stateless functions + Blobs + cron), reusing the signal-
 // combiner and funding-rates endpoints that already exist.
 
-import type { SignalBreakdown } from "../shared/types.mts";
+import type { SignalBreakdown, EntryDecisionSnapshot } from "../shared/types.mts";
 
 export type HlCoin = "BTC" | "ETH" | "SOL" | "XRP" | "DOGE" | "AVAX";
 export type HlDirection = "LONG" | "SHORT";
@@ -41,6 +41,11 @@ export interface HlPosition {
   predictedProb?:    number;
   edgeAtEntry?:      number;
   signalBreakdown?:  SignalBreakdown;
+  // Frozen decision snapshot — same shape as crypto's, so the UI's
+  // `RationaleBlock` renders the open-position "Why?" panel without a
+  // per-bot branch. HL is signal-driven, so the full crypto-style mix
+  // (signalBreakdown, kellyRaw → capped, gates) is meaningful.
+  entryDecision?:    EntryDecisionSnapshot;
 }
 
 // ─── Closed trade (for Edge Tracker + summary) ─────────────────────────────────

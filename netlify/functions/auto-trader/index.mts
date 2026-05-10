@@ -644,6 +644,7 @@ function getWeatherOpenActive(session: SessionState) {
       predictedMaxC: p.weatherMeta!.predictedMaxC,
       openedAt:      p.openedAt,
       reconcileAfter: p.weatherMeta!.reconcileAfter,
+      entryDecision: p.entryDecision ?? null,
     }))
     .sort((a, b) => a.reconcileAfter.localeCompare(b.reconcileAfter));
 }

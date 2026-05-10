@@ -13,6 +13,7 @@ import {
   hlEntryCriteria,
   type ResultChip,
   type OpenPositionRow,
+  type OpenPositionRationale,
 } from "../shared/TraderResults";
 import { useTradeExport } from "../shared/useTradeExport";
 import type { LiveReadinessReport } from "../shared/LiveReadinessBadge";
@@ -75,6 +76,7 @@ export default function HyperliquidTrader({ bankroll }: { bankroll?: number }) {
     openedAt: string;
     edgeAtEntry: number | null;
     predictedProb: number | null;
+    entryDecision: OpenPositionRationale | null;
   }>;
 
   function ageString(iso: string): string {
@@ -176,6 +178,9 @@ export default function HyperliquidTrader({ bankroll }: { bankroll?: number }) {
             sizeText:   `$${p.sizeUSDC.toFixed(0)} · ${p.leverage}× lev`,
             spreadText: `TP $${p.tpPrice.toFixed(2)} / SL $${p.slPrice.toFixed(2)}`,
             ageText:    ageString(p.openedAt),
+            // Frozen-at-entry rationale popover ("Why?"). Same shape as
+            // crypto and weather; null = pre-snapshot legacy position.
+            rationale:  p.entryDecision ?? null,
           }))}
         />
       )}

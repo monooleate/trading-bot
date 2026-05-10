@@ -6,6 +6,7 @@
 import { tryLoadLiveAdapter, liveAdapterError, formatPrice, formatSize, getCurrentPrice } from "../hl-client.mts";
 import { binanceSpotBuy, binanceSpotSell } from "./hedge-manager.mts";
 import type { ArbOpportunity, ArbPosition, FrArbConfig } from "./types.mts";
+import type { EntryDecisionSnapshot } from "../../shared/types.mts";
 
 export interface OpenArbResult {
   ok:        boolean;
@@ -17,6 +18,7 @@ export async function openArbPosition(
   opp:       ArbOpportunity,
   sizeUSDC:  number,
   config:    FrArbConfig,
+  entryDecision?: EntryDecisionSnapshot,
 ): Promise<OpenArbResult> {
   const sizeCoins = sizeUSDC / opp.markPrice;
 
@@ -90,6 +92,7 @@ export async function openArbPosition(
     accumulatedFunding:   0,
     lastFundingUpdateAt:  new Date().toISOString(),
     status:               "OPEN",
+    entryDecision,
   };
   return { ok: true, position };
 }

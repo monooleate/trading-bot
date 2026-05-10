@@ -14,6 +14,7 @@ import {
   arbEntryCriteria,
   type ResultChip,
   type OpenPositionRow,
+  type OpenPositionRationale,
   type OpportunityRowLite,
 } from "../shared/TraderResults";
 import { useTradeExport } from "../shared/useTradeExport";
@@ -31,6 +32,7 @@ interface ArbOpenDetail {
   spreadEntry:        number;
   accumulatedFunding: number;
   openedAt:           string;
+  entryDecision:      OpenPositionRationale | null;
 }
 
 interface ArbSessionSummary {
@@ -140,6 +142,9 @@ export default function FundingArbPanel({ bankroll }: { bankroll?: number }) {
     pnlText:    `${p.accumulatedFunding >= 0 ? "+" : ""}$${p.accumulatedFunding.toFixed(2)}`,
     pnlValue:   p.accumulatedFunding,
     ageText:    ageString(p.openedAt),
+    // Spread-flavor rationale popover ("Why?"). null = pre-snapshot
+    // legacy position; renders the unified "no data" placeholder.
+    rationale:  p.entryDecision ?? null,
   }));
 
   const oppRows: OpportunityRowLite[] = (display?.opportunities ?? []).map((o) => ({

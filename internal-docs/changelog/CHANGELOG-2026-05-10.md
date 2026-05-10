@@ -881,3 +881,330 @@ felülvizsgálata során kiderült:
   egy "morning-window" gate-et (open ~16:00 UTC előző nap → entry-window
   pl. 08:00–14:00 UTC).
 
+
+
+---
+
+# 2026-05-10 (d) — Crypto bot audit + math/13-crypto-bot.md
+
+Különálló session, kód-változás nélkül: a teljes crypto trader pipeline
+végigauditálva (scan → signals → decision → execute → resolve), és új
+`internal-docs/math/13-crypto-bot.md` doksi készült amely **az aktuális
+implementációt** dokumentálja, nem a tervet.
+
+## Audit findings (kód NEM változott, csak megnevezve a doksiban §9)
+
+**A. Live exit code unused** — `crypto/order-lifecycle.mts` definiál
+`checkExitConditions / handleSellLifecycle / emergencySell` függvényeket,
+de a `runCryptoTrader()` orchestrátor sosem hívja meg ezeket.
+Következmény:
+- TP/SL korai exit nincs sem paper, sem live módban. A `BTC_TP_TARGET` /
+  `BTC_SL_TARGET` env-ek és a Settings UI knobjai idle.
+- Live mode-ban nincs settlement reconciliation: a Polymarket on-chain
+  outcome nem írja vissza a session state-et.
+
+A `live-readiness` gate ezért szigorú default thresholds-szel jár, de még
+a gate átengedése után sem szabad live-ra kapcsolni amíg ez nem épül meg.
+Grep verify: `Grep "checkExitConditions|handleSellLifecycle|emergencySell"`
+→ csak a saját definíciója + dokumentáció említi, nincs hívás production
+kódban.
+
+**B. Cron source label** — `netlify.toml` `auto-trader` schedule közvetlen,
+nem a `multi-cron`-on át. Ezért a `?source=cron` query nem érkezik meg,
+és a `runCryptoTrader()` "manual"-ként tag-eli a cron tick-eket. UX-only
+bug, a homepage status pill nem mutatja a "(cron)" badge-et a crypto
+botra. Funkcionális hatás nincs.
+
+**C. SignalBreakdown shape lemarad** — a `signal-combiner` 8 jelzést
+számol (vol/orderflow/apex/cond/funding/momentum/contrarian/pairs_spread),
+de a `SignalBreakdown` típus csak 5 mezőt tárol. A 3 új jelzés a
+`combined_probability`-be megy, de a UI "Why?" panel-én nem látszik, és
+a `pearsonCorrelation` IC számítás se érinti őket. Az `active_signals`
+count mind a 8-at tartalmazza — így a #2 gate (≥ 2 aktív) átmehet úgy,
+hogy a UI-on egyetlen jelzés sem látszik.
+
+**D. Session summary missing simVersion** — `sessionSummary()` helper nem
+tartalmazza a `simVersion` mezőt, ezért a `getCryptoRunStatus()` a
+`lastResult?.session?.simVersion` lekérdezésen nem találja. A fallback
+`liveReadiness?.summary?.simVersion`-on át működik a stale-result
+invalidation, csak a hierarchia első ága dead.
+
+**E. Live entry-fill nem tükrözi a valós fill price-t** — `handleBuyLifecycle`
+live ágában a `shares: buyOrder.size / buyOrder.price` a placement
+price-t használja, nem a tényleges fill price-t. Ha a CLOB jobb áron
+filled, a session state alulbecsüli a shares-t. Live módban kell `client.
+getOrder(orderId)`-t hívni fill után.
+
+**F. Momentum signal degenerated** — a `signal-combiner` getMomentumSignal
+a "past price" referenciát ugyanazon slug `?slug=` lekéréssel veszi → ugyanazt
+az aktuális ár-t kapja vissza. A `Math.abs(currentMid - pastPrice) < 0.001`
+branch elsül és "distance proxy"-t használ (eltávolodás 0.5-től). A momentum
+signal effektíven a market polaritását méri, nem momentum-ot.
+
+## Validated paths (zöld)
+
+- **Csak piaci adat alapú döntés**: a 8 signal mind real source — Gamma
+  `/markets`, CLOB `/book` és `/midpoint`, Data API `/trades`, Binance
+  funding, Bybit funding, Coingecko/CryptoCompare BTC OHLC. Nincs synthetic
+  / sim adat a signal layer-ben.
+- **Paper-vs-live parity (simV3 garantia)**: paper PnL == live PnL lett volna,
+  mert mindkettő ugyanazon a `outcomePrices` ∈ {0,1} settlement-en zár. A
+  `paper-resolver.mts` a `&closed=true` Gamma query-vel csak resolved
+  market-eken zár; nincs simulator path.
+- **Kelly conviction gate** (2026-05-10 c) működik: ha `signal.kelly.quarter
+  = 0`, a #7 gate skip-elteti a trade-et — nincs többé $1-os floor pozíció.
+- **simVersion auto-archive**: v2 sessionök (143 fake trade) első cron tickkor
+  v3-ra íródnak a `auto-trader-session-archive-paper-v2` Blobs key-be, a fő
+  session blob fresh inittel folytatódik.
+
+## Új doksi
+
+`internal-docs/math/13-crypto-bot.md` — 12 szekciós teljes implementáció
+referencia:
+
+1. Bot célja és stratégia (venue / cron / side / strategy)
+2. Futási pipeline (ASCII flow diagram)
+3. Market-finder (Gamma `tag_id=21` query, filterek, `openedAtEstimate`)
+4. Decision engine (8 ordered gate, math: edge / direction / Kelly / entry price)
+5. Signal aggregator (combiner primary path + 5-signal fallback + OB enrichment)
+6. Position open + paper-resolver (real Polymarket settlement, no simulator)
+7. Paper vs live invariants (mátrix, hol szándékos a divergencia)
+8. Konfigurációs forrás-precedencia (env defaults + Settings overrides + live-readiness)
+9. **Ismert limitációk és technikai debt** — 6 finding (A-F fent)
+10. Paper-mode validációs protokoll (24-48h sanity checks)
+11. Hivatkozott modulok (file → szerep map)
+12. Kapcsolódó dokumentumok (cross-link math/, app/, changelog/)
+
+A cél: amikor egy új session kérdést tesz fel hogy "mit használ a crypto
+bot most és hogyan", elég ezt a fájlt elolvasni — nem a 8 forrásfájlt
+végigtúrni.
+
+`internal-docs/README.md` math/ tábla bővítve egy sorral.
+
+## Hova nyúlj legközelebb (a 6 audit finding sorrendben)
+
+1. **§9.A live exit code** — ez a legfontosabb. A live mode-ot bekapcsolni
+   addig nem szabad, amíg ez nincs implementálva. Mintaként a HL
+   `position-monitor` és a paper-resolver kombóját lehet használni.
+2. **§9.C SignalBreakdown shape** — 8 mezőre kibővíteni hogy a UI helyesen
+   mutassa az active signals-t.
+3. **§9.F Momentum signal** — vagy javítani (Gamma `events?slug=...&order=startDate`-tal
+   N órával ezelőtti snapshot), vagy ki venni a kombinátorból.
+4. **§9.B Cron source label** — `netlify.toml`-ban `path = "/auto-trader?source=cron"`
+   beállítás, vagy header detection.
+5. **§9.D session simVersion** — 1 sor add-on a `sessionSummary`-be.
+6. **§9.E live fill price** — `client.getOrder(orderId)` hívás a buy-lifecycle
+   live ágban; csak akkor érdekes, ha §9.A meg van oldva és tényleg élesedik.
+
+---
+
+## 2026-05-10 (d) — HomePage Aggregated session: aktív trade-ek láthatóvá téve
+
+**Probléma.** A főoldali "Aggregated session" szekció a 3. stat kártyán
+csak a `closedTrades` számot mutatta nagy fontban; a nyitott pozíciók
+csak halvány sub-line-ban szerepeltek (`"X nyitott"`). A per-category
+breakdown sorok pedig egyáltalán nem írták ki a nyitott trade-eket
+(csak `9 trade`).
+
+**Fix** (`src/components/HomePage.tsx`, csak 1 fájl):
+
+1. **Stat #3 ("Closed trades" → "Trades (closed · open)").** Két szám
+   egymás mellett, középen szürke `·` separátor. Az open szám
+   `var(--accent2)` (kék) glow-val, ha > 0; muted szürke, ha 0. A sub
+   sor mostantól `"X lezárt + Y aktív"`.
+2. **Per-category breakdown row.** A trades column eddig `9 trade`
+   volt, most `9 closed · 3 open`. Az open része accent-bold, ha > 0.
+3. **CapCard mini-stats** (per-bot kártya alja). Eddig `9 trade`, most
+   `9c · 3o` kompakt formában; az `o` rész accent-bold, ha > 0.
+
+**Komponens változás.** A `Stat` value paramétere kibővült
+`string | ReactNode`-ra, hogy az inline split-layout (3 span egy
+flexbox-ban) renderelhető legyen. Egyetlen call site használja
+ki — minden más Stat továbbra is sima stringet ad át.
+
+**Backend változás: nincs.** A `multi-status.mts` payload már
+tartalmazta az `openPositions` mezőt mind a per-category snapshotokon
+(L74, L93, L112, L126), mind a `totals` aggregátban (L171). A bug
+pusztán prezentációs probléma volt: a UI a meglévő mezőt nem mutatta
+ki elég prominensen.
+
+**CSS hozzáadások** (`hp-stat-split`, `hp-stat-closed`, `hp-stat-divider`,
+`hp-stat-open` + `.active` variant; `hp-bd-open` + `.active`;
+`hp-card-open` + `.active`). Csak új osztályok, létező osztály nem
+módosult.
+
+**Hatás.** A főoldal mostantól first-glance mutatja, hogy a 4 bot
+összesen hány trade-et zárt és hány van még nyitva. A nyitott trade-ek
+zöld helyett kék (accent2) színt kapnak, hogy vizuálisan elváljanak a
+profit/loss zöld/piros kódolástól.
+
+---
+
+# 2026-05-10 (e) — Unified "Why?" panel: weather + HL + funding-arb is megkapja
+
+## A kontextus
+
+A "(c)" CHANGELOG entry-ben a crypto bot kapott egy frozen entry-decision
+snapshot-ot a nyitott pozíciókra: expandable "Why?" panel a tézis-mondattal,
+gross/net edge grid-del, signal-bontással és gate-listával. A weather, HL
+perp és funding-arb botok ezt akkor még nem kapták meg — a "Why?" toggle
+helyett egyszerű sor látszott a nyitott pozíciókon.
+
+A felhasználó most kérte a teljes egységesítést: **minden bot oldalán
+ugyanaz a "Why?" panel jelenjen meg**.
+
+## Audit (a fix előtt)
+
+| Bot         | EntryDecisionSnapshot | UI rationale | Hiányzó           |
+|-------------|----------------------|--------------|-------------------|
+| Crypto      | ✓ van                | ✓ wired      | —                 |
+| Weather     | ✗ hiányzik           | ✗ hiányzik   | mindkét oldal     |
+| HL Perp     | ✗ csak edgeAtEntry   | ✗ nem rendel | snapshot + UI     |
+| Funding-Arb | ✗ csak spreadEntry   | ✗ nem rendel | snapshot + UI     |
+
+## A megoldás
+
+### 1. `EntryDecisionSnapshot` flavor diszkriminátor
+
+`shared/types.mts:78-117` — új `flavor: "prob" | "spread"` mező +
+opcionális `entryPriceLabel` / `marketPriceLabel` / `spreadAnnualizedPct`
+/ `openInterestUSD` mezők.
+
+A "prob" flavor (default, backward compat) a crypto/weather/HL prob-mode
+térrel kompatibilis: model finalProb vs. market price → bot
+YES/NO/LONG/SHORT-ot vett. A "spread" flavor a funding-arb spread-mode-
+ját kezeli: HL hourly funding vs. Binance hourly funding → spread.
+
+### 2. Weather entry-decision
+
+`weather/decision-engine.mts` — minden gate egy `DecisionGate` rekordba
+kerül (5 gate: confidence, exitBefore, model boundary, edge, sanity cap),
+új `kellyRaw / kellyCapped / kellyCap / grossEdge / netEdge` mezők a
+`WeatherTradeDecision`-ön.
+
+`weather/index.mts` — felépíti az `EntryDecisionSnapshot`-ot a position-
+höz "prob" flavor-rel. signalBreakdown null (forecast-driven, nem signal-
+aggregated), obImbalance null, activeSignals 0 — az UI ezeket
+automatikusan elrejti.
+
+`auto-trader/index.mts` `getWeatherOpenActive()` — `entryDecision: p.
+entryDecision ?? null` mező hozzáadva az openDetails minden sorához.
+
+`WeatherTrader.tsx` — `OpenPositionRationale` import + `entryDecision:
+OpenPositionRationale | null` az openDetails típusban + `rationale: p.
+entryDecision ?? null` minden OpenPositionRow-on.
+
+### 3. HL Perp entry-decision
+
+`hyperliquid/types.mts` — új `entryDecision?: EntryDecisionSnapshot`
+mező a `HlPosition`-ön.
+
+`hyperliquid/order-manager.mts` — `placeHlEntry` paraméter bővítve
+(`entryDecision`), paper + live ágon is mentődik.
+
+`hyperliquid/index.mts` — minden gate egy DecisionGate-be (8 gate:
+session loss, max positions, consecutive losses, coin cooldown, active
+signals, resolution risk, net edge, size). Snapshot:
+- `signal.finalProb` és `signal.marketPrice` közvetlenül használódik
+- `direction: "LONG" | "SHORT"` (HL natív iránya, nem "YES"/"NO" mapping)
+- `entryPriceLabel: "$108,432.50"` — HL coin USD ár, nem 0..1 prob
+- Minden gate "passed: true" mert sikeres trade-en vagyunk
+
+`HyperliquidTrader.tsx` — ugyanaz a UI wiring, mint a weather-en.
+
+### 4. Funding-Arb spread-flavor entry-decision
+
+`funding-arb/types.mts` — új `entryDecision?: EntryDecisionSnapshot` az
+`ArbPosition`-ön.
+
+`funding-arb/fr-executor.mts` — `openArbPosition` 4. param `entryDecision`,
+mentődik a position-on.
+
+`funding-arb/index.mts` — felépíti a spread-flavor snapshot-ot:
+- `flavor: "spread"`, `direction: "SHORT"` (HL leg)
+- `finalProb: opp.hlFundingHourly` (amit kapunk)
+- `marketPrice: opp.binanceFundingHourly` (a benchmark, nem cost)
+- `grossEdge: opp.spread`, `netEdge: spread − fees`
+- `kellyCap: maxCapitalPct`, kellyRaw/kellyCapped a méret-fraction
+- `entryPriceLabel: "$108,432" (HL markPrice)`, `marketPriceLabel:
+  "0.0028%/h"`
+- 5 gate: spread ≥ küszöb, OI ≥ küszöb, per-coin uniqueness, position
+  count ≤ max, capital cap
+
+`FundingArbPanel.tsx` — ugyanaz a UI wiring.
+
+### 5. UI: `RationaleBlock` flavor-aware rendering
+
+`shared/TraderResults.tsx` (`RationaleBlock`):
+
+**Tézis-line:**
+- "prob" flavor: "A modell szerint a YES esélye X%, a piac Y%-ot árazott
+  → bot YES/NO/LONG/SHORT-t vett @W¢ vagy @$X, $V-ért."
+- "spread" flavor: "HL X%/h funding-ot fizet, a Binance Y%/h-t fogad →
+  spread Z%/h (N%/yr ann.) → bot SHORT HL + LONG Binance, $V-ért
+  @$markPrice."
+
+**4-cellás grid:**
+- "prob" flavor: Gross edge / Net edge / Kelly raw → capped / Aktív
+  signal-ok
+- "spread" flavor: Spread (h) / Net spread (− fees) / Capital % bankroll
+  · cap / OI
+
+**Signal-bontás szekció**: csak prob-flavor-on jelenik meg.
+
+**Gate-list**: mindkét flavor-on ugyanazzal a pass/fail vizualizációval.
+
+**Meta sor (decided + reason)**: mindkét flavor-on ugyanaz.
+
+## Mit lát a felhasználó a deploy után
+
+### Weather
+A `/trade/weather/` Tab 1 nyitott pozícióin most "Why?" toggle: tézis-
+line a forecast vs. piac probabilitással, edge grid, gate-lista (5 gate
+zöld pipával), reason. signalBreakdown szekció elrejtve (weather forecast-
+driven, nem aggregált).
+
+### HL Perp
+A `/trade/hyperliquid/` Tab 1 perp pozícióin "Why?" toggle: ugyanaz a
+struktúra, mint cryptón, USD entry price label-lel ("$108,432"), 8
+zöld gate-tel, és a HL signal-bontással (FR/VPIN/VOL/APEX/CP).
+
+### Funding-Arb
+A `/trade/funding-arb/` Tab 1 arb pozícióin "Why?" toggle: spread-flavor
+tézis ("HL X%/h fizet, Binance Y%/h fogad → spread Z%/h ann."), spread-
+specifikus grid (Spread/Net spread/Capital % bankroll/OI), 5 zöld gate.
+
+A 4 bot Tab 1 most már **vizuálisan és funkcionálisan teljesen egységes**:
+ugyanaz az `OpenPositionsCard` + `RationaleBlock`, ugyanaz a "Why?"
+expand mintázat, ugyanaz a gate-list shape.
+
+## Mit nem változtattam
+
+- A már nyitott pozíciók **legacy** (entryDecision nélküliek): a UI a
+  `null` rationale esetén "Adat nem elérhető" placeholder-t rajzol.
+  Új pozíciók már teljes panellel nyílnak.
+- HL `decision-engine.mts` — gate-eket inline építem az index.mts-ben a
+  sikeres trade-en (mind passed:true). Az engine maga nem ad vissza
+  gates listát, de erre most nincs is szükség (failed scan-eken
+  ScanResultsCard-ban már látszik a reason).
+- `signalBreakdown` rendering csak prob-flavor-on van — funding-arb
+  flavor-on automatikusan rejtve.
+
+## Files
+
+```
+netlify/functions/auto-trader/shared/types.mts                          +flavor diszkriminátor + spread mezők
+netlify/functions/auto-trader/weather/decision-engine.mts               gates[] + kelly/edge mezők
+netlify/functions/auto-trader/weather/index.mts                         entryDecision build + position attach
+netlify/functions/auto-trader/index.mts                                 getWeatherOpenActive: +entryDecision
+netlify/functions/auto-trader/hyperliquid/types.mts                     HlPosition.entryDecision
+netlify/functions/auto-trader/hyperliquid/order-manager.mts             placeHlEntry: +entryDecision param
+netlify/functions/auto-trader/hyperliquid/index.mts                     inline 8 gates + snapshot build
+netlify/functions/auto-trader/hyperliquid/funding-arb/types.mts         ArbPosition.entryDecision
+netlify/functions/auto-trader/hyperliquid/funding-arb/fr-executor.mts   openArbPosition: +entryDecision param
+netlify/functions/auto-trader/hyperliquid/funding-arb/index.mts         spread-flavor snapshot build
+src/components/shared/TraderResults.tsx                                 +flavor-aware RationaleBlock
+src/components/trader/WeatherTrader.tsx                                 rationale wiring
+src/components/trader/HyperliquidTrader.tsx                             rationale wiring
+src/components/trader/FundingArbPanel.tsx                               rationale wiring
+```

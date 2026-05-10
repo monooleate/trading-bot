@@ -351,6 +351,151 @@ netlify deploy --prod --dir=dist
 
 ## AKTUÁLIS ÁLLAPOT (2026-05-10) – Claude Code folytatáshoz
 
+### Tizennegyedik session (2026-05-10) – Unified "Why?" panel: weather + HL + funding-arb is megkapja
+
+A Tizenegyedik sessionben a crypto bot kapott entry-decision snapshot-ot
+a nyitott pozíciókra ("Why?" expandable panel a tézis-mondattal, edge
+grid-del, gate-listával). A weather, HL perp és funding-arb botok ezt
+nem kapták meg — a felhasználó észrevette, és kérte a teljes egységesítést.
+
+**Megoldás 4 fronton:**
+
+1. **`EntryDecisionSnapshot` flavor diszkriminátor** (`shared/types.mts`):
+   új `flavor: "prob" | "spread"` mező + opcionális `entryPriceLabel` /
+   `marketPriceLabel` / `spreadAnnualizedPct` / `openInterestUSD`.
+   - "prob": crypto / weather / HL perp (model finalProb vs. market price)
+   - "spread": funding-arb (HL hourly funding vs. Binance hourly funding)
+
+2. **Weather**: `weather/decision-engine.mts` `WeatherTradeDecision`-re
+   `gates: DecisionGate[]` + `kellyRaw / kellyCapped / kellyCap /
+   grossEdge / netEdge` mezők. `weather/index.mts` felépíti a "prob"
+   flavor snapshot-ot a Position-höz. `getWeatherOpenActive` átemeli az
+   openDetails-be. `WeatherTrader.tsx` rationale-prop-pal wire-eli.
+   5 gate: confidence, exitBefore, model boundary, edge, sanity cap.
+
+3. **HL Perp**: `HlPosition.entryDecision` + `placeHlEntry` paraméter
+   bővítve. `hyperliquid/index.mts` 8 inline gate-et épít fel
+   (session loss, max positions, consecutive losses, coin cooldown,
+   active signals, resolution risk, net edge, size). USD
+   entryPriceLabel ("$108,432"), HL natív `direction: "LONG" | "SHORT"`.
+   `HyperliquidTrader.tsx` ugyanúgy wire-eli.
+
+4. **Funding-Arb**: `ArbPosition.entryDecision` + `openArbPosition`
+   paraméter bővítve. `funding-arb/index.mts` "spread"-flavor snapshot-ot
+   épít: `flavor: "spread"`, `direction: "SHORT"`, `finalProb:
+   hlFundingHourly`, `marketPrice: binanceFundingHourly`, `grossEdge:
+   spread`, `spreadAnnualizedPct: opp.spreadAnnualized`,
+   `openInterestUSD`. 5 gate: spread, OI, per-coin uniqueness, position
+   count, capital cap.
+
+5. **`RationaleBlock` flavor-aware** (`shared/TraderResults.tsx`):
+   - "prob" thesis: "A modell szerint a YES esélye X%, a piac Y%-ot
+     árazott → bot Z-t vett @W¢/@$X, $V-ért."
+   - "spread" thesis: "HL X%/h funding-ot fizet, a Binance Y%/h-t fogad
+     → spread Z%/h (N%/yr ann.) → bot SHORT HL + LONG Binance, $V-ért."
+   - "prob" grid: Gross/Net edge, Kelly raw→capped, aktív signal-ok
+   - "spread" grid: Spread (h), Net spread (− fees), Capital %
+     bankroll · cap, OI
+   - Signal-bontás szekció csak "prob" flavor-on (funding-arb-nak
+     nincsenek FR/VPIN/VOL signal-jai)
+   - Gate-list, meta sor mindkét flavor-on ugyanaz
+
+**A 4 bot Tab 1 most teljesen egységes**: ugyanaz az `OpenPositionsCard` +
+`RationaleBlock`, ugyanaz a "Why?" expand mintázat, ugyanaz a gate-list
+shape. Új pozíciókon teljes panel; a már nyitottakon (entryDecision
+nélkül) "Adat nem elérhető" placeholder.
+
+Részletes leírás: `internal-docs/changelog/CHANGELOG-2026-05-10.md`
+"2026-05-10 (e)" szekció.
+
+### Hova nyúlj legközelebb (rationale UI)
+
+- **Új gate hozzáadása bármelyik bot-on**: csak a megfelelő
+  decision-engine `gates[]` array-ébe (vagy HL/arb-ben az inline
+  build-be) egy új `DecisionGate` rekord — automatikusan megjelenik a
+  "Why?" panelen mind a 4 boton.
+- **Új flavor (pl. dispersion-trade)**: új `flavor: "dispersion"` érték
+  a typesetben + új ág a `RationaleBlock` thesis/grid switch-eken.
+- **ClosedTrade rationale**: a `ClosedTrade` típus szintén megérdemli
+  ezt — most csak `signalBreakdown` van rajta. Edge tracker per-trade
+  view-ban szintén látszódna a teljes belépési kontextus.
+
+### Tizenharmadik session (2026-05-10) – HomePage: aktív trade-ek láthatóvá téve
+
+A főoldali "Aggregated session" szekció eddig csak a lezárt trade
+számot mutatta nagy fontban; a nyitott pozíciók csak halvány sub-
+sorban szerepeltek, a per-category breakdown row-okon meg sehol.
+
+**1 fájl változott** (`src/components/HomePage.tsx`):
+
+- **Stat #3** átnevezve `"Closed trades"` → `"Trades (closed · open)"`.
+  A value mostantól split-layout: nagy zárt-szám · separator · nagy
+  open-szám (accent2 kék glow ha > 0).
+- **Per-category breakdown row**: `"9 trade"` → `"9 closed · 3 open"`.
+- **CapCard mini-stats**: `"9 trade"` → `"9c · 3o"` kompakt formában.
+- A `Stat` komponens value-paramétere `string | ReactNode`-ra kibővült.
+
+**Backend érintetlen.** A `multi-status.mts` payload már szállította az
+`openPositions` mezőt minden szinten (L74/93/112/126/171), csak a UI
+nem rendererelte láthatóan.
+
+Részletes leírás: `internal-docs/changelog/CHANGELOG-2026-05-10.md`
+"2026-05-10 (d)" szekció.
+
+### Tizenkettedik session (2026-05-10) – Crypto bot full audit + új `math/13-crypto-bot.md`
+
+Read-only audit + új implementáció-referencia doksi. **Kód nem változott.**
+
+A teljes crypto trader pipeline végigauditálva (scan → signals → decision →
+execute → resolve). 6 tényállás kód-szinten visszaigazolva:
+
+**Validated (zöld):**
+- A 8 signal mind real source-ból (Gamma, CLOB, Data API, Binance, Bybit,
+  Coingecko/CryptoCompare). Semmi synthetic / sim adat a signal layer-ben.
+- Paper-vs-live parity (simV3 garancia): paper PnL == live PnL lett volna,
+  mert mindkettő ugyanazon az `outcomePrices` ∈ {0,1} settlement-en zár.
+- A `paper-resolver.mts` a `&closed=true` Gamma query-vel csak resolved
+  market-eken zár; nincs simulator path.
+- A 11. session Kelly conviction gate-je (#7) működik, hard-skip kelly=0-ra.
+
+**Findings (technikai debt — `math/13-crypto-bot.md` §9 dokumentálva, kód nem fixelve):**
+
+| ID | Probléma | Hatás |
+|----|----------|-------|
+| A | `checkExitConditions` / `handleSellLifecycle` / `emergencySell` definiált, de NEM hívott egyetlen production code path-ból sem | TP/SL korai exit nincs sem paper, sem live módban; live mode-ban nincs settlement reconciliation. **Live-ra kapcsolni TILOS** amíg ez nem épül meg. |
+| B | `netlify.toml` `auto-trader` cron közvetlen schedule, nem fan-out — `?source=cron` query nem érkezik meg | UX: homepage status pill nem mutatja a "(cron)" badge-et a crypto-ra. Funkcionális hatás nincs. |
+| C | `signal-combiner` 8 jelzést számol, de `SignalBreakdown` típus csak 5 mezőt tárol | Momentum/contrarian/pairs_spread bemegy a Kelly-be, de UI "Why?" panelen nem látszik; IC se érinti őket. |
+| D | `sessionSummary()` helper nem tartalmazza `simVersion` mezőt | `getCryptoRunStatus` lastResult invalidation a `liveReadiness?.summary?.simVersion` fallback-on keresztül működik, de a primary path holt. |
+| E | Live `handleBuyLifecycle` `shares = size / placement_price`-t használ, nem a tényleges fill price-t | Live módban a session state alulbecsüli a shares-t ha CLOB jobb áron filled. |
+| F | `getMomentumSignal` ugyanazon slug `?slug=` lekéréssel veszi a "past price"-t → ugyanazt az aktuális ár-t kapja | A momentum signal effektíven a market polaritását méri (eltávolodás 0.5-től), nem momentum-ot. IC közel nulla. |
+
+**Új doksi: `internal-docs/math/13-crypto-bot.md`** — 12 szekciós teljes
+implementáció referencia. Ahol a többi `math/NN-*.md` az academic
+matematikát írja le, ez azt fogja össze, **mit használ valójában a bot**:
+8 gate sorrendben, paraméter-defaults, env vs Settings override hierarchia,
+upstream signal source-ok, paper-vs-live invariáns mátrix, ismert
+limitációk, paper validációs protokoll, és file → szerep map.
+
+A fő használat: új session ne kelljen a 8 forrásfájlt végigtúrni, hanem
+egy doksiból megkapja a teljes képet.
+
+`internal-docs/README.md` math/ tábla bővítve egy sorral.
+`internal-docs/changelog/CHANGELOG-2026-05-10.md` "(d)" szekció hozzáadva
+a teljes audit findings részletes leírásával.
+
+### Hova nyúlj legközelebb (audit findings sorrendben)
+
+1. **§9.A live exit code** — legfontosabb. Live mode bekapcsolása előtt
+   muszáj. Mintaként `paper-resolver.mts` + HL `position-monitor` kombója.
+2. **§9.C SignalBreakdown shape** — 8 mezőre kibővíteni hogy a UI active
+   signals helyesen mutassa.
+3. **§9.F Momentum signal** — vagy javítani historikus snapshot-tal, vagy
+   kivenni a kombinátorból.
+4. **§9.B Cron source label** — `netlify.toml`-ban `path = "/auto-trader?source=cron"`.
+5. **§9.D session simVersion** — 1 sor add-on a `sessionSummary`-be.
+6. **§9.E live fill price** — `client.getOrder(orderId)` hívás a
+   buy-lifecycle live ágban; csak akkor érdekes, ha §9.A megoldva.
+
 ### Tizenegyedik session (2026-05-10) – Crypto: Kelly=0 hard-skip + entry-decision visibility ("Why?" panel)
 
 A live `mj-trading.netlify.app/trade/crypto/` 3 nyitott paper pozíció

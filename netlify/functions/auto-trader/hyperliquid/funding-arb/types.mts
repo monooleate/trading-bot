@@ -17,6 +17,7 @@
 // NOT a cost line on the spot hedge.
 
 import type { HlCoin } from "../types.mts";
+import type { EntryDecisionSnapshot } from "../../shared/types.mts";
 
 // ─── Funding data for a single coin ────────────────────────────────────────
 export interface FundingData {
@@ -65,6 +66,10 @@ export interface ArbPosition {
   closedAt?:            string;
   closeReason?:         string;
   closeFundingNet?:     number;  // final net after fees
+  // Frozen entry-decision snapshot (spread-flavor) — powers the
+  // unified "Why?" panel on the open-position card. Optional for
+  // backward compat with positions opened before this field existed.
+  entryDecision?:       EntryDecisionSnapshot;
 }
 
 // ─── Session state for the arb layer (separate blob from directional) ──────

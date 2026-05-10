@@ -204,6 +204,7 @@ internal-docs/
 | `math/10-signal-combiner.md` | Signal combination | Grinold-Kahn IR = IC × √N |
 | `math/11-arb-matrix.md` | Arbitrage detection | VWAP scanner, LLM dependency |
 | `math/12-realtime-websocket.md` | WebSocket architecture | Future: real-time feed |
+| `math/13-crypto-bot.md` | **Crypto auto-trader implementation** | 8 gate, Kelly sizing, paper-vs-live invariants, known limitations |
 | `math/151-Trading-Strategies.pdf` | Academic reference (Kakushadze) | 151 strategies anthology |
 
 ## changelog/ — change history

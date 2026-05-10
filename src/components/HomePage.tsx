@@ -6,7 +6,7 @@
 // page — never to a /tools# tab anymore. Tools dashboard is kept
 // strictly for analysis (signal layer + research).
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 const FN = "/.netlify/functions";
 
@@ -440,9 +440,21 @@ export default function HomePage() {
           accent={pnlPositive ? "pos" : "neg"}
         />
         <Stat
-          label="Closed trades"
-          value={totals ? `${totals.closedTrades}` : "…"}
-          sub={totals?.openPositions ? `${totals.openPositions} nyitott` : "0 nyitott"}
+          label="Trades (closed · open)"
+          value={
+            totals ? (
+              <span className="hp-stat-split">
+                <span className="hp-stat-closed">{totals.closedTrades}</span>
+                <span className="hp-stat-divider">·</span>
+                <span className={`hp-stat-open ${totals.openPositions > 0 ? "active" : ""}`}>
+                  {totals.openPositions}
+                </span>
+              </span>
+            ) : "…"
+          }
+          sub={totals
+            ? `${totals.closedTrades} lezárt + ${totals.openPositions} aktív`
+            : ""}
           accent="neu"
         />
         <Stat
@@ -468,7 +480,12 @@ export default function HomePage() {
               <span className={`hp-bd-pnl ${c.sessionPnL >= 0 ? "pos" : "neg"}`}>
                 {c.sessionPnL >= 0 ? "+" : ""}${c.sessionPnL.toFixed(0)}
               </span>
-              <span className="hp-bd-trades">{c.closedTrades} trade</span>
+              <span className="hp-bd-trades" title={`${c.closedTrades} lezárt · ${c.openPositions} aktív`}>
+                {c.closedTrades} closed
+                <span className={`hp-bd-open ${c.openPositions > 0 ? "active" : ""}`}>
+                  · {c.openPositions} open
+                </span>
+              </span>
               <span className={`hp-bd-status ${c.stopped ? "stopped" : "running"}`}>
                 {c.stopped ? "STOPPED" : "RUNNING"}
               </span>
@@ -545,7 +562,7 @@ export default function HomePage() {
 
 function Stat({
   label, value, sub, accent,
-}: { label: string; value: string; sub?: string; accent: "pos" | "neg" | "neu" | "warn" }) {
+}: { label: string; value: ReactNode; sub?: string; accent: "pos" | "neg" | "neu" | "warn" }) {
   return (
     <div className="hp-stat">
       <div className="hp-stat-lbl">{label}</div>
@@ -592,7 +609,10 @@ function CapCard({ card, envStat, multi }: { card: Card; envStat: EnvStatus | nu
           <span className={cat.sessionPnL >= 0 ? "pos" : "neg"}>
             {cat.sessionPnL >= 0 ? "+" : ""}${cat.sessionPnL.toFixed(0)}
           </span>
-          <span className="hp-card-trades">{cat.closedTrades} trade</span>
+          <span className="hp-card-trades" title={`${cat.closedTrades} lezárt · ${cat.openPositions} aktív`}>
+            {cat.closedTrades}c
+            <span className={`hp-card-open ${cat.openPositions > 0 ? "active" : ""}`}>·{cat.openPositions}o</span>
+          </span>
         </div>
       )}
       {blocked && cap && (
@@ -880,6 +900,18 @@ const css = `
 .hp-stat-val.neg  { color: var(--danger); }
 .hp-stat-val.neu  { color: var(--text); }
 .hp-stat-val.warn { color: var(--warn); }
+.hp-stat-split {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.hp-stat-closed { color: var(--text); }
+.hp-stat-divider { color: var(--muted); font-weight: 400; font-size: 18px; }
+.hp-stat-open { color: var(--muted); }
+.hp-stat-open.active {
+  color: var(--accent2);
+  text-shadow: 0 0 8px rgba(53,200,241,.35);
+}
 .hp-stat-sub {
   font-family: var(--mono);
   font-size: 10px;
@@ -940,6 +972,8 @@ const css = `
 .hp-bd-pnl.pos { color: var(--accent); font-weight: 700; }
 .hp-bd-pnl.neg { color: var(--danger); font-weight: 700; }
 .hp-bd-trades { color: var(--muted); font-size: 10px; }
+.hp-bd-open { margin-left: 4px; color: var(--muted); }
+.hp-bd-open.active { color: var(--accent2); font-weight: 700; }
 .hp-bd-status { font-size: 9px; padding: 2px 6px; border-radius: 2px; text-align: center; letter-spacing: .08em; }
 .hp-bd-status.running { background: #0a2010; color: var(--accent); border: 1px solid #1a3300; }
 .hp-bd-status.stopped { background: #1f1400; color: var(--warn); border: 1px solid #332200; }
@@ -1096,6 +1130,8 @@ const css = `
 .hp-card-stats .pos { color: var(--accent); font-weight: 700; }
 .hp-card-stats .neg { color: var(--danger); font-weight: 700; }
 .hp-card-trades { margin-left: auto; font-size: 9px; }
+.hp-card-open { margin-left: 4px; color: var(--muted); }
+.hp-card-open.active { color: var(--accent2); font-weight: 700; }
 .hp-card-warn {
   display: flex;
   align-items: flex-start;

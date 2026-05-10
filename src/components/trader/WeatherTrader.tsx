@@ -16,6 +16,7 @@ import {
   type ResultChip,
   type PendingPositionLite,
   type OpenPositionRow,
+  type OpenPositionRationale,
 } from "../shared/TraderResults";
 import { useTradeExport } from "../shared/useTradeExport";
 import type { LiveReadinessReport } from "../shared/LiveReadinessBadge";
@@ -92,6 +93,7 @@ export default function WeatherTrader({ bankroll }: { bankroll?: number }) {
     predictedMaxC: number;
     openedAt: string;
     reconcileAfter: string;
+    entryDecision: OpenPositionRationale | null;
   }>;
 
   const doAction = useCallback(async (action: string) => {
@@ -178,6 +180,10 @@ export default function WeatherTrader({ bankroll }: { bankroll?: number }) {
               sizeText:  `$${p.size.toFixed(2)}`,
               spreadText: `pred ${p.predictedMaxC}°C · ${p.date}`,
               ageText:   inText,
+              // Frozen-at-entry decision snapshot — toggles "Why?" panel.
+              // null (older paper position pre-snapshot) renders the
+              // "no data" placeholder, same as crypto.
+              rationale: p.entryDecision ?? null,
             };
           })}
         />

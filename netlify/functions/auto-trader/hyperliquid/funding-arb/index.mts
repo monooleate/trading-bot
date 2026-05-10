@@ -190,7 +190,78 @@ async function runFundingArbInner(): Promise<any> {
         continue;
       }
 
-      const resp = await openArbPosition(opp, sizeUSDC, config);
+      // Build the spread-flavor entry-decision snapshot — same
+      // `EntryDecisionSnapshot` shape as crypto/weather/HL, so the
+      // unified UI's RationaleBlock renders the "Why?" panel without
+      // a per-bot branch. flavor:"spread" swaps the thesis line and
+      // grid layout client-side.
+      const feePct = config.feeRoundtripHl + config.feeRoundtripBinance;
+      const netSpread = opp.spread - feePct;
+      const capPct    = config.maxCapitalPct;
+      const usedFracBankroll = bankroll > 0 ? sizeUSDC / bankroll : 0;
+      const entryDecision: import("../../shared/types.mts").EntryDecisionSnapshot = {
+        decidedAt:        new Date().toISOString(),
+        flavor:           "spread",
+        finalProb:        opp.hlFundingHourly,
+        marketPrice:      opp.binanceFundingHourly,
+        grossEdge:        opp.spread,
+        netEdge:          netSpread,
+        feePct,
+        direction:        "SHORT",
+        kellyRaw:         usedFracBankroll,
+        kellyCapped:      Math.min(usedFracBankroll, capPct),
+        kellyCap:         capPct,
+        positionSizeUSDC: sizeUSDC,
+        entryPrice:       opp.markPrice,
+        entryPriceLabel:  `$${opp.markPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
+        marketPriceLabel: `${(opp.binanceFundingHourly * 100).toFixed(4)}%/h`,
+        spreadAnnualizedPct: opp.spreadAnnualized,
+        openInterestUSD:  opp.openInterestUSD,
+        activeSignals:    0,
+        signalBreakdown:  null,
+        obImbalance:      null,
+        gates: [
+          {
+            label: "Spread ≥ küszöb",
+            passed: true,
+            actual:   `${(opp.spread * 100).toFixed(4)}%/h`,
+            required: `≥ ${(config.minSpreadHourly * 100).toFixed(4)}%/h`,
+            hint: "HL hourly funding − Binance hourly funding, fee-aware küszöb felett.",
+          },
+          {
+            label: "Open interest ≥ küszöb",
+            passed: true,
+            actual:   `$${(opp.openInterestUSD / 1e6).toFixed(1)}M`,
+            required: `≥ $${(config.minOpenInterestUSD / 1e6).toFixed(0)}M`,
+            hint: "Vékony piacon a hedge nem fillel slippage nélkül.",
+          },
+          {
+            label: "Per-coin uniqueness",
+            passed: true,
+            actual:   "no existing arb position on this coin",
+            required: "no duplicate",
+            hint: "Egy coinra max 1 nyitott arb pozíció.",
+          },
+          {
+            label: "Position count ≤ max",
+            passed: true,
+            actual:   `${session.positions.filter(p => !p.closedAt).length}`,
+            required: `≤ ${config.maxArbPositions}`,
+            hint: "Egyszerre legfeljebb N arb pozíció.",
+          },
+          {
+            label: "Capital cap (sizing)",
+            passed: true,
+            actual:   `$${sizeUSDC.toFixed(2)} (${(usedFracBankroll * 100).toFixed(1)}% of bankroll)`,
+            required: `headroom ≥ $${config.minPositionUSDC} · ≤ ${(capPct * 100).toFixed(0)}% bankroll`,
+            hint: "min(headroom × 0.5, OI × 0.1%) — soha nem leszünk a könyv értékelhető része.",
+          },
+        ],
+        reason: `Spread ${(opp.spread * 100).toFixed(4)}%/h (${opp.spreadAnnualized.toFixed(1)}%/yr ann.) ` +
+                `· OI $${(opp.openInterestUSD / 1e6).toFixed(1)}M · size $${sizeUSDC.toFixed(0)}`,
+      };
+
+      const resp = await openArbPosition(opp, sizeUSDC, config, entryDecision);
       if (!resp.ok || !resp.position) {
         results.push({ coin: opp.coin, action: "error", error: resp.error });
         continue;
@@ -378,6 +449,7 @@ function summarize(s: ArbSessionState) {
       spreadEntry:        parseFloat((p.entrySpread * 100).toFixed(4)),
       accumulatedFunding: parseFloat(p.accumulatedFunding.toFixed(2)),
       openedAt:           p.openedAt,
+      entryDecision:      p.entryDecision ?? null,
     })),
   };
 }

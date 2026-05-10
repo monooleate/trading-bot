@@ -227,7 +227,101 @@ async function runHyperliquidTraderInner(
         continue;
       }
 
-      // 6. Place entry (paper sim or live SDK). Signal metadata is captured
+      // 6a. Build the entry-decision snapshot before placing the order.
+      // All previous gates passed (we wouldn't be here otherwise), so the
+      // rationale popover renders a fully-green gate list. Same shape as
+      // crypto/index.mts so the UI's RationaleBlock works without a HL
+      // branch. The signal carries finalProb (combiner YES prob) and
+      // marketPrice (the underlying Polymarket YES price) directly.
+      const grossEdgeRationale = Math.abs(signal.edge);
+      const netEdgeRationale   = decision.edge;
+      const kellyCapRationale  = config.maxPctBankroll;
+      const kellyCappedRationale = Math.min(signal.kellyFraction, kellyCapRationale);
+      const gatesRationale: import("../shared/types.mts").DecisionGate[] = [
+        {
+          label: "Session loss limit",
+          passed: true,
+          actual:   `$${session.sessionLoss.toFixed(2)}`,
+          required: `< $${config.sessionLossLimit.toFixed(2)}`,
+          hint: "A futó session nettó vesztesége nem érheti el a megadott felső határt.",
+        },
+        {
+          label: "Open positions ≤ max",
+          passed: true,
+          actual:   `${session.openPositions.length}`,
+          required: `≤ ${config.maxOpenPositions}`,
+          hint: "Egyszerre maximum N nyitott perp pozíció.",
+        },
+        {
+          label: "Consecutive losses < limit",
+          passed: true,
+          actual:   `${session.consecutiveLosses}`,
+          required: `< ${config.consecutiveLossLimit}`,
+          hint: "N egymás utáni veszteség után kötelező pause.",
+        },
+        {
+          label: "Coin cooldown",
+          passed: true,
+          actual:   "ready",
+          required: `${config.cooldownSeconds}s a legutóbbi trade óta`,
+          hint: "Ugyanazon a coin-on nem nyitunk pozíciót N másodpercen belül kétszer.",
+        },
+        {
+          label: "Aktív signal források",
+          passed: true,
+          actual:   `${signal.activeSignals}/5`,
+          required: "≥ 3",
+          hint: "HL-en a magasabb costa miatt minimum 3 signal konvergenciája kell.",
+        },
+        {
+          label: "Resolution risk ≠ SKIP",
+          passed: true,
+          actual:   signal.resolutionCategory ?? "OK",
+          required: "≠ SKIP",
+          hint: "Az alapul szolgáló piac resolution kockázata nem lehet SKIP.",
+        },
+        {
+          label: "Net edge ≥ küszöb",
+          passed: true,
+          actual:   `${netEdgeRationale >= 0 ? "+" : ""}${(netEdgeRationale * 100).toFixed(2)}% (gross ${(grossEdgeRationale * 100).toFixed(2)}% − fees ${(config.roundtripFeePct * 100).toFixed(2)}%)`,
+          required: `≥ ${(decision.threshold * 100).toFixed(1)}%`,
+          hint: "Edge - roundtrip taker fees, paper küszöb 12%, live 18%.",
+        },
+        {
+          label: "Méret > 0",
+          passed: true,
+          actual:   `${sized.sizeCoins.toFixed(4)} ${coin} ($${sized.sizeUSDC.toFixed(0)} · ${sized.leverageUsed}× lev)`,
+          required: "> 0",
+          hint: "Kelly × bankroll × leverage, lefelé kerekítve a coin tick-step-jére.",
+        },
+      ];
+      const entryDecision: import("../shared/types.mts").EntryDecisionSnapshot = {
+        decidedAt:        new Date().toISOString(),
+        finalProb:        signal.finalProb,
+        marketPrice:      signal.marketPrice,
+        grossEdge:        grossEdgeRationale,
+        netEdge:          netEdgeRationale,
+        feePct:           config.roundtripFeePct,
+        // Surface HL's native LONG/SHORT so the popover reads "bot LONG-ot
+        // vett" instead of "YES".
+        direction:        signal.direction,
+        kellyRaw:         signal.kellyFraction,
+        kellyCapped:      kellyCappedRationale,
+        kellyCap:         kellyCapRationale,
+        positionSizeUSDC: sized.sizeUSDC,
+        entryPrice:       hlPrice,
+        // HL coin prices are USD, not 0..1 prob — pass a pre-formatted
+        // label so the thesis line shows "$108,432" not cents.
+        entryPriceLabel:  `$${hlPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
+        // The Polymarket-side market price is a 0..1 prob, default fmt OK.
+        activeSignals:    signal.activeSignals,
+        signalBreakdown:  signal.signalBreakdown,
+        obImbalance:      null,
+        gates:            gatesRationale,
+        reason:           decision.reason,
+      };
+
+      // 6b. Place entry (paper sim or live SDK). Signal metadata is captured
       // on the position so the paper-resolver can carry predictedProb /
       // edgeAtEntry / signalBreakdown into the eventual HlClosedTrade.
       const entry = await placeHlEntry({
@@ -242,6 +336,7 @@ async function runHyperliquidTraderInner(
         paperMode:       config.paperMode,
         predictedProb:   signal.finalProb,
         signalBreakdown: signal.signalBreakdown,
+        entryDecision,
       });
       if (!entry.ok || !entry.position) {
         results.push({ coin, action: "error", reason: entry.error || "entry failed" });
@@ -360,6 +455,7 @@ export async function getHlStatus(): Promise<any> {
     openedAt:     p.openedAt,
     edgeAtEntry:  p.edgeAtEntry ?? null,
     predictedProb: p.predictedProb ?? null,
+    entryDecision: p.entryDecision ?? null,
   }));
 
   return {

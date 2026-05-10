@@ -7,6 +7,7 @@
 import { tryLoadLiveAdapter, liveAdapterError, formatPrice } from "./hl-client.mts";
 import { computeTpSl } from "./kelly-sizer.mts";
 import type { HlCoin, HlDirection, HlPosition } from "./types.mts";
+import type { EntryDecisionSnapshot } from "../shared/types.mts";
 
 export interface PlaceEntryInput {
   coin:        HlCoin;
@@ -22,6 +23,7 @@ export interface PlaceEntryInput {
   // HlClosedTrade so the edge-tracker can correlate predictions with PnL.
   predictedProb?:    number;
   signalBreakdown?:  import("../shared/types.mts").SignalBreakdown;
+  entryDecision?:    EntryDecisionSnapshot;
 }
 
 export interface PlaceEntryResult {
@@ -59,6 +61,7 @@ export async function placeHlEntry(p: PlaceEntryInput): Promise<PlaceEntryResult
       predictedProb:   p.predictedProb,
       edgeAtEntry:     p.edge,
       signalBreakdown: p.signalBreakdown,
+      entryDecision:   p.entryDecision,
     };
     return { ok: true, position };
   }
@@ -135,6 +138,7 @@ export async function placeHlEntry(p: PlaceEntryInput): Promise<PlaceEntryResult
     predictedProb:   p.predictedProb,
     edgeAtEntry:     p.edge,
     signalBreakdown: p.signalBreakdown,
+    entryDecision:   p.entryDecision,
   };
   return { ok: true, position };
 }
