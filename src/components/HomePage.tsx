@@ -29,6 +29,7 @@ interface MultiStatus {
     paperMode: boolean | null;
     bankrollStart: number;
     bankrollCurrent: number;
+    bankrollShared?: boolean;
     sessionPnL: number;
     closedTrades: number;
     openPositions: number;
@@ -476,7 +477,15 @@ export default function HomePage() {
               title={`Ugrás: ${c.label} bot oldal`}
             >
               <span className="hp-bd-cat">{c.label}</span>
-              <span className="hp-bd-bk">${c.bankrollCurrent.toFixed(0)}</span>
+              <span
+                className="hp-bd-bk"
+                title={c.bankrollShared
+                  ? "Shared bankroll — Funding-Arb borrows the directional HL session's capital pool."
+                  : `Bankroll: $${c.bankrollCurrent.toFixed(2)} (start: $${c.bankrollStart.toFixed(2)})`}
+              >
+                ${c.bankrollCurrent.toFixed(0)}
+                {c.bankrollShared ? <span style={{ marginLeft: 4, color: "var(--muted)", fontSize: "0.55rem" }}>(shared)</span> : null}
+              </span>
               <span className={`hp-bd-pnl ${c.sessionPnL >= 0 ? "pos" : "neg"}`}>
                 {c.sessionPnL >= 0 ? "+" : ""}${c.sessionPnL.toFixed(0)}
               </span>

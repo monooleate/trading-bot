@@ -351,6 +351,30 @@ netlify deploy --prod --dir=dist
 
 ## AKTUÁLIS ÁLLAPOT (2026-05-10) – Claude Code folytatáshoz
 
+### Huszonharmadik session (2026-05-10) – Bankroll: per-bot input + F-Arb homepage visibility + shared-pool flag
+
+A user 3 problémát észlelt:
+1. **F-Arb "nem kapcsol be"** — főleg mert bankroll $0 → minden coin "Capital cap reached".
+2. **A főoldalon nem látszott a F-Arb bankrollja** — `multi-status.readFundingArb` hardcoded 0-t adott (F-Arb session-nek nincs saját bankroll mezője).
+3. **Bankroll nem volt bot-onként állítható** — egyetlen `ec_bankroll` localStorage kulcs minden boton.
+
+**Backend fix:**
+- `multi-status.mts`: `readFundingArb` betölti a HL session blob-ot, és átemeli a `bankrollStart/Current`-et. Új `bankrollShared: true` flag jelzi a totals reducer-nek, hogy ne számolja duplán a HL bankrollt.
+
+**Frontend fix:**
+- `DashboardShell.tsx`: új `category?: string` prop. localStorage kulcs most per-kategoria (`ec_bankroll_crypto`, `_weather`, `_hyperliquid`). F-Arb és HL **ugyanazt a kulcsot** használja (`ec_bankroll_hyperliquid`), mert a F-Arb session a HL bankrollját húzza. One-time migration a legacy `ec_bankroll`-ból.
+- `HomePage.tsx`: F-Arb sor `bankrollShared` flag-gel `(shared)` suffix-szel + hover tooltip.
+- `CategoryDashboard.tsx`: category prop átadva.
+
+**F-Arb default bankroll**: $200 (HL session default-ja). Per-category defaults: crypto $150, weather $100, hyperliquid $200, funding-arb $200.
+
+**Vizuális változás**: a header `Bankroll:` label → `Bankroll · <category>:`. Funding-arb-nál: `Bankroll · hyperliquid (shared):`.
+
+**Miért "nem kapcsol be" F-Arb (diagnosztikai checklist)**: (1) session.stopped — Resume gomb; (2) HL bankroll = 0 — F-Arb Reset $X-szel beállítja; (3) Spread túl alacsony — normális, piaci alkalom kell.
+
+`tsc --noEmit` exit 0 (project files), Astro build 9 page.
+Részletek: `internal-docs/changelog/CHANGELOG-2026-05-10.md` "(l)" szekció.
+
 ### Huszonkettedik session (2026-05-10) – Stop/Resume gombok unifikálva (Weather Resume hiányzott, Crypto/Weather backend resume case hiányzott)
 
 A user észlelte: a Weather botot megállította (Stopped: Manual stop), de

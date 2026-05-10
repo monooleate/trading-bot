@@ -29,6 +29,10 @@ interface Snapshot {
   openPositions: number;
   stopped: boolean;
   startedAt: string | null;
+  // True when bankrollCurrent is borrowed from another category's session
+  // (Funding-Arb shares the directional HL session's bankroll). The totals
+  // reducer skips bankroll/start fields for these so we don't double-count.
+  bankrollShared?: boolean;
 }
 
 const EMPTY = (category: string, label: string, paperMode: boolean): Snapshot => ({
@@ -120,17 +124,22 @@ async function readFundingArb(paperMode: boolean): Promise<Snapshot> {
   const s: any = await readJson("hyperliquid-arb-session-v1", key);
   if (!s) return EMPTY("funding-arb", "Funding Arbitrage", paperMode);
   // Funding arb session shape is different: positions[] without bankroll fields.
-  // We surface what we can and zero the rest.
+  // F-Arb shares the directional HL session's bankroll (capital comes from
+  // there), so surface that here too — `bankrollShared: true` flags the
+  // totals reducer to NOT add it again to avoid double-counting.
   const positions = Array.isArray(s.positions) ? s.positions : [];
   const open = positions.filter((p: any) => !p.closedAt).length;
   const closed = positions.length - open;
+  const hlKey = paperMode ? "session_paper" : "session_live";
+  const hl: any = await readJson("hyperliquid-session-v1", hlKey);
   return {
     category: "funding-arb",
     label: "Funding Arbitrage",
     found: true,
     paperMode: s.paperMode,
-    bankrollStart: 0,
-    bankrollCurrent: 0,
+    bankrollStart:   hl?.bankrollStart   ?? 0,
+    bankrollCurrent: hl?.bankrollCurrent ?? 0,
+    bankrollShared:  true,
     sessionPnL: typeof s.totalFundingAllTime === "number" ? s.totalFundingAllTime : 0,
     closedTrades: closed,
     openPositions: open,
@@ -162,12 +171,17 @@ export default async function handler(req: Request, _ctx: Context) {
   const all = [crypto, weather, hl, fr];
   const found = all.filter((s) => s.found);
 
+  // Skip bankroll for `bankrollShared: true` categories (F-Arb borrows the
+  // HL session's pool — adding it twice would inflate the home page total).
+  // PnL and trade counts are NOT shared, so those still aggregate.
   const totals = found.reduce(
     (acc, s) => {
-      acc.bankrollStart += s.bankrollStart;
-      acc.bankrollCurrent += s.bankrollCurrent;
-      acc.sessionPnL += s.sessionPnL;
-      acc.closedTrades += s.closedTrades;
+      if (!s.bankrollShared) {
+        acc.bankrollStart   += s.bankrollStart;
+        acc.bankrollCurrent += s.bankrollCurrent;
+      }
+      acc.sessionPnL    += s.sessionPnL;
+      acc.closedTrades  += s.closedTrades;
       acc.openPositions += s.openPositions;
       return acc;
     },

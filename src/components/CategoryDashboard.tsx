@@ -129,7 +129,7 @@ export default function CategoryDashboard({ category }: { category: string }) {
       title={`Bejelentkezés — ${category}`}
       subtitle="Trader vezérléshez (indítás, megállítás, reset, paraméter mentés) belépés kell. Read-only nézet alább."
     >
-      <DashboardShell tabs={tabs} defaultTab={defaultTab}>{(tab, bankroll) => render(tab, bankroll)}</DashboardShell>
+      <DashboardShell tabs={tabs} defaultTab={defaultTab} category={category}>{(tab, bankroll) => render(tab, bankroll)}</DashboardShell>
     </AuthGate>
   );
 }

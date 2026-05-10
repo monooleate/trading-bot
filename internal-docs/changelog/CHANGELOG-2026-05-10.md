@@ -2388,3 +2388,95 @@ látható, ha a session `stopped: true` (HL-en pluszban a `pausedUntil`).
 Stop gomb csak akkor látszik, ha NINCS stopped/paused.
 
 `tsc --noEmit` exit 0 + Astro build 9 page generated.
+
+# 2026-05-10 (l) — Bankroll: per-bot input + F-Arb homepage visibility + shared-pool flag
+
+## A user észrevett 3 problémát
+
+1. **Funding Arbitrage "nem kapcsol be"** — illetve a bankroll = $0
+   miatt nem nyitott pozíciót.
+2. **A főoldalon nem látszik a bankroll** — főleg a F-Arb sornál
+   `bankrollCurrent: 0`-t mutatott, ami félrevezető (a bot valójában
+   a HL session bankrollját használja).
+3. **A bankroll-t nem lehetett bot-onként állítani** — egyetlen
+   `ec_bankroll` localStorage kulcs volt megosztva mind a 4 boton.
+   Ha a felhasználó a Crypto oldalon $150-re állította, a Weather
+   oldalon is $150-et látott.
+
+## Fix #1 — F-Arb bankroll a homepage-en (shared-pool flag)
+
+### `multi-status.mts`
+
+Az F-Arb session-state nem tartalmaz bankroll mezőt (capital pool a HL
+session-é). Most a readFundingArb betölti a HL session blob-ot is, és
+átemeli onnan a bankrollStart / bankrollCurrent értékét. Új flag:
+`bankrollShared: true`.
+
+A `totals` reducer skip-pel azokat a kategóriákat, ahol
+`bankrollShared: true` — különben a Σ Bankroll a HL bankrollt
+duplán számolná (HL + F-Arb).
+
+### `HomePage.tsx`
+
+Per-category breakdown row az F-Arb-nál mostantól mutatja a HL bankrollt,
+plusz egy halvány `(shared)` suffix és hover-tooltip:
+"Shared bankroll — Funding-Arb borrows the directional HL sessions
+capital pool."
+
+## Fix #2 — Per-bot bankroll input localStorage-ben
+
+### `DashboardShell.tsx`
+
+Új `category?: string` prop. A localStorage kulcs most kategoria-szintű:
+
+| Category | localStorage key | Default |
+|----------|------------------|---------|
+| crypto | `ec_bankroll_crypto` | $150 |
+| weather | `ec_bankroll_weather` | $100 |
+| hyperliquid | `ec_bankroll_hyperliquid` | $200 |
+| funding-arb | **`ec_bankroll_hyperliquid` (shared)** | $200 |
+
+A funding-arb és hyperliquid **ugyanazt a kulcsot használja**, mert a
+F-Arb session-nek nincs saját bankrollja — a HL session-ből húzza
+(arbReset is a HL session-be írja).
+
+**One-time migration**: ha a legacy `ec_bankroll` kulcs létezik, és nincs
+még per-bot kulcs, az új kód a legacy értéket carry-over-eli.
+Backwards-compatible — senkinek nem reset-eli az értékét.
+
+### `CategoryDashboard.tsx`
+
+`category` prop átadva a `DashboardShell`-nek minden kategoriánál.
+
+### Vizuális változás
+
+A header label `Bankroll:` → `Bankroll · <category>:`. Funding-arb-nál
+`Bankroll · hyperliquid (shared):` mutatja, hogy honnan jön.
+Hover tooltip elmondja: "Funding-Arb has no bankroll of its own — capital
+is drawn from the directional HL session."
+
+## Fix #3 — F-Arb "nem kapcsol be"
+
+Általában 3 ok miatt nem opening:
+
+1. **`session.stopped: true`** → Resume gomb kell. Az előző session-ben
+   wire-eltük (Resume case a dispatcherbe).
+2. **HL bankroll = $0** → minden coin "Capital cap reached ($0)" hibával
+   skip-pel. Reset a F-Arb-on (vagy HL-en) egy nem-nulla bankroll-lal.
+3. **Spread túl alacsony** → minden coin "Spread … < min …" hibával
+   skip-pel. Ez normális, várjuk a piaci alkalmat.
+
+A homepage-en most látszik a HL bankroll a F-Arb sorban, ezért a #2
+eset most diagnosztizálható lesz.
+
+## Hatás deploy után
+
+- **Homepage**: F-Arb row most $XX bankrollt mutat `(shared)` suffix-szel.
+  A Σ Bankroll már nem duplázza.
+- **/trade/<bot>/ header**: a bankroll input most per-bot persistálódik.
+  Ha Crypto-n $150-re állítom, a Weather oldalon visszatér a saját
+  $100-ra (vagy a legacy értékre, ha az volt).
+- **F-Arb Reset**: ugyanúgy a HL session-be írja a bankrollt — most viszont
+  a felhasználó látja, hogy ez "shared".
+
+`tsc --noEmit` exit 0 (project files), Astro build 9 page generated.
