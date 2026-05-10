@@ -53,8 +53,13 @@ export function classifyImbalance(
 
 /**
  * Fetch all EdgeCalc signals for a given market slug in parallel.
- * Uses the existing Netlify Function endpoints (signal-combiner).
- * Falls back to individual signal endpoints if combiner fails.
+ * Uses the signal-combiner endpoint (single source of truth).
+ *
+ * Ha a combiner failel, explicit "no signal" sentinel-t adunk vissza
+ * (finalProb=0.5, kelly=0, activeSignals=0). A decision-engine gate-jei
+ * (`activeSignals >= 2`, `kellyFraction > 0`) ezt biztosan elutasítják,
+ * tehát a bot SKIPPELI a trade-et — pontosan ahogy korábban is, csak
+ * most explicit a kód a dead fallback helyett.
  */
 export async function aggregateSignals(
   slug: string,
@@ -62,7 +67,6 @@ export async function aggregateSignals(
 ): Promise<AggregatedSignal> {
   const obRatioPromise = fetchOrderBookImbalance("BTCUSDT");
 
-  // Primary: use signal-combiner which already aggregates everything
   let result: AggregatedSignal | null = null;
   try {
     const url = `${FN}/signal-combiner?slug=${encodeURIComponent(slug)}`;
@@ -77,12 +81,23 @@ export async function aggregateSignals(
         activeSignals: data.active_signals ?? 0,
         timestamp: data.fetched_at ?? new Date().toISOString(),
       };
+    } else {
+      console.warn("[signal-aggregator] combiner returned ok=false for", slug, data?.error || "");
     }
   } catch (err) {
-    console.error("[signal-aggregator] combiner failed, falling back:", err);
+    console.error("[signal-aggregator] combiner fetch failed for", slug, err);
   }
 
-  if (!result) result = await fetchIndividualSignals(slug);
+  if (!result) {
+    // Combiner failed → no-signal sentinel. Decision-engine gate-jei skip-elnek.
+    result = {
+      finalProb:       0.5,
+      kellyFraction:   0,
+      signalBreakdown: emptyBreakdown(),
+      activeSignals:   0,
+      timestamp:       new Date().toISOString(),
+    };
+  }
 
   // P1.3: enrich with order-book imbalance
   const ratio = await obRatioPromise;
@@ -93,6 +108,19 @@ export async function aggregateSignals(
       ? null
       : { ratio: parseFloat(ratio.toFixed(3)), direction: classifyImbalance(ratio, up, down) };
   return result;
+}
+
+function emptyBreakdown(): SignalBreakdown {
+  return {
+    funding_rate:   null,
+    orderflow:      null,
+    vol_divergence: null,
+    apex_consensus: null,
+    cond_prob:      null,
+    momentum:       null,
+    contrarian:     null,
+    pairs_spread:   null,
+  };
 }
 
 function extractBreakdown(rawSignals: any): SignalBreakdown {
@@ -120,85 +148,3 @@ function extractBreakdown(rawSignals: any): SignalBreakdown {
   };
 }
 
-// ─── Fallback: individual signal fetching ─────────────────
-
-async function safeFetch(url: string): Promise<any | null> {
-  try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT) });
-    const data = await res.json();
-    return data.ok ? data : null;
-  } catch {
-    return null;
-  }
-}
-
-async function fetchIndividualSignals(
-  slug: string,
-): Promise<AggregatedSignal> {
-  const [vol, flow, apex, cond, fund] = await Promise.all([
-    safeFetch(`${FN}/vol-divergence?slug=${slug}`),
-    safeFetch(`${FN}/orderflow-analysis?slug=${slug}`),
-    safeFetch(`${FN}/apex-wallets?mode=consensus`),
-    safeFetch(`${FN}/cond-prob-matrix?slug=${slug}`),
-    safeFetch(`${FN}/funding-rates`),
-  ]);
-
-  // The fallback path only fetches the 5 legacy signal endpoints; the 3
-  // Kakushadze signals (momentum/contrarian/pairs_spread) live inside the
-  // signal-combiner only, so they're null here.
-  const breakdown: SignalBreakdown = {
-    vol_divergence: vol?.signal_score  ?? null,
-    orderflow:      flow?.signal_score ?? null,
-    apex_consensus: apex?.signal_score ?? null,
-    cond_prob:      cond?.signal_score ?? null,
-    funding_rate:   fund?.signal_score ?? null,
-    momentum:       null,
-    contrarian:     null,
-    pairs_spread:   null,
-  };
-
-  // Simple IC-weighted combination (mirrors signal-combiner logic). Only the
-  // 5 legacy signals are weighted in the fallback — Kakushadze signals get
-  // weight 0 here since they're never populated by this path.
-  const IC: Record<keyof SignalBreakdown, number> = {
-    vol_divergence: 0.06,
-    orderflow:      0.09,
-    apex_consensus: 0.08,
-    cond_prob:      0.07,
-    funding_rate:   0.05,
-    momentum:       0,
-    contrarian:     0,
-    pairs_spread:   0,
-  };
-
-  let weightedSum = 0;
-  let totalWeight = 0;
-  let active = 0;
-
-  for (const [key, ic] of Object.entries(IC)) {
-    const val = breakdown[key as keyof SignalBreakdown];
-    if (val !== null && val !== undefined) {
-      weightedSum += val * ic;
-      totalWeight += ic;
-      active++;
-    }
-  }
-
-  const combined = totalWeight > 0 ? weightedSum / totalWeight : 0.5;
-
-  // Quarter-Kelly
-  const edge = Math.abs(combined - 0.5);
-  const b = combined > 0.5 ? 1 : 1; // binary market, payout = 1:b
-  const p = combined;
-  const q = 1 - p;
-  const kellyFull = Math.max(0, (p * b - q) / b);
-  const kellyQ = kellyFull * 0.25;
-
-  return {
-    finalProb: combined,
-    kellyFraction: kellyQ,
-    signalBreakdown: breakdown,
-    activeSignals: active,
-    timestamp: new Date().toISOString(),
-  };
-}
