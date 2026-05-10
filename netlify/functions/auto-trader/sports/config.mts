@@ -27,6 +27,10 @@ export interface SportsConfig {
   maxOpenPositions:    number;     // default 3
   /** Polymarket roundtrip fee estimate (taker × 2 sides). */
   roundtripFeePct:     number;     // default 0.04
+  /** Skip events whose sub-market count exceeds this — mutex pattern
+   *  (e.g. "Will country X win the World Cup?" 32 outcomes). Contrarian
+   *  fan-bias fade only works on binary moneyline (1-3 markets/event). */
+  maxMarketsPerEvent:  number;     // default 3
 }
 
 export function getSportsConfig(): SportsConfig {
@@ -43,8 +47,13 @@ export function getSportsConfig(): SportsConfig {
     minHoursToEnd:    parseFloat(process.env.SPORTS_MIN_HOURS_TO_END || "2"),
     maxOpenPositions: parseInt  (process.env.SPORTS_MAX_OPEN_POSITIONS || "3", 10),
     roundtripFeePct:  parseFloat(process.env.SPORTS_ROUNDTRIP_FEE    || "0.04"),
+    maxMarketsPerEvent: parseInt(process.env.SPORTS_MAX_MARKETS_PER_EVENT || "3", 10),
   };
 }
 
 export const SPORTS_DEFAULT_BANKROLL = 50;  // $50 USDC paper-mode start
-export const SPORTS_SIM_VERSION      = 1;
+// 2026-05-11 (k) bump: v1 sessions allowed mutex events (FIFA WC 32-way)
+// to slip through fan-bias-fade, opening systematically losing long-tail
+// YES positions. v2 adds the maxMarketsPerEvent filter; loading a v1
+// session auto-archives + starts fresh.
+export const SPORTS_SIM_VERSION      = 2;

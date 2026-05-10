@@ -26,6 +26,12 @@ interface FinderOptions {
   minVolume24h:   number;
   minHoursToEnd:  number;
   maxMarkets?:    number;          // default 30
+  /** Skip events with more than this many sub-markets — these are mutex
+   *  multi-outcome events (FIFA WC 32-way winner, NBA Finals 16-way, etc.)
+   *  where contrarian fan-bias fade cannot apply (only ONE outcome wins,
+   *  so the implied probabilities sum to 1.0 and there's no fan-bias
+   *  asymmetry — Switzerland @ 1.2¢ for WC is RATIONAL, not bias). */
+  maxMarketsPerEvent?: number;     // default 3
 }
 
 export async function findSportsMarkets(opts: FinderOptions): Promise<SportsMarket[]> {
@@ -73,6 +79,25 @@ export async function findSportsMarkets(opts: FinderOptions): Promise<SportsMark
     }
 
     const markets: any[] = Array.isArray(evt.markets) ? evt.markets : [];
+
+    // Mutex-events gate (2026-05-11 (k)): skip multi-outcome events
+    // where each sub-market is mutually exclusive with the others (only
+    // ONE outcome wins). FIFA WC has 32 country-markets; NBA Finals has
+    // 16 team-markets. The implied probabilities sum to 1.0 across the
+    // group, so individual sub-market YES prices are RATIONAL priors,
+    // NOT fan-bias. Buying YES @ 1.2¢ on Switzerland-wins-WC is a
+    // long-tail losing bet, not edge.
+    //
+    // Binary moneyline match events have 1 market; 3-way soccer (home/
+    // draw/away) might surface as 1 multi-outcome market or 3 binary —
+    // a count of ≤ 3 covers both. Anything above is mutex.
+    const liveCount = markets.filter((m: any) =>
+      m && m.closed !== true && m.active !== false).length;
+    const muxCap = opts.maxMarketsPerEvent ?? 3;
+    if (liveCount > muxCap) {
+      continue;
+    }
+
     for (const m of markets) {
       if (m.closed === true || m.active === false) continue;
 

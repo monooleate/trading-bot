@@ -63,9 +63,12 @@ async function runSportsTrader(source: "manual" | "cron"): Promise<any> {
   let markets: SportsMarket[] = [];
   try {
     markets = await findSportsMarkets({
-      minVolume24h:  config.minVolume24h,
-      minHoursToEnd: config.minHoursToEnd,
-      maxMarkets:    30,
+      minVolume24h:       config.minVolume24h,
+      minHoursToEnd:      config.minHoursToEnd,
+      maxMarkets:         30,
+      // Mutex-events filter: only binary moneyline events qualify
+      // for contrarian fan-bias fade (2026-05-11 (k) sim v2).
+      maxMarketsPerEvent: config.maxMarketsPerEvent,
     });
   } catch (err: any) {
     const msg = err?.message || String(err);
