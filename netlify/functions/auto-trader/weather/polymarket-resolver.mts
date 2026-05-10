@@ -6,19 +6,40 @@
 // won, because the market's own resolution criteria (which observation,
 // which station, dispute handling) decide the payout in a real trade.
 //
-// When a sub-market settles:
+// When a sub-market settles cleanly:
 //   - `closed: true`
 //   - `outcomePrices` becomes ["1.0", "0.0"] (YES won) or ["0.0", "1.0"] (NO won)
-//   - `umaResolutionStatus` / `acceptingOrders: false`
+//   - `umaResolutionStatus: "resolved"` (post-dispute window)
+//   - `acceptingOrders: false`
 //
 // We query the Gamma `/markets/{conditionId}` endpoint per position. If the
 // sub-market hasn't settled yet, we return null and let the caller fall
 // back to METAR. If it has settled, we return the YES price (0 or 1) so
 // the position closes with the exact same PnL as a real bet would have had.
+//
+// Defensive bar (2026-05-10 (i)):
+//   Two paper trades closed with fake "wins" because the resolver accepted
+//   a transient `closed=true, op=['0','1']` snapshot before UMA finalised
+//   the result. UMA can propose, get disputed, and re-propose with a flipped
+//   answer — during the dispute window the market may briefly look "closed".
+//   We now require `umaResolutionStatus === "resolved"` as an extra safety
+//   gate so we only accept fully-finalised resolutions. Markets in
+//   `proposed`/`disputed`/`challenged` states return null → fall back to
+//   METAR (more reliable) or wait.
 
 import { GAMMA_API } from "../shared/config.mts";
 
 const TIMEOUT = 8000;
+
+// UMA states we treat as "not yet final". Anything other than these is
+// either fully resolved or the field is missing on legacy markets — both
+// fall through to the price-based isResolved check below.
+const UMA_PENDING_STATES = new Set([
+  "proposed",
+  "disputed",
+  "challenged",
+  "settled_pending",   // some Polymarket negRisk markets show this transiently
+]);
 
 export interface PolymarketResolution {
   conditionId:     string;
@@ -27,6 +48,9 @@ export interface PolymarketResolution {
   noResolvedPrice:  number;        // 0 or 1 once settled
   source:          "polymarket";
   fetchedAt:       string;
+  resolvedSlug:    string;         // returned market slug — caller verifies it
+                                   // matches the position's event slug to defend
+                                   // against conditionId-bucket mismatches.
 }
 
 /**
@@ -74,6 +98,18 @@ export async function fetchPolymarketResolution(
   const no  = prices[1];
   if (!Number.isFinite(yes) || !Number.isFinite(no)) return null;
 
+  // ─── UMA finality gate (2026-05-10 (i) defensive fix) ──────────────
+  // Even with closed=true, if UMA hasn't reached final "resolved" state we
+  // can't trust the prices — they may flip during the dispute window.
+  const umaStatus = String(m.umaResolutionStatus || "").toLowerCase();
+  if (UMA_PENDING_STATES.has(umaStatus)) {
+    console.warn(
+      `[polymarket-resolver] skipping ${conditionId.slice(0, 12)}…: ` +
+      `closed=true but umaResolutionStatus="${umaStatus}" — waiting for finality`,
+    );
+    return null;
+  }
+
   // Polymarket sets outcomePrices to a binary {0,1} once a market resolves.
   // 0.001 tolerance matches the crypto paper-resolver's convention and
   // guards against string-parsing artefacts.
@@ -92,5 +128,6 @@ export async function fetchPolymarketResolution(
     noResolvedPrice:  noSnap,
     source:           "polymarket",
     fetchedAt:        new Date().toISOString(),
+    resolvedSlug:     String(m.slug || ""),
   };
 }

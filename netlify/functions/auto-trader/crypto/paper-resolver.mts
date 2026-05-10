@@ -36,6 +36,17 @@ interface ResolutionInfo {
   closed: boolean;
 }
 
+// UMA states we treat as "not yet final". Anything outside this set is
+// either fully resolved or the field is missing on legacy markets — both
+// fall through to the price-based check below. Same defensive gate the
+// weather resolver uses (2026-05-10 (i)).
+const UMA_PENDING_STATES = new Set([
+  "proposed",
+  "disputed",
+  "challenged",
+  "settled_pending",
+]);
+
 async function fetchMarketResolution(conditionId: string): Promise<ResolutionInfo | null> {
   if (!conditionId) return null;
   try {
@@ -59,6 +70,20 @@ async function fetchMarketResolution(conditionId: string): Promise<ResolutionInf
     } catch {}
 
     const closed = m.closed === true;
+
+    // UMA finality gate — even closed=true with op at extremes can flip
+    // during the dispute window. Only accept resolutions where UMA reached
+    // its final "resolved" state (or where the field is absent on legacy
+    // markets).
+    const umaStatus = String(m.umaResolutionStatus || "").toLowerCase();
+    if (UMA_PENDING_STATES.has(umaStatus)) {
+      console.warn(
+        `[paper-resolver] skipping ${conditionId.slice(0, 12)}…: ` +
+        `closed=true but umaResolutionStatus="${umaStatus}" — waiting for finality`,
+      );
+      return { resolved: false, yesOutcomePrice: yes, closed };
+    }
+
     // Polymarket sets outcomePrices to a binary {0,1} once a market resolves.
     // The 0.001 tolerance guards against string-parsing quirks.
     const isResolved = closed && (yes <= 0.001 || yes >= 0.999);

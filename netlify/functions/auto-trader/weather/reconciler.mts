@@ -96,10 +96,25 @@ export async function runWeatherReconciler(paperMode: boolean = true): Promise<R
     if (pos.conditionId) {
       const resolved = await fetchPolymarketResolution(pos.conditionId);
       if (resolved) {
-        exitPrice = pos.direction === "YES"
-          ? resolved.yesResolvedPrice
-          : resolved.noResolvedPrice;
-        source = "polymarket";
+        // Defensive slug check (2026-05-10 (i)): the position's `market`
+        // field is the event slug (e.g. "highest-temperature-in-shanghai-
+        // on-may-10-2026"); the resolved sub-market slug should start with
+        // it (e.g. "...-may-10-2026-24c"). If not, the stored conditionId
+        // points to a sibling bucket — refuse the resolution to avoid
+        // booking a fake win against the wrong sub-market.
+        const slugMatches = !!resolved.resolvedSlug
+          && resolved.resolvedSlug.startsWith(pos.market);
+        if (!slugMatches) {
+          console.error(
+            `[reconciler] conditionId-bucket mismatch on ${pos.market} (${meta.bucketLabel}): ` +
+            `stored conditionId resolved to slug "${resolved.resolvedSlug}". Skipping settlement.`,
+          );
+        } else {
+          exitPrice = pos.direction === "YES"
+            ? resolved.yesResolvedPrice
+            : resolved.noResolvedPrice;
+          source = "polymarket";
+        }
       }
     }
 
