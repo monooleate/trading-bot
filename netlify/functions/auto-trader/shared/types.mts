@@ -146,15 +146,20 @@ export interface OrderRecord {
 export interface Position {
   market: string;                 // slug
   tokenId: string;
+  // Both YES + NO clob token ids of the parent market — needed by the live
+  // early-exit path so `placeSellOrder` can pick the correct side without
+  // a fresh Gamma lookup. Optional for backward compat with positions
+  // opened before this field was added.
+  clobTokenIds?: [string, string];
   direction: "YES" | "NO";
   shares: number;
   avgEntry: number;
   costBasis: number;              // USDC spent
   openedAt: string;
   buyOrderId: string;
-  // Paper-resolver metadata: lets the next cron tick close this position
-  // by querying real Polymarket resolution or running a finalProb-independent
-  // Brownian-bridge fallback.
+  // Settlement-resolver metadata: lets the next cron tick close this
+  // position by querying Polymarket resolution. Same path is used by both
+  // paper and live — paper PnL == live PnL is the v3 invariant.
   conditionId?: string;
   endDate?: string;
   marketPriceAtEntry?: number;

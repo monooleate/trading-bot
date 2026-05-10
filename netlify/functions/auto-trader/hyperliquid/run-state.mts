@@ -7,6 +7,7 @@
 // manual scans even though the bot was busy in the background.
 
 import { getStore } from "@netlify/blobs";
+import { HL_PAPER_SIM_VERSION } from "./config.mts";
 
 const RUN_STORE = "hl-runtime";
 const RUN_KEY   = "v1";
@@ -63,12 +64,21 @@ export async function getHlRunStatus(): Promise<{
   const ageSec = s.lastRunAt
     ? Math.floor((Date.now() - new Date(s.lastRunAt).getTime()) / 1000)
     : null;
+  // Drop lastResult if it was captured under an older paper-sim version —
+  // those results reference positions that loadHlSession() has since
+  // archived, so surfacing them as the "current" run misleads the UI.
+  let lastResult = s.lastResult;
+  const snapshotSimV = lastResult?.session?.simVersion ?? null;
+  if (typeof snapshotSimV === "number" && snapshotSimV < HL_PAPER_SIM_VERSION) {
+    lastResult = null;
+    try { await saveRunState({ ...s, lastResult: null }); } catch {}
+  }
   return {
     isRunning,
     startedAt:  s.startedAt,
     lastRunAt:  s.lastRunAt,
     source:     s.source,
     ageSec,
-    lastResult: s.lastResult,
+    lastResult,
   };
 }

@@ -3,6 +3,7 @@
 // carries perp-specific fields (leverage, TP/SL, consecutive-loss counter).
 
 import { getStore } from "@netlify/blobs";
+import { HL_PAPER_SIM_VERSION } from "./config.mts";
 import type {
   HlSessionState,
   HlPosition,
@@ -12,6 +13,7 @@ import type {
 const STORE      = "hyperliquid-session-v1";
 const PAPER_KEY  = "session_paper";
 const LIVE_KEY   = "session_live";
+const ARCHIVE_PREFIX = "archive_paper_v";
 const DEFAULT_BANKROLL = 200;
 
 function storeKey(paperMode: boolean): string {
@@ -33,6 +35,7 @@ function freshSession(paperMode: boolean, bankroll: number): HlSessionState {
     pausedUntil:      null,
     stopped:          false,
     stoppedReason:    null,
+    simVersion:       HL_PAPER_SIM_VERSION,
   };
 }
 
@@ -46,6 +49,25 @@ export async function loadHlSession(paperMode: boolean, bankroll = DEFAULT_BANKR
       // Backfill any newly-added fields
       if (parsed.consecutiveLosses === undefined) parsed.consecutiveLosses = 0;
       if (parsed.pausedUntil === undefined) parsed.pausedUntil = null;
+      // ── Paper sim-version auto-archive ──
+      // If the persisted session was written under an older paper PnL
+      // semantic (e.g. before TP/SL clamps + funding accrual + paper vol
+      // gate), archive it under a versioned key and start fresh. Mirrors
+      // the crypto loadSession() pattern. Live sessions never auto-reset
+      // (real money is irreversible — the operator must decide).
+      const persistedVer = parsed.simVersion ?? 1;
+      if (paperMode && persistedVer < HL_PAPER_SIM_VERSION) {
+        try {
+          await store.set(
+            `${ARCHIVE_PREFIX}${persistedVer}_${Date.now()}`,
+            JSON.stringify(parsed),
+          );
+        } catch {}
+        const fresh = freshSession(paperMode, bankroll);
+        try { await store.set(storeKey(paperMode), JSON.stringify(fresh)); } catch {}
+        return fresh;
+      }
+      if (parsed.simVersion === undefined) parsed.simVersion = HL_PAPER_SIM_VERSION;
       return parsed;
     }
   } catch {}

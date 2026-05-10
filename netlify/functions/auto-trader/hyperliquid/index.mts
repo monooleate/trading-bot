@@ -189,8 +189,13 @@ async function runHyperliquidTraderInner(
         activeSignals: signal.activeSignals,
       });
 
-      // 2. Volatility gate (skip in paper unless explicitly testing)
-      if (!config.paperMode) {
+      // 2. Volatility gate (paper + live parity).
+      // Previously paper skipped the gate entirely, so paper trades through
+      // 200% RV days while live wouldn't — paper PnL drifted away from what
+      // live would have produced. Now both modes apply the same RV ceiling.
+      // If the underlying klines are unavailable the gate fails-open
+      // (returns pass:true with reason="vol data unavailable").
+      {
         const volCheck = await volatilityGate(coin, config.volGateRvPct);
         if (!volCheck.pass) {
           results.push({ coin, action: "skip", reason: volCheck.reason });
@@ -334,6 +339,8 @@ async function runHyperliquidTraderInner(
         leverage:        sized.leverageUsed,
         edge:            decision.edge,
         paperMode:       config.paperMode,
+        tpPctMax:        config.tpPctMax,
+        slPctMax:        config.slPctMax,
         predictedProb:   signal.finalProb,
         signalBreakdown: signal.signalBreakdown,
         entryDecision,
@@ -508,5 +515,8 @@ function summarize(s: HlSessionState) {
     openPositions:     s.openPositions.length,
     consecutiveLosses: s.consecutiveLosses,
     startedAt:         s.startedAt,
+    // Surfaced for run-state.mts:getHlRunStatus, which invalidates a
+    // lastResult snapshot whose simVersion < HL_PAPER_SIM_VERSION.
+    simVersion:        s.simVersion ?? null,
   };
 }

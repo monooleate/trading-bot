@@ -26,7 +26,7 @@
 // signals correlate with real HL price moves.
 
 import { log } from "../shared/logger.mts";
-import { getAllMids } from "./hl-client.mts";
+import { getAllMids, hlInfoPost } from "./hl-client.mts";
 import { closePosition } from "./session-manager.mts";
 import type {
   HlSessionState,
@@ -40,6 +40,29 @@ export interface HlResolutionConfig {
   maxPaperHoldMs: number;     // close at market after this much hold time
 }
 
+// One bulk fetch of HL hourly funding rates per coin, mirroring fr-scanner
+// but kept local so paper-resolver stays self-contained. Returns a
+// coin → hourlyRate map; missing coins default to 0 (no accrual).
+async function getHlFundingMap(paperMode: boolean): Promise<Map<HlCoin, number>> {
+  const out = new Map<HlCoin, number>();
+  try {
+    const resp = await hlInfoPost(paperMode, { type: "metaAndAssetCtxs" }, 6000);
+    if (!Array.isArray(resp) || resp.length < 2) return out;
+    const meta = resp[0];
+    const ctxs = resp[1];
+    if (!Array.isArray(meta?.universe) || !Array.isArray(ctxs)) return out;
+    for (let i = 0; i < meta.universe.length; i++) {
+      const u = meta.universe[i];
+      if (!u || u.isDelisted) continue;
+      const name = u.name;
+      if (typeof name !== "string") continue;
+      const r = parseFloat(ctxs[i]?.funding ?? "0");
+      if (Number.isFinite(r)) out.set(name as HlCoin, r);
+    }
+  } catch {}
+  return out;
+}
+
 export interface HlResolution {
   coin: HlCoin;
   exitPrice: number;
@@ -47,16 +70,45 @@ export interface HlResolution {
   reason: "tp" | "sl" | "timeout";
 }
 
-function pnlOfClose(p: HlPosition, exitPrice: number, feeRoundtrip: number) {
+// On a real HL perp position, funding is paid/received hourly: a LONG pays
+// `position_value × fundingRate` when the rate is positive, a SHORT receives
+// it. The previous paper PnL ignored funding entirely, so paper trades over-
+// stated PnL on coins with persistent positive funding (every BTC/ETH long
+// during a bull tape) and understated it on negative-funding rebates. Now
+// we accrue at the latest observed hourly rate × hold time × position
+// notional. The notional is approximated as (sizeCoins × entry+exit avg)
+// — a midpoint that's exact for hold periods short relative to BTC drift
+// and within a few bps for longer holds.
+function pnlOfClose(
+  p: HlPosition,
+  exitPrice: number,
+  feeRoundtrip: number,
+  fundingHourlyRate: number,
+  holdHours: number,
+) {
   const isLong = p.direction === "LONG";
   const priceMovePct = isLong
     ? (exitPrice - p.entryPrice) / p.entryPrice
     : (p.entryPrice - exitPrice) / p.entryPrice;
   const grossPnl = p.sizeUSDC * p.leverage * priceMovePct;
   const fees     = p.sizeUSDC * p.leverage * feeRoundtrip;
-  const pnlUSDC  = grossPnl - fees;
+
+  // Funding leg. Position value at entry == sizeUSDC × leverage; at exit
+  // == |sizeCoins| × exitPrice. Use the midpoint as the per-hour notional.
+  const entryNotional = p.sizeUSDC * p.leverage;
+  const exitNotional  = Math.abs(p.sizeCoins) * exitPrice;
+  const avgNotional   = (entryNotional + exitNotional) / 2;
+  const fundingPaid   = avgNotional * fundingHourlyRate * holdHours;
+  // LONG pays funding when rate > 0; SHORT receives.
+  const fundingPnl    = isLong ? -fundingPaid : fundingPaid;
+
+  const pnlUSDC  = grossPnl - fees + fundingPnl;
   const pnlPct   = p.sizeUSDC > 0 ? pnlUSDC / p.sizeUSDC : 0;
-  return { pnlUSDC: parseFloat(pnlUSDC.toFixed(2)), pnlPct: parseFloat(pnlPct.toFixed(4)) };
+  return {
+    pnlUSDC:    parseFloat(pnlUSDC.toFixed(2)),
+    pnlPct:     parseFloat(pnlPct.toFixed(4)),
+    fundingPnl: parseFloat(fundingPnl.toFixed(4)),
+  };
 }
 
 export async function resolveOpenHlPaperPositions(
@@ -69,10 +121,16 @@ export async function resolveOpenHlPaperPositions(
 
   // One bulk fetch covers every open coin — the markPrice map keys are
   // already coin tickers. If the call fails, we keep the positions open
-  // and try again on the next tick.
+  // and try again on the next tick. The funding-rate fetch is best-effort
+  // (parallel) — on failure we fall back to 0 so PnL still books, with
+  // the funding leg silently skipped rather than blocking the close.
   let mids: Record<string, number>;
+  let fundingMap: Map<HlCoin, number>;
   try {
-    mids = await getAllMids(session.paperMode);
+    [mids, fundingMap] = await Promise.all([
+      getAllMids(session.paperMode),
+      getHlFundingMap(session.paperMode),
+    ]);
   } catch {
     return { session, resolutions: [] };
   }
@@ -110,7 +168,16 @@ export async function resolveOpenHlPaperPositions(
 
     if (exitPrice === null || reason === null) continue;
 
-    const { pnlUSDC, pnlPct } = pnlOfClose(pos, exitPrice, cfg.feeRoundtrip);
+    const openedAtMs   = new Date(pos.openedAt).getTime();
+    const holdHours    = Math.max(0, (now - openedAtMs) / 3_600_000);
+    const fundingRate  = fundingMap.get(pos.coin) ?? 0;
+    const { pnlUSDC, pnlPct, fundingPnl } = pnlOfClose(
+      pos,
+      exitPrice,
+      cfg.feeRoundtrip,
+      fundingRate,
+      holdHours,
+    );
 
     const closed: HlClosedTrade = {
       coin:          pos.coin,
@@ -134,15 +201,18 @@ export async function resolveOpenHlPaperPositions(
 
     updated = closePosition(updated, pos.entryOrderId, closed);
     log("TRADE_CLOSED", session.paperMode, {
-      venue:      "hyperliquid",
-      coin:       pos.coin,
-      direction:  pos.direction,
-      method:     "markprice",
+      venue:       "hyperliquid",
+      coin:        pos.coin,
+      direction:   pos.direction,
+      method:      "markprice",
       reason,
-      entryPrice: pos.entryPrice,
+      entryPrice:  pos.entryPrice,
       exitPrice,
-      markPrice:  px,
-      pnl:        pnlUSDC,
+      markPrice:   px,
+      holdHours:   parseFloat(holdHours.toFixed(2)),
+      fundingRate,
+      fundingPnl,
+      pnl:         pnlUSDC,
     });
     resolutions.push({ coin: pos.coin, exitPrice, pnlUSDC, reason });
   }

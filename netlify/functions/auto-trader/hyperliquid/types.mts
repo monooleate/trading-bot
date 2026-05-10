@@ -80,6 +80,9 @@ export interface HlSessionState {
   pausedUntil:        string | null; // ISO — consecutive-loss pause or manual pause
   stopped:            boolean;
   stoppedReason:      string | null;
+  // Bumped when paper PnL semantics change so older sessions auto-archive
+  // on load (mirrors the crypto bot's PAPER_SIM_VERSION pattern).
+  simVersion?:        number;
 }
 
 // ─── Config ────────────────────────────────────────────────────────────────────
@@ -96,4 +99,17 @@ export interface HlTraderConfig {
   consecutiveLossLimit: number;
   volGateRvPct:     number;         // RV % threshold (annualised)
   roundtripFeePct:  number;         // 0.07% maker+taker roundtrip
+  // Hard caps on TP/SL price-distance. The signal-combiner edge is a
+  // BINARY-market directional bias (|prob−0.5|×2), NOT a perpetual
+  // futures price-move target. Without these caps an edge of 0.20
+  // produced TP=+40% / SL=−20%, which BTC almost never hits in a 4h
+  // hold window — so every trade timed out flat. The clamps keep TP/SL
+  // proportional to edge for small edges but cap them at sensible
+  // perp-side bounds (default 2% / 1% = 2:1 RR over a 4h horizon).
+  tpPctMax:         number;         // e.g. 0.02 = ±2% from entry
+  slPctMax:         number;         // e.g. 0.01 = ±1% from entry
+  // Paper sim version: bumped when paper PnL semantics change so old
+  // sessions auto-reset on load. v2 adds TP/SL clamps + paper funding
+  // accrual + paper-side volatility gate.
+  paperSimVersion:  number;
 }

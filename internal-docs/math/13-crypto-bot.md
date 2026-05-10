@@ -2,10 +2,10 @@
 
 > **Scope:** ez a doksi a `category: "crypto"` bot **élő futási logikáját** írja le
 > ahogy a `netlify/functions/auto-trader/` fán jelenleg implementálva van
-> (simVersion 3, 2026-05-10 állapot). A signal-szintű matematika a
-> `math/06-orderflow.md`–`math/11-arb-matrix.md` fájlokban él; ez a doksi
-> azt szedi össze, **mit használ valójában a bot, milyen sorrendben, milyen
-> paraméterekkel.**
+> (simVersion 3, 2026-05-10 állapot a 6 audit-fix után). A signal-szintű
+> matematika a `math/06-orderflow.md`–`math/11-arb-matrix.md` fájlokban él;
+> ez a doksi azt szedi össze, **mit használ valójában a bot, milyen
+> sorrendben, milyen paraméterekkel.**
 
 ---
 
@@ -18,7 +18,8 @@
 | **Cron** | `*/3 * * * *` (`auto-trader` schedule a `netlify.toml`-ban) |
 | **Side** | Long-only (BUY YES vagy BUY NO; nincs short / nincs sell-side entry) |
 | **Stratégia** | EV-pozitív belépés a `signal-combiner` 8-jelzéses ¼-Kelly outputja alapján, sessionönkénti loss limit + ¼-Kelly + 8% bankroll-cap mellett |
-| **Exit** | **Kizárólag Polymarket settlement** (UMA-resolved outcome 0 / 1). Nincs TP/SL early exit éles vagy paper módban — lásd §6 ismert limitációk |
+| **Paper exit** | **Kizárólag Polymarket settlement** (UMA-resolved outcome 0 / 1). Nincs TP/SL — lásd §7 paper-vs-live invariáns |
+| **Live exit** | (a) TP/SL korai exit per-tick (BTC short markets) + (b) Polymarket settlement automatikus close + (c) on-chain CTF redemption a `/polymarket-redeem` end-pointon manuális |
 | **Default bankroll** | $150 USDC (paper init); UI override-olható reset-tel |
 
 A bot **nem** copy-trade és **nem** arbitrázs — saját predikció kontra mid-price, position sizing Grinold-Kahn IR és Kelly criterion alapján.
@@ -64,6 +65,400 @@ loadSession()       resolvePending          computeLiveReadiness()
                              ▼
                   markRunFinish(payload)
 ```
+
+---
+
+## 2.1 Részletes runtime walkthrough (egy teljes cron tick)
+
+Az alábbi annotated-trace végigmegy egy `*/3 min` cron tick teljes
+életciklusán. A számozás megegyezik a `runCryptoTrader()` függvény
+sorrendjével (`auto-trader/index.mts`). Példa adatok: paper mode, $150
+bankroll, 0 nyitott pozíció, üres closedTrades.
+
+### Lépés 0 — Cron trigger
+
+A Netlify scheduled function `*/3 * * * *` cron-on tüzel és POST-ot küld
+a `/.netlify/functions/auto-trader` URL-re egy `{ next_run: "..." }` body-val.
+
+```
+POST /.netlify/functions/auto-trader
+Content-Type: application/json
+Body: { "next_run": "2026-05-10T19:33:00Z" }
+```
+
+A handler parser-e (`index.mts:79-100`):
+- `body.action` hiányzik → default `"run"`
+- `body.category` hiányzik → default `"crypto"`
+- `body.next_run` jelen → `isScheduledTick = true`
+- Crypto branch source detektálja: `?source=cron` nincs, de
+  `isScheduledTick = true` → `source = "cron"` (audit-fix #B után — előtte
+  "manual"-ként lett tag-elve).
+
+### Lépés 1 — `markRunStart(source)` → `crypto-runtime` Blobs
+
+```
+{ startedAt: "2026-05-10T19:30:01Z", source: "cron" }
+```
+
+UI az 5s status pollon ezt látja → "Scanning… (cron)" pulse a status pill-en.
+
+### Lépés 2 — Effective config build
+
+Két forrás merge-e:
+
+```
+env defaults (config.mts:getTraderConfig)
+  ↓ async merge
+trader-settings runtime overrides (Netlify Blobs / "trader-settings" store)
+  ↓
+config = {
+  paperMode: true,                       ← PAPER_MODE env (default true)
+  edgeThreshold: 0.15,                   ← Settings UI override-olható
+  maxKellyFraction: 0.08,
+  cooldownSeconds: 300,
+  sessionLossLimit: 20,
+  minOpenInterest: 500,
+  roundtripFeePct: 0.036,
+}
+
+btcExit = {
+  tpTarget: 0.75,
+  slTarget: 0.35,
+  entryWindowStartMs: 60_000,
+  entryWindowEndMs:   180_000,
+  holdToEndCutoffMs:  60_000,
+}
+
+obUp = 1.80, obDown = 0.55, btcMinPriceBand = 0.10
+```
+
+### Lépés 3 — `loadSession(paperMode=true, $150, "crypto")`
+
+```
+GET Blobs.auto-trader-state.get("auto-trader-session")
+```
+
+Ha üres → `defaultSession($150, true)` jön létre. Ha létezik:
+- `parsed.paperMode !== paperMode` → friss session (mode-mismatch védelem).
+- `parsed.simVersion < PAPER_SIM_VERSION (3)` → archiválás:
+  - Save: `auto-trader-session-archive-paper-v2` ← régi blob
+  - Save: `auto-trader-session` ← új fresh session (audit-fix 10. session
+    óta a fő key-be is, nem csak archive-ba)
+  - Log `SESSION_START { reason: "auto_reset_simversion" }`
+- Ha `parsed.simVersion === undefined` → backfill simVersion-nel.
+
+Példa eredmény: `session = { startedAt, bankrollStart: 150, bankrollCurrent: 150, sessionPnL: 0, …, simVersion: 3 }`.
+
+### Lépés 4 — `computeLiveReadiness(...)` + `shouldForcePaper()`
+
+8 gate evaluálva (lásd `live-readiness.mts`):
+
+| Gate | Ráta | Default | Példa |
+|------|------|---------|-------|
+| Trade count | `totalTrades ≥ minTrades` | ≥ 30 | 0/30 ❌ |
+| Win rate | `winRate ≥ 0.50` | ≥ 50% | n/a (0 trade) |
+| Signal IC max | `maxAbsIC ≥ 0.05` | ≥ 5% | n/a |
+| Calibration dev | `< 0.07` | < 7% | n/a |
+| Sharpe | `≥ 0.5` | ≥ 0.5 | n/a |
+| Max drawdown | `< 25%` | < 25% | n/a |
+| Session active | `!stopped` | active | active ✓ |
+| Sim version | `= PAPER_SIM_VERSION` | = v3 | v3 ✓ |
+
+Ready: false (insufficient data). `shouldForcePaper(false → ?)`:
+- Ha env `PAPER_MODE=true` → `forcePaper=false` (már paper).
+- Ha env `PAPER_MODE=false` és readiness nem ready → **`config.paperMode` `true`-ra flippelve a tickre**, Telegram alert (sessiononként egyszer a `calibrationAlertSentAt` flag-gel).
+
+### Lépés 5 — Settlement-resolver (paper + live)
+
+Audit-fix #A után **mindkét módra fut**, nem csak paper-re:
+
+```
+if (session.openPositions.length > 0) {
+  const r = await resolvePendingPaperPositions(session);
+  ...
+}
+```
+
+Üres `openPositions` esetén skip. Ha vannak pozíciók:
+
+1. Minden nyitott pozícióra:
+   - Skip ha `now < endDate + 30s` (még aktív piac).
+   - Skip ha `conditionId` hiányzik.
+   - Lekér: `GET Gamma /markets?condition_ids=<id>&closed=true`
+   - Parse `outcomePrices` → `closed === true && (yes ≤ 0.001 || yes ≥ 0.999)` ⇒ resolved.
+   - Exit price = direction === "YES" ? yesOutcomePrice : 1 - yesOutcomePrice.
+   - Snap clean 0 vagy 1.
+   - `pnl = shares * exitSnap - costBasis`.
+   - `closePosition(session, buyOrderId, ClosedTrade)` ⇒ session bankroll/PnL/trade count frissítve.
+   - Log `PAPER_RESOLVED { mode: "paper"|"live", requiresRedeem: !paperMode }`.
+   - Live módban: a `requiresRedeem: true` flag jelzi az operatornak, hogy futtassa a `/polymarket-redeem` endpointot a CTF on-chain redemption-höz (USDC visszaszerzéshez).
+2. Telegram alert minden lezárt trade-re.
+
+### Lépés 6 — Live early-exit pass (csak live módban)
+
+Audit-fix #A új komponens: `runLiveEarlyExits(session, btcExit)`.
+Paper módban **kihagyva** (sim invariáns).
+
+1. `openPositions` rendezése `endDate ASC` (legközelebbi settlement-ű elsőként).
+2. Top `LIVE_EXIT_BUDGET_PER_TICK = 3` pozíción iterál (Netlify timeout védelem).
+3. Minden pozícióra:
+   - Skip ha hiányzik `clobTokenIds` (régebbi pozíció a fix előtt).
+   - `fetchYesMidpoint(clobTokenIds[0])` ⇒ `GET CLOB /midpoint?token_id=<YES>`.
+   - Skip ha midpoint null (CLOB temporary error).
+   - `checkExitConditions(position, minimalMarket, yesMid, now, btcExit)`:
+     - `positionPrice = direction === "YES" ? yesMid : 1 - yesMid`.
+     - Hold-to-end: ha `endDate - now ≤ holdToEndCutoffMs (60s)` ⇒ `{ shouldExit: false, reason: "RESOLUTION_IMMINENT" }` (settlement-resolver fogja zárni).
+     - TP: `positionPrice ≥ tpTarget (0.75)` ⇒ exit.
+     - SL: `positionPrice ≤ slTarget (0.35)` ⇒ exit.
+   - Ha `shouldExit`:
+     - `handleSellLifecycle(position, market, exitPrice, paperMode=false)`:
+       - `placeSellOrder` GTC limit a position-side áron a CLOB-on (clob-client `createAndPostOrder`).
+       - Polling 6 × 5s = 30s a fill-re (`checkOrderStatus` → `getOrder`).
+       - Ha timeout: `emergencySell` (10 × 100ms FOK retry a best bid-en).
+     - `closePosition(session, buyOrderId, enrichedTrade)` ⇒ session frissítve.
+     - Log `TRADE_CLOSED`, Telegram alert.
+
+### Lépés 7 — Calibration noise alarm
+
+```
+const health = computeCalibrationHealth(session.closedTrades, 30);
+```
+
+A `closedTrades`-en végigmegy és 8 jelzésre Pearson-korrelációt számol a win/loss kimenetekkel. Ha ≥ 30 trade ÉS minden `|IC| < 0.02` → `shouldSuspendLive = true`.
+
+- Paper módban: Telegram alert (sessiononként egyszer), session megy tovább.
+- Live módban: `stopSession(session, "Calibration noise: …")` + `alertSessionStop` + early return.
+
+### Lépés 8 — Session stopped check
+
+```
+if (session.stopped) {
+  return finish({ action: "skipped", reason: `Session stopped: ...` });
+}
+```
+
+Ha a user manuálisan stop-olta vagy session-loss-limit-et ért el az előző tickkor.
+
+### Lépés 9 — `findBtcMarkets(minOI=500, btcMinPriceBand=0.10)`
+
+```
+GET Gamma /events?tag_id=21&active=true&closed=false&limit=30&order=volume24hr&ascending=false
+```
+
+Returnedeli a top 30 active crypto event-et volume24h szerint csökkenő sorrendben. A bot végigjárja a `events[].markets[]`-eket és filtereket alkalmaz — lásd §3.
+
+Példa eredmény: 7 BTC up/down piac találva. Top 3: `bitcoin-up-or-down-on-may-10-15min-X`, `bitcoin-up-or-down-on-may-10-15min-Y`, `bitcoin-above-100k-on-may-10`.
+
+A 4–7. piacok `droppedMarkets` array-be kerülnek `reason: "below_top_3"` címkével — UI rendereli őket "what else is out there" listként.
+
+### Lépés 10 — Per-market loop (max 3)
+
+Minden market-re párhuzamosan **NEM** — szigorúan szekvenciális:
+
+#### 10a. Session loss limit re-check
+
+```
+if (updatedSession.sessionLoss >= config.sessionLossLimit) {
+  updatedSession = stopSession(updatedSession, "Session loss limit reached");
+  break;
+}
+```
+
+A loop közben is ellenőrzi (egy korábbi market-en lezárult vesztes trade még abban a tickben triggerelheti).
+
+#### 10b. Duplicate position guard
+
+```
+if (updatedSession.openPositions.some(p => p.market === market.slug)) {
+  results.push({ action: "skip", reason: "Already has open position" });
+  continue;
+}
+```
+
+Egy slug-ra max 1 nyitott pozíció.
+
+#### 10c. `aggregateSignals(market.slug, { up: 1.80, down: 0.55 })`
+
+Két párhuzamos hívás:
+
+**Primary**: `GET /.netlify/functions/signal-combiner?slug=<slug>`
+- A combiner 8 jelzést számol (vol_div, orderflow, apex, cond_prob, funding_rate, momentum, contrarian, pairs_spread) — lásd `math/10-signal-combiner.md`.
+- IR-súlyozott Kelly-output.
+- 3 perc cache (signal-combiner-v3 Blobs store).
+
+**Concurrent**: `fetchOrderBookImbalance("BTCUSDT")`
+- `GET https://api.binance.com/api/v3/depth?symbol=BTCUSDT&limit=20`
+- `bidDepth = sum(bids[0..10].size)`, `askDepth = sum(asks[0..10].size)`
+- `ratio = bidDepth / askDepth`
+- 30s in-process cache.
+- Direction: `ratio ≥ 1.80 → UP`, `ratio ≤ 0.55 → DOWN`, egyébként `NEUTRAL`.
+
+Példa eredmény:
+```
+signal = {
+  finalProb: 0.62,             ← combined_probability
+  kellyFraction: 0.04,         ← kelly.quarter
+  signalBreakdown: { funding_rate: 0.55, orderflow: 0.68, vol_divergence: 0.51,
+                    apex_consensus: 0.60, cond_prob: 0.58,
+                    momentum: 0.65, contrarian: 0.45, pairs_spread: 0.62 },
+  activeSignals: 8,
+  obImbalance: { ratio: 2.1, direction: "UP" },
+  timestamp: "..."
+}
+```
+
+Log: `SIGNAL { market, finalProb: 0.62, marketPrice: 0.50, edge: 0.12, kelly: 0.04, activeSignals: 8 }`.
+
+#### 10d. `makeDecision(signal, market, $150, $0, config, btcExit)`
+
+8 ordered gate (§4):
+
+```
+Gate 1 (Session loss limit):  $0 < $20 ✓
+Gate 2 (Active signals):      8 ≥ 2 ✓
+Gate 3 (Cooldown):            ready ✓
+Gate 4 (Open interest):       $1500 ≥ $500 ✓
+Gate 4b (Entry window):       90s ∈ [60s, 180s] ✓ (csak ha openedAtEstimate van)
+Gate 5b (OB imbalance):       UP & we want YES → aligned ✓
+Gate 6 (Net edge):            netEdge = 0.12 - 0.036 = 0.084 < 0.15 ✗ → SKIP
+```
+
+Itt **bukik** a példában — `netEdge < edgeThreshold`. A `noResult` early-return ad vissza:
+
+```
+{
+  shouldTrade: false, direction: "YES", positionSizeUSDC: 0, edge: 0.084,
+  reason: "Net edge 8.4% < threshold 15.0%",
+  gates: [...]   ← első 6 gate, a 6. failed=true
+}
+```
+
+UI: a sor **skip** action-ként jön vissza, narancssárga keret + halvány bg + "✗ Net edge ≥ küszöb (8.4%, ≥ 15.0%)" inline blocker.
+
+Ha minden gate átment volna:
+```
+direction = YES, positionSize = $150 * 0.04 = $6, entryPrice = 0.51
+```
+
+#### 10e. (csak ha `shouldTrade=true`) `placeBuyOrder(...)`
+
+**Paper mode**:
+```
+record = {
+  orderId: "paper_<ts>_<rand>", status: "FILLED",
+  filledShares: 6 / 0.51 = 11.76, filledAt: now
+}
+```
+Instant. Log `ORDER_PLACED` + `ORDER_FILLED`.
+
+**Live mode**:
+```
+client.createAndPostOrder({ tokenID: <YES>, price: 0.51, side: "BUY", size: 6 },
+                          { tickSize: "0.01", negRisk: false }, "GTC")
+```
+Returns `{ orderID: "..." }` vagy throw. Status `PLACED`, polling kezdődik.
+
+#### 10f. `handleBuyLifecycle(buyOrder, market, paperMode)`
+
+**Paper**: rögtön visszatér a `Position`-nel.
+
+**Live**: 6 × 5s polls a `getOrder(orderID)`-ra, max 30s. Ha `MATCHED`:
+- Audit-fix #E után: `fetchOrderFillDetail(orderID)` → real `size_matched` + `price`.
+- `shares = filledUsdc / fillPrice` (a tényleges fill-en, nem a placement price-on).
+- Position object visszaadva.
+
+Ha `EXPIRED`/`CANCELLED`/timeout → `null`, a market `failed` action-nel a results-ban.
+
+#### 10g. EntryDecisionSnapshot + Position augmentation
+
+```
+entryDecision = {
+  decidedAt, finalProb: 0.62, marketPrice: 0.50, grossEdge: 0.12, netEdge: 0.084,
+  feePct: 0.036, direction: "YES", kellyRaw: 0.04, kellyCapped: 0.04, kellyCap: 0.08,
+  positionSizeUSDC: 6, entryPrice: 0.51, activeSignals: 8,
+  signalBreakdown: { ... }, obImbalance: { ratio: 2.1, direction: "UP" },
+  gates: [...8 gate...], reason: "..."
+}
+
+paperPosition = {
+  ...position,
+  clobTokenIds:       ["YES_TOKEN_ID", "NO_TOKEN_ID"],   ← audit-fix #A
+  conditionId:        "0x...",
+  endDate:            "2026-05-10T20:00:00Z",
+  marketPriceAtEntry: 0.50,
+  predictedProb:      0.62,
+  signalBreakdown:    { ... },
+  category:           "crypto",
+  entryDecision,
+}
+```
+
+#### 10h. `addOpenPosition(session, paperPosition)` + `setCooldown(slug)`
+
+```
+session.openPositions = [...existing, paperPosition]
+session.bankrollCurrent -= 6   ← $150 → $144
+cooldownMap.set("bitcoin-up-or-down-on-may-10-15min-X", now)
+```
+
+#### 10i. `alertTradeOpen(...)` Telegram
+
+```
+🟢 PAPER · Bitcoin Up or Down (15m) · BUY YES @ $0.51 · $6.00 size
+   bankroll: $144 · edge 8.4% · ¼-Kelly 4.0% · FR↑ VPIN↑ VOL↑ APEX↑ CP↑ MOM↑ CTR↓ PRS↑
+```
+
+A `formatSignalArrows` audit-fix #C után 8 nyíllal jön (előtte csak 5).
+
+### Lépés 11 — `saveSession(updatedSession)` → Blobs
+
+```
+PUT Blobs.auto-trader-state.set("auto-trader-session", JSON.stringify(session))
+```
+
+### Lépés 12 — `markRunFinish(payload)` → `crypto-runtime` Blobs
+
+```
+{
+  startedAt: null,           ← Scanning pulse off
+  lastRunAt: now,
+  lastResult: {
+    ok: true, action: "run", paperMode: true, marketsScanned: 7,
+    marketsConsidered: 3, results: [...], droppedMarkets: [...],
+    config: {...}, session: {... simVersion: 3 ...},   ← audit-fix #D
+    liveReadiness: {...}, source: "cron", finishedAt: now
+  },
+  source: "cron"
+}
+```
+
+UI az 5s pollra ezt visszakapja → "last run: 12s ago" + a 3 sor (1 trade open + 2 skip) megjelenik a `ScanResultsCard`-on.
+
+### Lépés 13 — HTTP response a Netlify-nek
+
+```
+HTTP 200
+{ ok: true, action: "run", ...enriched payload... }
+```
+
+A Netlify ennek a respose-ának a státuszát logoja, de nem dolgozza fel — a következő `*/3 min` tickre vár.
+
+### Tick teljes time-budget (paper, üres state)
+
+| Lépés | Tipikus latency |
+|-------|----------------|
+| Lépés 0–3 (load) | ~150ms |
+| Lépés 4 (readiness) | <10ms |
+| Lépés 5 (resolver, 0 pozíció) | ~5ms |
+| Lépés 6 (live exit, paper skip) | 0ms |
+| Lépés 7 (calibration) | <10ms |
+| Lépés 9 (Gamma events) | 200–500ms |
+| Lépés 10 × 3 markets | 3 × (combiner ~800ms + OB 100ms + decision <5ms) ≈ 2.7s |
+| Lépés 11–12 (save) | ~100ms |
+| **Total** | **~3.3s** |
+
+Live módban (1 nyitott pozíció TP-hit-tel): + ~30s `handleSellLifecycle` GTC poll
++ esetleg + 1s emergency FOK = ~33s extra. Limit `LIVE_EXIT_BUDGET_PER_TICK = 3` ⇒ worst-case ~100s, Netlify scheduled function 15min budget alatt OK.
 
 ---
 
@@ -392,95 +787,41 @@ egyszer).
 
 ---
 
-## 9. Ismert limitációk és technikai debt
+## 9. Audit findings + fix history
 
-### A. Live exit code unused
+A 2026-05-10 audit során 6 hibát azonosítottunk; **mindegyiket javítottuk**
+ugyanazon a napon. A status oszlop a deployment utáni állapotot mutatja.
 
-`crypto/order-lifecycle.mts:checkExitConditions / handleSellLifecycle / emergencySell`
-**definiált, de a `runCryptoTrader()` orchestrátor sosem hívja meg**. Ezért:
+| ID | Probléma (pre-fix) | Status | Fix lényege |
+|----|---------------------|--------|-------------|
+| **A** | Live exit code (`checkExitConditions` / `handleSellLifecycle` / `emergencySell`) definiált, de **NEM hívott** semmiből. Sem TP/SL early exit, sem live settlement reconciliation. | ✅ FIXED | (1) Új `live-price.mts:fetchYesMidpoint`. (2) Új `runLiveEarlyExits` orchestrator a `runCryptoTrader`-ben, max 3 pozíció/tick, endDate ASC sorted, paperMode skip. (3) `paper-resolver.mts:resolvePendingPositions` általánosítva — paper + live módra is fut, live close `requiresRedeem: true` flag-gel logol (manuális `/polymarket-redeem` szükséges). (4) `Position.clobTokenIds` mező hozzáadva hogy a sell-side tudja a token-id-kat lookup nélkül. |
+| **B** | `netlify.toml` `auto-trader` schedule közvetlenül a function URL-t hívta, így `?source=cron` query nem érkezett meg → run-state "manual"-ként tag-elte. | ✅ FIXED | `auto-trader/index.mts` body parse mostantól `body.next_run` jelenlétét ellenőrzi (Netlify scheduled function payload jellemzője). Ha jelen → `isScheduledTick=true` → source override "cron"-ra. HL + weather útvonalakra is alkalmazva. |
+| **C** | `SignalBreakdown` típus 5 mezős, de a `signal-combiner` 8 jelzést számol. A 3 új jelzés bemegy a Kelly-be, de UI "Why?" panel + IC számítás nem érinti őket. | ✅ FIXED | `types.mts:SignalBreakdown` 8 mezőre kibővítve. `extractBreakdown` + fallback path + `formatSignalArrows` + `edge-tracker/statistics.mts:SIGNAL_NAMES` + `mock-trades.mts` + UI `SIGNAL_ORDER` + `TraderResults.tsx:SIGNAL_LABELS` mind 8 jelzéssel. HL signal-source már korábban populated 8 mezőt; most a típus is matchel. |
+| **D** | `sessionSummary()` helper nem tartalmazta `simVersion`-t. `getCryptoRunStatus` stale-result invalidation csak a `liveReadiness.summary.simVersion` fallback-on át működött. | ✅ FIXED | `sessionSummary` mostantól `simVersion: s.simVersion ?? null`-t is visszaad. |
+| **E** | Live `handleBuyLifecycle` `shares = size / placement_price`-t használ, nem a tényleges fill price-t — partial fill / better-than-limit fill esetén a session state pontatlan. | ✅ FIXED | Új `execution.mts:fetchOrderFillDetail(orderId)` → `getOrder` → `size_matched` + `price`. `handleBuyLifecycle` live FILLED ágban most ezt használja, fallback a placement értékekre ha az API nem ad jó adatot. Defensive field-name spelling: `size_matched ?? sizeMatched ?? executedSize ?? filledSize`. |
+| **F** | `getMomentumSignal` ugyanazon slug `?slug=` lekéréssel vette a "past price"-t → ugyanazt az aktuális ár-t kapta vissza. A `Math.abs(...) < 0.001` branch elsült, "distance proxy"-ra esett — effektíven a market polaritását mérte, nem momentum-ot. | ✅ FIXED | `signal-combiner.mts:getMomentumSignal` átírva. Új `momentum-snapshots` Blobs store, per-slug `{ ts, yes }` snapshot. Minden hívás: olvas snapshot, ha age ∈ [60s, 1h] → real Rcum vs snapshot, ha túl friss/régi → neutral 0.5. Snapshot mindig frissítve a current value-ra. A combiner 3min cache miatt 3-15 min look-back ablakot ad. |
 
-- **TP/SL korai exit nincs sem paper, sem live módban.** A `BTC_TP_TARGET` /
-  `BTC_SL_TARGET` env-ek és a Settings UI ezekhez tartozó knobjai **idle**.
-- **Live mode-ban nincs settlement reconciliation:** a Polymarket on-chain
-  outcome nem írja vissza a session state-et. Egy live position örökre nyitva
-  marad a session blob-ban. (A paper mode-nak van — `paper-resolver.mts`.)
+### Maradó (post-fix) limitációk
 
-A `live-readiness` gate ezért a default thresholds mellett szándékosan szigorú
-(30+ trade, IC ≥ 5%, calib dev < 7%, Sharpe ≥ 0.5, DD < 25%) — **de még a
-gate átengedése után sem szabad live-ra kapcsolni**, amíg ez a két dolog nem
-épül meg.
+- **Cooldown map in-memory**: `decision-engine.mts:cooldownMap` egy
+  `Map<string, number>` ami a Netlify function cold-start után elvész. Ha
+  egy market 5 percen belül 2× passol minden gate-en és a függvény közben
+  cold-startol → 2× nyithat ugyanarra a slug-ra. Mitigation: `addOpenPosition`
+  post-check (`openPositions.some(p => p.market === slug) → skip`) megfogja,
+  de csak a tényleges Position rekord után. **Nem fixelve** — Blobs-perzisztálás
+  trade-off: 1 plusz Blobs read/write/tick. Tesztelési protokoll alatt
+  monitorozandó.
 
-**Fix terv** (ha valaki nekiáll):
+- **Live early-exit Netlify timeout**: `LIVE_EXIT_BUDGET_PER_TICK = 3`-mal
+  worst case 3 × ~30s GTC poll = 90s. Netlify scheduled function 15 min
+  budgetje bőven elég, de standard sync function timeout 26s. Ha valaha
+  átkerül a bot egy nem-scheduled függvénybe, ez áttervezést igényel.
 
-1. A `runCryptoTrader()` for-loopja előtt új blokk: minden `openPosition`-re
-   `checkExitConditions()`. Live módban → `handleSellLifecycle()`. Paper
-   módban → szándékosan **nem** hívjuk (paper csak settlement-en zár, lásd
-   "garantált invariáns" §6).
-2. Új `crypto/live-resolver.mts` ami a `clob-client.getMarketTrades()` /
-   on-chain Polymarket events-et figyeli és lezárja a settled live
-   positionöket. Mintaként a `paper-resolver.mts` és a HL `position-monitor`
-   kombóját lehet venni.
-
-### B. Cron source label
-
-A `netlify.toml`-ban az `auto-trader` cron közvetlen schedule, **nem fan-out**.
-Amikor ez fired, a Netlify a function URL-t hívja query string nélkül. A
-`runCryptoTrader()` source detektora `?source=cron` paramra figyel, így a
-közvetlen cron tick-ek **"manual"-ként** lesznek tag-elve a run-state-ben.
-
-A homepage status pill ezért nem mutatja a "(cron)" badge-et a crypto
-botra. Funkcionális hatás nincs — csak UX. A `multi-cron`-os fan-out
-(HL + arb) helyesen passol `?source=cron`-t.
-
-**Fix:** `netlify.toml:21` `[functions."auto-trader"]` alá `path =
-"/auto-trader?source=cron"` config — vagy közvetlenül a `runCryptoTrader()`-ben
-detektálni a `req.headers.get("user-agent")?.includes("netlify")` jelet.
-
-### C. SignalBreakdown shape lemarad
-
-A `signal-combiner` 8 jelzést számol, de a `SignalBreakdown` típus csak 5
-mezőt tárol (`vol_divergence`, `orderflow`, `apex_consensus`, `cond_prob`,
-`funding_rate`). A momentum / contrarian / pairs_spread jelzések az IR-súlyozott
-combined-be belemennek (és így a Kelly-be), de a UI "Why?" panel-én nem
-jelennek meg, és a `pearsonCorrelation` IC számítás se érinti őket.
-
-**Fix:** kibővíteni a `SignalBreakdown`-t 8 mezőre, és a `extractBreakdown`-ben
-a 3 új mezőt is kiolvasni.
-
-### D. Session summary missing simVersion
-
-A `sessionSummary()` helper (`auto-trader/index.mts:749`) nem tartalmazza
-a `simVersion` mezőt, ezért a `run-state.mts:getCryptoRunStatus()` a
-`lastResult?.session?.simVersion` lekérdezésen nem találja. Szerencsére a
-fallback `lastResult?.liveReadiness?.summary?.simVersion`-on át működik a
-stale-result invalidation. **Fix:** add hozzá `simVersion: s.simVersion`-t
-a `sessionSummary`-hez.
-
-### E. Live entry-fill nem tükrözi a valós fill price-t
-
-A `handleBuyLifecycle` live ágában (`order-lifecycle.mts:97`):
-
-```
-shares: buyOrder.size / buyOrder.price
-```
-
-Ez a placement price-t használja, **nem** a tényleges fill price-t. Ha a CLOB
-egy jobb áron filled (tipikusan 1 tick lejjebb a YES-en), a bot kevesebb
-shares-t könyvel mint amennyit valójában megvett. Az on-chain on-chain
-position helyes, csak a session state alulbecsüli.
-
-**Fix:** `client.getOrder(orderId)`-t hívni fill után és `filledSize / fillPrice`-t
-használni. (A v3 paperrel ez nem érdekes mert paper-ben definiáltan az
-exact entry price-on filled.)
-
-### F. Momentum signal degenerated
-
-A `signal-combiner` getMomentumSignal a "past price" referenciát ugyanazon
-slug `?slug=` lekéréssel veszi → ugyanazt az aktuális ár-t kapja vissza. A
-`Math.abs(currentMid - pastPrice) < 0.001` branch elsül és "distance proxy"-t
-használ (eltávolodás 0.5-től). Effektíven a momentum signal **nem momentum-ot
-mér**, hanem a market polaritását. IC szempontjából ez nullára közeli, de
-nem zéró súlyú a kombinátorban.
+- **On-chain CTF redemption manuális**: live-mode close után az USDC nem
+  jön vissza automatikusan a funder address-re. `PAPER_RESOLVED.requiresRedeem:
+  true` log-bejegyzés és Telegram alert jelzi, hogy a user futtassa a
+  `/polymarket-redeem` end-pointot. Auto-redeem opcionálisan beépíthető,
+  de jelenleg intent-only minta (security-conscious default).
 
 ---
 
@@ -510,14 +851,15 @@ kapcsolás előtt** §9.A-t (live exit code) be kell fejezni.
 
 ```
 netlify/functions/auto-trader/
-├── index.mts                          ← runCryptoTrader() orchestrator
+├── index.mts                          ← runCryptoTrader() + runLiveEarlyExits() orchestrator
 ├── crypto/
 │   ├── btc-market-finder.mts          ← Gamma /events?tag_id=21 + filterek
 │   ├── signal-aggregator.mts          ← /signal-combiner + Binance OB enrichment
 │   ├── decision-engine.mts            ← 8 gate, Kelly, edge, direction
-│   ├── execution.mts                  ← clob-client BUY/SELL (paper instant fill)
-│   ├── order-lifecycle.mts            ← ⚠ definiált TP/SL exit, NEM HÍVOTT
-│   ├── paper-resolver.mts             ← Real Polymarket settlement (simV3)
+│   ├── execution.mts                  ← clob-client BUY/SELL + fetchOrderFillDetail (audit-fix #E)
+│   ├── order-lifecycle.mts            ← TP/SL checkExitConditions + handleSellLifecycle (live, audit-fix #A)
+│   ├── live-price.mts                 ← CLOB /midpoint fetcher a live early-exit pass-hez
+│   ├── paper-resolver.mts             ← resolvePendingPositions (paper + live, audit-fix #A)
 │   ├── session-manager.mts            ← Blobs persistence + simVersion archive
 │   └── run-state.mts                  ← UI status pill data (manual/cron)
 └── shared/

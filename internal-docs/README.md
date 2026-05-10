@@ -205,6 +205,8 @@ internal-docs/
 | `math/11-arb-matrix.md` | Arbitrage detection | VWAP scanner, LLM dependency |
 | `math/12-realtime-websocket.md` | WebSocket architecture | Future: real-time feed |
 | `math/13-crypto-bot.md` | **Crypto auto-trader implementation** | 8 gate, Kelly sizing, paper-vs-live invariants, known limitations |
+| `math/14-hl-directional.md` | **HL directional perp bot implementation** | 8 gate, ¼-Kelly + 3x lev cap, TP/SL clamps, paper funding accrual, simVersion 2 invariants |
+| `math/15-funding-arb.md` | **Funding-rate arb bot implementation** | 5 gate, atomic 2-leg open, mark-to-market accrual, asymmetric close slippage band |
 | `math/151-Trading-Strategies.pdf` | Academic reference (Kakushadze) | 151 strategies anthology |
 
 ## changelog/ — change history

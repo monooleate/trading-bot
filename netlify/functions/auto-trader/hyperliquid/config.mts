@@ -27,6 +27,13 @@ export function hlBaseUrl(paperMode: boolean): string {
   return paperMode ? HL_TESTNET : HL_MAINNET;
 }
 
+// Bump on every breaking paper-semantic change. v2 (2026-05-10):
+//   - TP/SL price-distance clamps via tpPctMax / slPctMax
+//   - Paper-side volatility gate (parity with live)
+//   - Paper PnL accrues HL hourly funding (parity with live)
+// Old v1 sessions auto-archive on load (see session-manager loadHlSession).
+export const HL_PAPER_SIM_VERSION = 2;
+
 // ─── Trader config ──────────────────────────────────────────────────────────
 export function getHlConfig(): HlTraderConfig {
   return {
@@ -42,5 +49,8 @@ export function getHlConfig(): HlTraderConfig {
     consecutiveLossLimit:      parseInt  (process.env.HL_CONSEC_LOSS_LIMIT       || "3", 10),
     volGateRvPct:       parseFloat(process.env.HL_VOL_GATE_RV_PCT      || "120"),
     roundtripFeePct:    parseFloat(process.env.HL_ROUNDTRIP_FEE_PCT    || "0.0007"),
+    tpPctMax:           parseFloat(process.env.HL_TP_PCT_MAX           || "0.02"),
+    slPctMax:           parseFloat(process.env.HL_SL_PCT_MAX           || "0.01"),
+    paperSimVersion:    HL_PAPER_SIM_VERSION,
   };
 }

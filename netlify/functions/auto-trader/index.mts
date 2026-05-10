@@ -7,7 +7,7 @@
 
 import type { Context } from "@netlify/functions";
 import { checkAuth } from "../_auth-guard.ts";
-import { CORS, getTraderConfig, getEffectiveTraderConfig, getEffectiveBtcExitConfig } from "./shared/config.mts";
+import { CORS, getTraderConfig, getEffectiveTraderConfig, getEffectiveBtcExitConfig, getBtcExitConfig } from "./shared/config.mts";
 
 // State-changing actions require a valid JWT cookie. Read-only `status` is
 // public so the home page + per-venue dashboards can render without
@@ -28,13 +28,15 @@ import { findBtcMarkets } from "./crypto/btc-market-finder.mts";
 import { aggregateSignals } from "./crypto/signal-aggregator.mts";
 import { makeDecision, setCooldown } from "./crypto/decision-engine.mts";
 import { placeBuyOrder } from "./crypto/execution.mts";
-import { handleBuyLifecycle } from "./crypto/order-lifecycle.mts";
+import { handleBuyLifecycle, handleSellLifecycle, checkExitConditions } from "./crypto/order-lifecycle.mts";
 import { resolvePendingPaperPositions } from "./crypto/paper-resolver.mts";
+import { fetchYesMidpoint } from "./crypto/live-price.mts";
 import { markRunStart, markRunFinish, getCryptoRunStatus } from "./crypto/run-state.mts";
 import {
   loadSession,
   saveSession,
   addOpenPosition,
+  closePosition,
   stopSession,
   resetSession,
 } from "./crypto/session-manager.mts";
@@ -296,21 +298,36 @@ async function runCryptoTrader(
     return jsonResponse(enriched, status);
   };
 
-  // Resolve any open paper positions whose markets have resolved on
-  // Polymarket. Positions whose underlying market hasn't published an
-  // outcome yet stay open — paper PnL must equal what live PnL would have
-  // been, so no simulator runs.
-  if (config.paperMode && session.openPositions.length > 0) {
+  // Resolve any open positions whose markets have resolved on Polymarket.
+  // Both paper AND live: same Polymarket-settlement path (v3 invariant —
+  // paper PnL == live PnL). Positions whose underlying market hasn't
+  // published an outcome yet stay open. Live closes also book the PnL
+  // into the session state, but on-chain USDC redemption needs a separate
+  // /polymarket-redeem call (logged via PAPER_RESOLVED.requiresRedeem).
+  if (session.openPositions.length > 0) {
     const r = await resolvePendingPaperPositions(session);
     session = r.session;
     if (r.resolutions.length > 0) {
-      // Best-effort Telegram for closed paper trades — re-use the existing helper.
       for (const res of r.resolutions) {
         const last = session.closedTrades[session.closedTrades.length - 1];
         if (last && last.market === res.market) {
-          await alertTradeClosed(true, last, session.sessionPnL, session.openPositions.length);
+          await alertTradeClosed(config.paperMode, last, session.sessionPnL, session.openPositions.length);
         }
       }
+    }
+  }
+
+  // Live early-exit pass (TP / SL / hold-to-end): for live sessions only,
+  // walk every still-open position, fetch current YES midpoint from CLOB,
+  // and exit via handleSellLifecycle if checkExitConditions trips. Paper
+  // mode INTENTIONALLY does not run this — paper PnL must equal eventual
+  // settlement PnL, so an early-exit simulator would re-introduce the
+  // halfway/Brownian artefacts the v3 contract removes.
+  if (!config.paperMode && session.openPositions.length > 0) {
+    const liveExitResults = await runLiveEarlyExits(session, btcExit);
+    session = liveExitResults.session;
+    for (const closed of liveExitResults.closed) {
+      await alertTradeClosed(false, closed, session.sessionPnL, session.openPositions.length);
     }
   }
 
@@ -499,11 +516,15 @@ async function runCryptoTrader(
         reason:           decision.reason,
       };
 
-      // Attach paper-resolver metadata so the next cron tick can close this
-      // position using real Polymarket resolution data (or, after a stale
-      // window, the finalProb-independent Brownian-bridge fallback).
+      // Attach resolver + live-exit metadata so the next cron tick can:
+      //   - close this position via real Polymarket settlement (paper +
+      //     live alike — paper-resolver path);
+      //   - in live mode, also evaluate TP/SL via checkExitConditions and
+      //     drive a CLOB sell through handleSellLifecycle. clobTokenIds
+      //     is mandatory for the live early-exit path.
       const paperPosition: Position = {
         ...position,
+        clobTokenIds:       market.clobTokenIds,
         conditionId:        market.conditionId,
         endDate:            market.endDate,
         marketPriceAtEntry: market.currentPrice,
@@ -566,6 +587,110 @@ async function runCryptoTrader(
     config: traderConfigSummary(config, btcExit, btcMinPriceBand),
     session: sessionSummary(updatedSession),
   });
+}
+
+// ─── Live early-exit pass (TP/SL/hold-to-end) ─────────────────────────
+// Runs ONCE per cron tick, before the entry scanner, on every still-open
+// LIVE position. For each position:
+//   1. Pull the current YES midpoint from CLOB.
+//   2. Run the pure checkExitConditions() against (TP, SL, hold-to-end).
+//   3. If shouldExit → handleSellLifecycle() places a real GTC sell at
+//      the position-side price; on timeout it falls back to FOK at best
+//      bid via emergencySell.
+//   4. Apply the resulting ClosedTrade to the session (closePosition
+//      mutates bankroll + sessionPnL + sessionLoss + tradeCount).
+//
+// Paper mode does NOT call this — paper closes only at real Polymarket
+// settlement (paper-resolver), which is the v3 "paper PnL == live PnL"
+// invariant. Adding a paper TP/SL would re-introduce the kind of
+// halfway-toward-prediction artefacts that v1/v2 produced.
+// Max live exits to drive per cron tick. Each handleSellLifecycle poll loop
+// is up to ~30s (GTC) + emergency FOK; processing too many serially would
+// blow the Netlify scheduled-function budget. Positions skipped this tick
+// are picked up next tick (cron is */3 min), and the settlement resolver
+// closes them at outcome regardless.
+const LIVE_EXIT_BUDGET_PER_TICK = 3;
+
+async function runLiveEarlyExits(
+  session: SessionState,
+  btcExit: ReturnType<typeof getBtcExitConfig>,
+): Promise<{ session: SessionState; closed: import("./shared/types.mts").ClosedTrade[] }> {
+  let updated = session;
+  const closed: import("./shared/types.mts").ClosedTrade[] = [];
+
+  // Sort by endDate ASC so positions closest to settlement are evaluated
+  // first — those have the tightest exit window.
+  const queue = [...session.openPositions].sort((a, b) => {
+    const ea = a.endDate ? new Date(a.endDate).getTime() : Infinity;
+    const eb = b.endDate ? new Date(b.endDate).getTime() : Infinity;
+    return ea - eb;
+  }).slice(0, LIVE_EXIT_BUDGET_PER_TICK);
+
+  for (const pos of queue) {
+    // We need both YES + NO clob token ids to drive placeSellOrder. Skip
+    // positions opened before clobTokenIds was added — the next
+    // settlement-resolver tick will close them at outcome.
+    if (!pos.clobTokenIds || pos.clobTokenIds.length !== 2) {
+      log("ORDER_REJECTED", false, {
+        market: pos.market,
+        reason: "live_early_exit_skipped: missing clobTokenIds",
+      });
+      continue;
+    }
+
+    // Always resolve via the YES tokenId so the midpoint semantics are
+    // unambiguous (positionPrice = NO ? 1 - mid : mid in checkExitConditions).
+    const yesTokenId = pos.clobTokenIds[0];
+    const yesMid = await fetchYesMidpoint(yesTokenId);
+    if (yesMid === null) {
+      log("ORDER_REJECTED", false, {
+        market: pos.market,
+        reason: "live_early_exit_skipped: no midpoint",
+      });
+      continue;
+    }
+
+    const minimalMarket: MarketInfo = {
+      slug:          pos.market,
+      conditionId:   pos.conditionId ?? "",
+      questionId:    "",
+      title:         pos.market,
+      clobTokenIds:  pos.clobTokenIds,
+      currentPrice:  yesMid,
+      openInterest:  0,
+      volume24h:     0,
+      endDate:       pos.endDate ?? "",
+      active:        true,
+    };
+
+    const decision = checkExitConditions(pos, minimalMarket, yesMid, Date.now(), btcExit);
+    if (!decision.shouldExit) continue;
+
+    const trade = await handleSellLifecycle(pos, minimalMarket, decision.exitPrice, false);
+    // Carry over the entry context onto the closed trade (handleSellLifecycle
+    // builds the bare PnL skeleton and doesn't see entryDecision/predictedProb).
+    const enriched: import("./shared/types.mts").ClosedTrade = {
+      ...trade,
+      category:           pos.category ?? "crypto",
+      predictedProb:      pos.predictedProb,
+      marketPriceAtEntry: pos.marketPriceAtEntry,
+      edgeAtEntry:
+        pos.predictedProb !== undefined && pos.marketPriceAtEntry !== undefined
+          ? Math.abs(pos.predictedProb - pos.marketPriceAtEntry)
+          : undefined,
+      signalBreakdown:    pos.signalBreakdown ?? null,
+    };
+    updated = closePosition(updated, pos.buyOrderId, enriched);
+    closed.push(enriched);
+    log("TRADE_CLOSED", false, {
+      market: pos.market,
+      reason: decision.reason,
+      exitPrice: trade.exitPrice,
+      pnl: Math.round(trade.pnl * 100) / 100,
+    });
+  }
+
+  return { session: updated, closed };
 }
 
 // ─── Status endpoint ──────────────────────────────────────

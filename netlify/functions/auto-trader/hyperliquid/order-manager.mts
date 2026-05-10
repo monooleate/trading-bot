@@ -19,6 +19,10 @@ export interface PlaceEntryInput {
   leverage:    number;
   edge:        number;
   paperMode:   boolean;
+  // TP/SL distance caps so order-manager doesn't have to import the full
+  // HlTraderConfig just to pass two numbers.
+  tpPctMax?:   number;
+  slPctMax?:   number;
   // Signal context that the paper-resolver carries through into the
   // HlClosedTrade so the edge-tracker can correlate predictions with PnL.
   predictedProb?:    number;
@@ -37,6 +41,8 @@ export async function placeHlEntry(p: PlaceEntryInput): Promise<PlaceEntryResult
     entryPrice: p.entryPrice,
     direction:  p.direction,
     edge:       p.edge,
+    tpPctMax:   p.tpPctMax,
+    slPctMax:   p.slPctMax,
   });
 
   const pricedEntry = formatPrice(p.coin, p.entryPrice);

@@ -116,14 +116,17 @@ async function runFundingArbInner(): Promise<any> {
 
   try {
     // 1. Scan fundings (HL + Binance) — done BEFORE accrual so we can
-    //    accrue at the latest observed HL hourly rate rather than the
-    //    entry-time snapshot. See accrueFunding's signature in fr-session.
+    //    accrue at the latest observed HL hourly rate AND latest markPrice
+    //    rather than the entry-time snapshot. See accrueFunding in
+    //    fr-session for the mark-to-market math.
     const fundings = await scanFundings(ARB_COINS, config.paperMode);
-    const hlRateByCoin = new Map<string, number>();
-    for (const f of fundings) hlRateByCoin.set(f.coin, f.hlFundingHourly);
+    const hlSnapshotByCoin = new Map<string, { rate: number; markPrice: number }>();
+    for (const f of fundings) {
+      hlSnapshotByCoin.set(f.coin, { rate: f.hlFundingHourly, markPrice: f.markPrice });
+    }
 
-    // 2. Accrue funding using the freshest HL rate.
-    session = accrueFunding(session, new Date(), hlRateByCoin);
+    // 2. Accrue funding using the freshest HL rate × current notional.
+    session = accrueFunding(session, new Date(), hlSnapshotByCoin);
 
     const opportunities = fundings.map(f => detectArbOpportunity(f, config));
     const viable = rankOpportunities(opportunities.filter(o => o.isViable));

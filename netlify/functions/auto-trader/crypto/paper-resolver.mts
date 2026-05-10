@@ -1,5 +1,5 @@
-// Paper-mode resolver: closes open paper positions ONLY using the real
-// Polymarket resolution. No simulation, no fallback.
+// Position settlement resolver: closes open positions (paper AND live) using
+// the real Polymarket resolution outcome. No simulation, no fallback.
 //
 // Why this module exists
 // ──────────────────────
@@ -10,9 +10,16 @@
 // fired on the first iteration whenever entry was outside the [SL, TP] band.
 //
 // v3 contract: paper PnL == live PnL would have been. The only way to close
-// a paper position is to read `outcomePrices` from Polymarket Gamma after
-// the market resolves. If a market hasn't resolved yet, the position stays
+// a position is to read `outcomePrices` from Polymarket Gamma after the
+// market resolves. If a market hasn't resolved yet, the position stays
 // open — exactly like a real position would.
+//
+// v4 generalization (2026-05-10 audit fix #A): the same logic now also
+// closes LIVE positions. The bot's session-state PnL is finalised the same
+// way for both modes; the only difference is that for live mode the user
+// must redeem the on-chain CTF position via `/polymarket-redeem` to
+// actually receive USDC into their funder address. This is logged on close
+// so the user can act on it.
 //
 // Gamma quirk (the bug v2 hit): the default `?condition_ids=...` query
 // filters resolved markets out. Resolved markets only appear when you
@@ -71,14 +78,19 @@ export interface ResolutionRecord {
 }
 
 /**
- * Walks every open paper position and closes those whose Polymarket market
- * has resolved. Markets that haven't resolved yet stay open — paper PnL
- * matches what live PnL would have been.
+ * Walks every open position (paper or live) and closes those whose
+ * Polymarket market has resolved. Markets that haven't resolved yet stay
+ * open — the v3 invariant: paper PnL == live PnL.
+ *
+ * For live positions, the close mutates the bot's session-state PnL the
+ * same way as paper. Receiving the actual USDC requires a separate
+ * `/polymarket-redeem` call (CTF redemption is intent-only); this is
+ * logged via PAPER_RESOLVED with `mode: "live"` so the user can claim.
  */
-export async function resolvePendingPaperPositions(
+export async function resolvePendingPositions(
   session: SessionState,
 ): Promise<{ session: SessionState; resolutions: ResolutionRecord[] }> {
-  if (!session.paperMode || session.openPositions.length === 0) {
+  if (session.openPositions.length === 0) {
     return { session, resolutions: [] };
   }
 
@@ -142,16 +154,25 @@ export async function resolvePendingPaperPositions(
     };
 
     updated = closePosition(updated, pos.buyOrderId, trade);
-    log("PAPER_RESOLVED", true, {
+    log("PAPER_RESOLVED", session.paperMode, {
       market: pos.market,
       direction: pos.direction,
       method: "real",
+      mode: session.paperMode ? "paper" : "live",
       entryPrice: pos.avgEntry,
       exitPrice: exitSnap,
       pnl: Math.round(pnl * 100) / 100,
+      // Live positions need a separate on-chain CTF redemption to receive
+      // USDC; flag that explicitly so the operator can claim via the
+      // existing /polymarket-redeem endpoint.
+      requiresRedeem: !session.paperMode,
     });
     resolutions.push({ market: pos.market, exitPrice: exitSnap, pnl, method: "real" });
   }
 
   return { session: updated, resolutions };
 }
+
+// Backwards-compatible alias — the old name is still imported by the
+// orchestrator and any external scripts.
+export const resolvePendingPaperPositions = resolvePendingPositions;

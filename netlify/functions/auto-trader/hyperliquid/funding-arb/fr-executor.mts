@@ -125,9 +125,15 @@ export async function closeArbPosition(
       const why = liveAdapterError();
       return { ok: false, error: `HL live adapter unavailable${why ? `: ${why}` : ""}` };
     }
-    // +0.5% slippage above ref so the buy-to-close IOC marry-able even
-    // through volatile ticks.
-    const closeLimit = closeRefPrice * (1 + 0.005);
+    // +1.0% slippage above ref so the buy-to-close IOC stays marry-able
+    // even through volatile ticks. The previous 0.5% band let close
+    // attempts time-out repeatedly when BTC drifted >0.5% inside the 3min
+    // gap between the scan fetch and order submission, leaving the
+    // position in a retry loop until the maxHoldDays safety net fired.
+    // The wider band is the cost of guaranteed exit on the leg we *want*
+    // to close — this is asymmetric vs entry where we'd rather miss than
+    // overpay (entry stays at 0.5%).
+    const closeLimit = closeRefPrice * (1 + 0.010);
     const hlResp = await adapter.placeOrder({
       coin:       pos.coin,
       isBuy:      true,

@@ -351,6 +351,107 @@ netlify deploy --prod --dir=dist
 
 ## AKTUÁLIS ÁLLAPOT (2026-05-10) – Claude Code folytatáshoz
 
+### Tizenhatodik session (2026-05-10) – HL + Funding-Arb full audit + paper/live parity fixes (sim v2)
+
+A felhasználó kérésére end-to-end audit a két Hyperliquid bot-on (directional perp + funding-arb): scan → signal → decision → entry → resolve, paper/live szinkron-ellenőrzéssel, minden trade funkció validálásával. **9 finding** (5 fix elvégezve, 4 dokumentálva).
+
+**HL Directional bot — 5 fix (2 critical + 1 major + 2 minor doc):**
+
+- **🔴 H1 (kelly-sizer.mts + types/config/order-manager/index):** TP/SL clamp. A `signal.edge = |finalProb−0.5|×2` egy binary-prediction edge volt clamp nélkül szorozva `2×/1×`-szel a perp price-target-távolsághoz → edge=0.20 mellett TP=+40%, SL=−20% (BTC-en 4h horizonton soha nem érhető). Eredmény: minden trade `timeout` reason-nel zárult. Fix: `tpPct = min(edge × 2, tpPctMax)`, `slPct = min(edge × 1, slPctMax)` (default 0.02/0.01). Új env knob-ok: `HL_TP_PCT_MAX`, `HL_SL_PCT_MAX`.
+- **🟠 H2 (index.mts):** Vol gate paper parity. v1 a `volatilityGate` csak live módban futtatta — paper trade-elhetett 200% RV napokon át. Most paper + live ugyanazt a gate-et látja.
+- **🟠 H3 (paper-resolver.mts):** Hourly funding accrual paper PnL-be. v1 paper PnL `grossPnl − fees`-szel számolt, ignorálva a HL hourly funding-ot — long bias persistent positive funding tape-en. Most a `metaAndAssetCtxs.funding[i]` legfrissebb rate-jét × `(entryNotional + exitNotional) / 2` × holdHours-szal könyveli a `pnlOfClose`.
+- **simVersion v1 → v2 auto-archive (session-manager.mts + config.mts):** három paper-PnL semantic változás miatt új `HL_PAPER_SIM_VERSION = 2`. A `loadHlSession()` ha a persisted `simVersion < 2` → archive `archive_paper_v1_${ts}` key-be, fresh `session_paper`. Live session SOHA nem auto-resetel.
+- **run-state simVersion invalidation (run-state.mts):** ugyanaz a pattern, mint a crypto bot 10. sessionben — ha a `lastResult.session.simVersion < HL_PAPER_SIM_VERSION` → `lastResult = null`, hogy a UI ne mutasson stale snapshotot.
+
+**Funding-Arb bot — 2 fix (1 critical + 1 major):**
+
+- **🔴 F1 (fr-session.mts + index.mts):** Mark-to-market funding accrual. v1 `accrueFunding` `pos.sizeUSDC × hourlyRate × hours`-t használt — fixed entry-time notional. Real HL funding `position_size_in_coins × current_mark_price × rate`-en fizet → BTC 5-10% drift mellett 5-10% delta a real PnL-től. Új `AccrueSnapshot { rate, markPrice }` polymorphic Map signature (backwards compat). Most `notional = |sizeCoins| × markPrice`.
+- **🟠 F5 (fr-executor.mts):** HL close slippage band 0.5% → 1.0%. v1 `closeRefPrice * 1.005` IOC limit volatilis ticken (BTC drift > 0.5% a 3min cron-gap között) IOC miss-t adott — close újrapróbálkozott minden tickre, csak a `maxHoldDays` safety net mentett ki. Aszimmetrikus design: entry 0.5%, close 1.0%.
+
+**Open findings (dokumentálva):** H4 in-memory cooldown (low priority), H5 maxLeverage 3x clamp (konzervatív default), §9.A live HL exit/fill/settlement reconciliation hiányzik (**live-ra TILOS amíg nem épül meg**), F2/F3 cross-venue non-atomic slippage paper-ben nincs (~+1% paper upper bound), F7 Binance SELL `quantity.toFixed(5)` per-pair lot precision (élesedés előtt fix kell), F8 `totalFundingToday` string format.
+
+**Két új doksi:**
+
+- **`internal-docs/math/14-hl-directional.md`** — 12-szekciós implementation reference: §1 stratégia, §2 pipeline, §3 signal source, §4 8 gate, §5 ¼-Kelly + 3x lev cap + TP/SL clamp képlet, §6 order placement (paper sim / live SDK), §7 paper resolver markprice + funding, §8 session storage + simVersion archive, §9 paper/live parity matrix, §10 ismert limitációk, §11 validációs protokoll, §12 file → szerep map.
+- **`internal-docs/math/15-funding-arb.md`** — 12-szekciós implementation reference: §1 stratégia, §2 pipeline, §3 funding scanner (HL + Binance fundingInfo cache), §4 opportunity detection (3 gate), §5 entry decision (5 gate), §6 atomic 2-leg open + asymmetric close slippage, §7 mark-to-market accrual képlet, §8 session storage + bankroll cross-bot dependency, §9 paper/live parity matrix, §10 limitációk, §11 validációs protokoll, §12 file map.
+
+`internal-docs/README.md` math tábla bővítve 2 sorral.
+
+`tsc --noEmit` exit 0.
+
+Részletes leírás: `internal-docs/changelog/CHANGELOG-2026-05-10.md` "(f)" szekció.
+
+### Hova nyúlj legközelebb (HL bots)
+
+1. **§9.A live HL exit/reconcile** — legfontosabb. Live mode bekapcsolása előtt muszáj. Mintaként a crypto bot `paper-resolver.mts` + a HL `clearinghouseState` query kombója.
+2. **F7 Binance lot precision** — ha live funding-arb-ot tervezel, `GET /api/v3/exchangeInfo` → `symbols[X].filters[LOT_SIZE].stepSize` map-elés.
+3. **H4 cooldown persistence** — ha tartós session anti-revenge protection kell, a `cooldownMap` Blobs-ba kerülhet (mintát lásd a session-managerben).
+
+### Tizenötödik session (2026-05-10) – Audit findings 6/6 implementálva + detailed runtime walkthrough
+
+A 12. session-ben dokumentált 6 audit-finding (A-F) **mind javítva**.
+`tsc --noEmit` exit 0.
+
+**Fix-ek summary:**
+
+| ID | Fix lényege | Fájlok |
+|----|-------------|--------|
+| **A** | Live exit + reconciliation: új `runLiveEarlyExits` orchestrator (`runCryptoTrader`-en belül), `paper-resolver` általánosítva paper+live módra, új `live-price.mts:fetchYesMidpoint` helper, `Position.clobTokenIds` mező populálva entry-kor, `LIVE_EXIT_BUDGET_PER_TICK=3` Netlify-timeout védelem. Live close `requiresRedeem: true` flag-gel logol, on-chain CTF redemption továbbra is manuális `/polymarket-redeem`-en. | `index.mts`, `paper-resolver.mts`, `live-price.mts` (new), `types.mts` |
+| **B** | Cron source detection: `body.next_run` jelenléte triggereli a `isScheduledTick=true`-t a body parser-ben, source override "cron"-ra crypto/HL/weather útvonalakon is. UI status pill `(cron)` badge mostantól a közvetlen cron tick-eken is megjelenik. | `index.mts` |
+| **C** | `SignalBreakdown` 5 → 8 mezős. Momentum/contrarian/pairs_spread mostantól típus-szinten létezik, IC computation érinti, UI signal-arrow row + Telegram alert nyíl-kódolása mind 8 jelzéssel jön. HL signal-source már korábban populated 8 mezőt; most a típus is matchel. | `types.mts`, `signal-aggregator.mts`, `index.mts:formatSignalArrows`, `edge-tracker/statistics.mts`, `mock-trades.mts`, `TraderResults.tsx`, `CryptoTrader.tsx` |
+| **D** | `sessionSummary.simVersion` mező hozzáadva — `getCryptoRunStatus` stale-result invalidation elsődleges path mostantól működik (a `liveReadiness?.summary?.simVersion` fallback is megmaradt). | `index.mts:sessionSummary` |
+| **E** | Új `execution.mts:fetchOrderFillDetail(orderId)` defensive helper — `getOrder.size_matched + price` mezőkből számol fill price-t. `handleBuyLifecycle` live ágban mostantól partial fill / better-than-limit fill is pontosan tükröződik a session state-ben. | `execution.mts`, `order-lifecycle.mts` |
+| **F** | `getMomentumSignal` átírva — új `momentum-snapshots` Blobs store, per-slug `{ ts, yes }` snapshot. Ha snapshot age `[60s, 1h]` → real Rcum vs snapshot, egyébként neutral 0.5. Effektíven 3-15 perces look-back ablakot mér a 3min combiner cache + */3 cron mellett. | `signal-combiner.mts:getMomentumSignal` |
+
+**Új doksi szekció** (user request): `internal-docs/math/13-crypto-bot.md`
+új §2.1 — **Részletes runtime walkthrough (egy teljes cron tick)**.
+13-lépéses annotated trace végigmegy a `runCryptoTrader()` teljes
+életciklusán Lépés 0 (cron trigger) → Lépés 13 (HTTP response). Példa
+adatokkal, tényleges Blobs key-ekkel, log bejegyzésekkel, UI hatással
+minden lépésnél. Tipikus latency budget tickenként a végén (~3.3s paper,
++33s/exit live).
+
+§9 átírva "Audit findings + fix history" táblára (mind a 6 ✅ FIXED), §11
+file → szerep map frissítve az új modulokkal (`live-price.mts`,
+`fetchOrderFillDetail`, `runLiveEarlyExits`, `resolvePendingPositions`).
+
+`internal-docs/changelog/CHANGELOG-2026-05-10.md` "(e)" szekció a 6 fix
+részletes leírásával.
+
+### Hatás a deploy után (15. session)
+
+- **Paper mode**: változatlan viselkedés. A v3 invariáns sértetlen — paper
+  PnL == live PnL lesz a settlement-en. A momentum signal mostantól érdemi
+  IC-t kap, ami a calibration-noise alarm gate-en (30+ trade után) végre
+  positive-discrimination jelet jelent.
+- **Live mode**: most már funkcionálisan teljes. A `live-readiness` gate
+  továbbra is szigorú default thresholds-szal véd (30+ trade, IC ≥ 5%,
+  Sharpe ≥ 0.5, DD < 25%, simVersion = v3, session active). Csak ezek
+  átengedése után érdemes `PAPER_MODE=false`-ra állítani.
+- **Live close path**: settlement-resolver mind a 3 percben fut és lezárja
+  a Polymarket-resolved live position-öket; TP/SL early exit ugyanezen
+  cron tickkor max 3 pozícióra. Az on-chain CTF redemption (USDC
+  visszaszerzés) marad manuális `/polymarket-redeem`-en — a Telegram
+  alert + log `requiresRedeem: true` jelzi.
+- **UI**: a "Why?" panel mostantól mind a 8 signal nyilát mutatja, a status
+  pill helyesen `(cron)`-t ír a cron-on triggered tickekre.
+
+### Hova nyúlj legközelebb (15. session után)
+
+1. **Paper validation 24-48h** — hagyjuk a botot futni a fixek után,
+   `closedTrades` exit-ek mind 0/1 maradnak (nincs fake artefakt). A
+   `Calibration Health` badge értéke érdemi IC-t kell mutasson legalább
+   az orderflow + apex jelzésre.
+2. **Live mode aktiválás (csak a paper validation után)** — a
+   `live-readiness` gate átengedi-e a sessiont, és van-e elég POLY_USDC
+   funder address-en a $5-10 méretű első live trade-ekhez.
+3. **Auto-redeem cron** (opcionális) — egy plusz `*/15 min` cron ami
+   pollolja a `closedTrades` `requiresRedeem` flag-jét és futtatja a
+   redemption-t. Jelenleg manuális.
+4. **Cooldown map persistálás** — minor improvement: Netlify Blobs-ba
+   menteni hogy cold-start után ne lehessen 5 percen belül 2× nyitni
+   ugyanarra a slug-ra.
+
 ### Tizennegyedik session (2026-05-10) – Unified "Why?" panel: weather + HL + funding-arb is megkapja
 
 A Tizenegyedik sessionben a crypto bot kapott entry-decision snapshot-ot

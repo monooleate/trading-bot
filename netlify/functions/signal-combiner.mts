@@ -521,54 +521,101 @@ async function getFundingSignal(): Promise<{ prob: number | null; detail: any }>
 // ─── 6. MOMENTUM SIGNAL (Kakushadze 3.1: Price Momentum) ──────────────────────
 // "future returns are positively correlated with past returns"
 // Rcum = (P_now - P_past) / P_past → short-term directional bias
+//
+// The legacy implementation read `pastPrice` from the same Gamma `?slug=`
+// endpoint as the current price → both queries returned the *current*
+// midpoint, Rcum was always ~0, and the function silently fell back to a
+// "distance from 0.5" proxy which has no momentum signal at all.
+//
+// v9 fix: keep a per-slug snapshot in Netlify Blobs. Each call:
+//   1. Fetch current midpoint.
+//   2. Load saved snapshot for this slug (if any).
+//   3. If snapshot age ∈ [MIN_AGE, MAX_AGE], compute Rcum vs the saved
+//      price — that's a real over-time return.
+//   4. Always update the snapshot to the current state.
+//
+// The combiner is cached for 3 min, so consecutive snapshot updates land
+// roughly every 3-15 minutes (between manual scans + cron ticks). That
+// gives Rcum a meaningful 3-15 min look-back window for short BTC markets.
+const MOMENTUM_MIN_AGE_MS =  60_000;        // < 1 min: too noisy, skip
+const MOMENTUM_MAX_AGE_MS =  60 * 60_000;   // > 1 hour: stale, treat as no data
+
+interface MomentumSnapshot { ts: number; yes: number; }
+
+async function loadMomentumSnapshot(slug: string): Promise<MomentumSnapshot | null> {
+  try {
+    const raw = await getStore("momentum-snapshots").get(`v1:${slug}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw as string);
+    if (typeof parsed?.ts !== "number" || typeof parsed?.yes !== "number") return null;
+    return parsed;
+  } catch { return null; }
+}
+
+async function saveMomentumSnapshot(slug: string, snap: MomentumSnapshot): Promise<void> {
+  try { await getStore("momentum-snapshots").set(`v1:${slug}`, JSON.stringify(snap)); } catch {}
+}
+
 async function getMomentumSignal(market: MarketInfo): Promise<{ prob: number | null; detail: any }> {
   try {
     if (!market.yesTokenId) return { prob: null, detail: null };
 
-    // Get current midpoint
+    // 1. Current midpoint (CLOB authoritative for short-term ticks).
     let currentMid = market.yesPrice;
     try {
       const midRes = await fetch(`${CLOB}/midpoint?token_id=${market.yesTokenId}`, { signal: AbortSignal.timeout(4000) });
-      if (midRes.ok) { const d = await midRes.json() as any; currentMid = parseFloat(d.mid || market.yesPrice); }
-    } catch {}
-
-    // Get a "past price" reference from Gamma's stored snapshot. Note: the
-    // path-style `/markets/{id}` endpoint accepts only numeric ids — a slug
-    // there returns "validation error: id is invalid" — so we go through
-    // `?slug=` which yields an array.
-    let pastPrice = market.yesPrice;
-    try {
-      const histRes = await fetch(
-        `${GAMMA}/markets?slug=${encodeURIComponent(market.slug)}&limit=1`,
-        { signal: AbortSignal.timeout(4000) },
-      );
-      if (histRes.ok) {
-        const histArr: any = await histRes.json();
-        const hist = Array.isArray(histArr) ? histArr[0] : null;
-        if (hist) {
-          const op = typeof hist.outcomePrices === "string"
-            ? JSON.parse(hist.outcomePrices)
-            : hist.outcomePrices;
-          if (Array.isArray(op) && op.length > 0) pastPrice = parseFloat(op[0]);
-        }
+      if (midRes.ok) {
+        const d = await midRes.json() as any;
+        const m = parseFloat(d.mid);
+        if (Number.isFinite(m) && m > 0) currentMid = m;
       }
     } catch {}
 
-    // If we can't get historical price, use deviation from 0.5 as proxy
-    if (Math.abs(currentMid - pastPrice) < 0.001) {
-      // Momentum proxy: distance from 0.5 indicates recent movement
-      const dist = currentMid - 0.5;
-      const prob = Math.max(0.1, Math.min(0.9, 0.5 + dist * 0.4));
-      return { prob, detail: { current: currentMid.toFixed(3), source: "distance_proxy" } };
+    // 2. Past snapshot.
+    const snap = await loadMomentumSnapshot(market.slug);
+    const ageMs = snap ? Date.now() - snap.ts : null;
+
+    // 4. Always refresh the snapshot before returning, so the next call has
+    //    a fresh anchor regardless of whether we emit a signal this time.
+    await saveMomentumSnapshot(market.slug, { ts: Date.now(), yes: currentMid });
+
+    // 3. Decide what to return based on snapshot age.
+    if (!snap || ageMs === null || ageMs < MOMENTUM_MIN_AGE_MS) {
+      // First time we see this slug, or anchor is too fresh — neutral signal.
+      return {
+        prob: 0.5,
+        detail: {
+          current: currentMid.toFixed(3),
+          source: snap ? "anchor_too_fresh" : "no_anchor",
+          ageSec: snap ? Math.round((ageMs ?? 0) / 1000) : null,
+        },
+      };
+    }
+    if (ageMs > MOMENTUM_MAX_AGE_MS) {
+      // Anchor too stale — treat as no signal but the snapshot has just
+      // been refreshed above so the *next* call gets a fresh anchor.
+      return {
+        prob: 0.5,
+        detail: {
+          current: currentMid.toFixed(3),
+          source: "anchor_stale",
+          ageSec: Math.round(ageMs / 1000),
+        },
+      };
     }
 
     // Rcum = (P_now - P_past) / P_past — Kakushadze Eq. 3.1
-    const rcum = pastPrice > 0.01 ? (currentMid - pastPrice) / pastPrice : 0;
-    // Positive momentum → YES bias, negative → NO bias
+    const rcum = snap.yes > 0.01 ? (currentMid - snap.yes) / snap.yes : 0;
     const prob = Math.max(0.1, Math.min(0.9, 0.5 + rcum * 2.0));
     return {
       prob,
-      detail: { current: currentMid.toFixed(3), past: pastPrice.toFixed(3), rcum: (rcum * 100).toFixed(1) + "%" },
+      detail: {
+        current: currentMid.toFixed(3),
+        past:    snap.yes.toFixed(3),
+        rcum:    (rcum * 100).toFixed(1) + "%",
+        ageSec:  Math.round(ageMs / 1000),
+        source:  "blobs_anchor",
+      },
     };
   } catch { return { prob: null, detail: null }; }
 }

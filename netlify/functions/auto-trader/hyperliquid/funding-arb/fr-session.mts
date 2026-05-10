@@ -56,22 +56,35 @@ export function addArbPosition(s: ArbSessionState, pos: ArbPosition): ArbSession
  *
  * We are SHORT the HL perp + LONG Binance SPOT — Binance spot pays NO
  * funding, so the income on the carry is purely the HL hourly funding
- * rate × notional × hours. (The Binance funding number is only used at
- * scan time to gate viability: avoid trading when HL pays similarly to
- * Binance futures, since the spread to a hedged position is the relevant
- * benchmark there.) The previous version used `p.entrySpread`, which both
- * (a) double-counted Binance funding as a cost on the spot leg and
- * (b) froze the rate at entry time even when HL funding decayed.
+ * rate × CURRENT POSITION VALUE × hours. (The Binance funding number is
+ * only used at scan time to gate viability: avoid trading when HL pays
+ * similarly to Binance futures, since the spread to a hedged position is
+ * the relevant benchmark there.) The previous version used
+ * `p.entrySpread`, which both (a) double-counted Binance funding as a
+ * cost on the spot leg and (b) froze the rate at entry time even when HL
+ * funding decayed.
  *
- * If a fresh HL funding rate is supplied via `currentHlFundingByCoin`, we
- * accrue at the latest observed rate (paper realism). When called without
- * a snapshot we fall back to `entryHlFunding` so older positions still
- * accrue something deterministic between cron ticks.
+ * Real HL funding is paid on `position_size_in_coins × current_mark_price
+ * × rate`, NOT on the dollar notional at entry. When the underlying drifts
+ * 5–10% during the hold, fixing the notional at entry biases accumulated
+ * funding by the same percentage. We now mark-to-market by passing
+ * `currentHlByCoin` carrying both the latest hourly rate AND the latest
+ * markPrice; accrual uses `sizeCoins × markPrice` for the per-hour
+ * notional so paper PnL tracks what live HL would have actually paid.
+ *
+ * Backwards compatible: if the snapshot is missing or the price/rate is
+ * not finite, accrual falls back to entry-time inputs (older deterministic
+ * behavior). The previous `Map<string, number>` rate-only signature is
+ * also still accepted so existing callers keep working until they migrate.
  */
+export interface AccrueSnapshot {
+  rate: number;
+  markPrice: number;
+}
 export function accrueFunding(
   s: ArbSessionState,
   now: Date = new Date(),
-  currentHlFundingByCoin?: Map<string, number>,
+  currentHlByCoin?: Map<string, number | AccrueSnapshot>,
 ): ArbSessionState {
   const nowMs = now.getTime();
   const todayStr = today();
@@ -86,14 +99,26 @@ export function accrueFunding(
     const hours  = Math.max(0, (nowMs - lastMs) / 3_600_000);
     if (hours <= 0) return p;
 
-    const observed = currentHlFundingByCoin?.get(p.coin);
-    const hourlyRate = Number.isFinite(observed)
-      ? (observed as number)
-      : p.entryHlFunding;
-    // SHORT pays funding when the rate is positive. Sign flows naturally:
-    // if HL funding flips negative, the SHORT pays out and accrual goes
-    // negative — exactly what we want the tracker to reflect.
-    const delta = p.sizeUSDC * hourlyRate * hours;
+    const observed = currentHlByCoin?.get(p.coin);
+    let hourlyRate: number;
+    let markPrice: number;
+    if (typeof observed === "number") {
+      // Legacy rate-only snapshot — fall back to entry mark for the notional.
+      hourlyRate = Number.isFinite(observed) ? observed : p.entryHlFunding;
+      markPrice  = p.hlEntryPrice;
+    } else if (observed && typeof observed === "object") {
+      hourlyRate = Number.isFinite(observed.rate)      ? observed.rate      : p.entryHlFunding;
+      markPrice  = Number.isFinite(observed.markPrice) ? observed.markPrice : p.hlEntryPrice;
+    } else {
+      hourlyRate = p.entryHlFunding;
+      markPrice  = p.hlEntryPrice;
+    }
+    // Mark-to-market notional: position_size_in_coins × current_mark_price.
+    // The SHORT receives funding when rate > 0 (sign flows naturally — a
+    // negative rate flips accrual into a payout, exactly what the tracker
+    // should reflect).
+    const notional = Math.abs(p.sizeCoins) * markPrice;
+    const delta    = notional * hourlyRate * hours;
     todayTotal += delta;
     allTimeDelta += delta;
     return {
