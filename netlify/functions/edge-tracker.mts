@@ -45,6 +45,7 @@ const STORE_SPECS: StoreSpec[] = [
   { store: "auto-trader-state",          paperKey: "auto-trader-session-weather",         liveKey: "auto-trader-session-live-weather",         category: "weather" },
   { store: "hyperliquid-session-v1",     paperKey: "session_paper",                       liveKey: "session_live",                             category: "hyperliquid" },
   { store: "hyperliquid-arb-session-v1", paperKey: "arb_paper",                           liveKey: "arb_live",                                 category: "funding-arb" },
+  { store: "auto-trader-session-sports", paperKey: "session_paper",                       liveKey: "session_live",                             category: "sports" },
 ];
 
 // Legacy STORE_NAME / PAPER_KEYS / LIVE_KEYS kept here for code that still

@@ -444,10 +444,12 @@ export default function CryptoTrader({ bankroll }: { bankroll?: number }) {
               : [];
 
             // Backend now ships a per-row `gates: DecisionGate[]` covering
-            // session-loss / active-signals / cooldown / OI / entry-window /
-            // OB-imbalance / net-edge / kelly-conviction / kelly-cap, so the
-            // chip "X/Y gates" renders uniformly. Fallback to the lighter
-            // mapper for older payloads that pre-date the change.
+            // all 12 gates (2026-05-11 audit fix): session-loss /
+            // active-signals / combiner-confidence / combiner-recommendation
+            // / resolution-risk / cooldown / OI / entry-window / OB-imbalance
+            // / net-edge / kelly-size-min / kelly-size-cap. The chip "X/Y
+            // gates" renders uniformly. Fallback to the lighter mapper for
+            // older payloads that pre-date the change.
             const criteria: CriteriaGate[] = Array.isArray((r as any).gates) && (r as any).gates.length > 0
               ? ((r as any).gates as CriteriaGate[])
               : cryptoEntryCriteria(r, display.config);

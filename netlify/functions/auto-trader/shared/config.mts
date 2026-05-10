@@ -31,6 +31,8 @@ export function getTraderConfig(): TraderConfig {
     sessionLossLimit: parseFloat(process.env.SESSION_LOSS_LIMIT || "20"),
     minOpenInterest: 500,
     roundtripFeePct: 0.036, // 1.8% entry + 1.8% exit
+    minPositionSizeUSDC:   parseFloat(process.env.MIN_POSITION_SIZE_USDC   || "0.50"),
+    combinerConfidenceMin: parseFloat(process.env.COMBINER_CONFIDENCE_MIN || "0.05"),
   };
 }
 
@@ -60,10 +62,12 @@ export async function getEffectiveTraderConfig(): Promise<TraderConfig> {
     const ov = await mod.loadRuntimeOverrides();
     return {
       ...env,
-      edgeThreshold:    ov.edgeThreshold    ?? env.edgeThreshold,
-      maxKellyFraction: ov.maxKellyFraction ?? env.maxKellyFraction,
-      cooldownSeconds:  ov.cooldownSeconds  ?? env.cooldownSeconds,
-      sessionLossLimit: ov.sessionLossLimit ?? env.sessionLossLimit,
+      edgeThreshold:         ov.edgeThreshold         ?? env.edgeThreshold,
+      maxKellyFraction:      ov.maxKellyFraction      ?? env.maxKellyFraction,
+      cooldownSeconds:       ov.cooldownSeconds       ?? env.cooldownSeconds,
+      sessionLossLimit:      ov.sessionLossLimit      ?? env.sessionLossLimit,
+      minPositionSizeUSDC:   ov.minPositionSizeUSDC   ?? env.minPositionSizeUSDC,
+      combinerConfidenceMin: ov.combinerConfidenceMin ?? env.combinerConfidenceMin,
     };
   } catch {
     return env;

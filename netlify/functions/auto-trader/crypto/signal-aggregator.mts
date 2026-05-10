@@ -80,6 +80,19 @@ export async function aggregateSignals(
         signalBreakdown: extractBreakdown(data.raw_signals),
         activeSignals: data.active_signals ?? 0,
         timestamp: data.fetched_at ?? new Date().toISOString(),
+        // Surface the combiner's own verdict + the resolution-risk
+        // helper's flag so the decision-engine can gate on the SAME
+        // convergence/risk thresholds the combiner already enforces
+        // internally. Pre-2026-05-11 these were silently dropped, so
+        // the engine traded on noise-level signals the combiner would
+        // have rejected as WAIT/WATCH/SKIP.
+        combinerRecommendation: data.recommendation?.action ?? null,
+        tradeRecommendedByRisk: typeof data.trade_recommended === "boolean"
+          ? data.trade_recommended
+          : null,
+        adjustedProbability: typeof data.adjusted_probability === "number"
+          ? data.adjusted_probability
+          : null,
       };
     } else {
       console.warn("[signal-aggregator] combiner returned ok=false for", slug, data?.error || "");
@@ -96,6 +109,9 @@ export async function aggregateSignals(
       signalBreakdown: emptyBreakdown(),
       activeSignals:   0,
       timestamp:       new Date().toISOString(),
+      combinerRecommendation: null,
+      tradeRecommendedByRisk: null,
+      adjustedProbability:    null,
     };
   }
 

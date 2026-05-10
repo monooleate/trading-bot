@@ -50,6 +50,22 @@ export interface AggregatedSignal {
     ratio: number;                // bidDepth / askDepth (top-10)
     direction: "UP" | "DOWN" | "NEUTRAL";
   } | null;
+  // Signal-combiner's own recommendation. The decision-engine checks this
+  // alongside the raw probability/Kelly numbers because the combiner's
+  // recommend() applies stricter convergence gates (|p − 0.5| ≥ 5% AND
+  // ir ≥ 0.1 AND kellyQ ≥ 0.005). Without this gate the engine would
+  // open trades on noise-level combiner outputs where the model says
+  // "no convergent signal" — exactly the bug the 2026-05-11 audit found.
+  combinerRecommendation?: string | null;  // e.g. "BUY YES", "WAIT", "WATCH", "SKIP"
+  // Resolution-risk verdict from analyseResolutionRisk(): false means the
+  // risk-adjustment helper decided the market shouldn't be traded (rules
+  // ambiguity, off-platform resolution source, dispute history, etc.).
+  // null = the helper didn't run (skip_risk=1 or fetch failed).
+  tradeRecommendedByRisk?: boolean | null;
+  // Mirror of the combiner's adjusted_probability — surfaced so the
+  // engine can log it for debugging, but the gates trigger on the
+  // `combinerRecommendation` / `tradeRecommendedByRisk` booleans.
+  adjustedProbability?: number | null;
 }
 
 // ─── Decision types ───────────────────────────────────────
@@ -281,6 +297,19 @@ export interface TraderConfig {
   sessionLossLimit: number;
   minOpenInterest: number;
   roundtripFeePct: number;        // 0.036 for crypto (1.8% × 2)
+  // Minimum absolute position size. The engine no longer applies a $1
+  // hard floor — under-conviction signals must now produce a sub-min
+  // sizing rejection rather than being silently padded up. Set the
+  // floor low enough that legitimate ¼-Kelly entries on a paper
+  // bankroll still clear it ($0.50 default for $250 paper bankroll
+  // gives 0.2% effective floor — much tighter than the legacy 0.4%
+  // implicit floor at $1 / $250).
+  minPositionSizeUSDC: number;
+  // Convergence threshold mirrored from the signal-combiner's recommend()
+  // function. If |finalProb − 0.5| is smaller than this, the engine
+  // treats the combiner output as noise (no convergent signal). 0.05
+  // matches the combiner's internal WAIT gate so the two stay in sync.
+  combinerConfidenceMin: number;
 }
 
 export interface PolymarketConfig {

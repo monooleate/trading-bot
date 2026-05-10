@@ -119,6 +119,25 @@ async function readHyperliquid(paperMode: boolean): Promise<Snapshot> {
   };
 }
 
+async function readSports(paperMode: boolean): Promise<Snapshot> {
+  const key = paperMode ? "session_paper" : "session_live";
+  const s: any = await readJson("auto-trader-session-sports", key);
+  if (!s) return EMPTY("sports", "Sports Bot", paperMode);
+  return {
+    category: "sports",
+    label: "Sports Bot",
+    found: true,
+    paperMode: s.paperMode,
+    bankrollStart:   s.bankrollStart   ?? 0,
+    bankrollCurrent: s.bankrollCurrent ?? 0,
+    sessionPnL: typeof s.sessionPnL === "number" ? s.sessionPnL : 0,
+    closedTrades: Array.isArray(s.closedTrades) ? s.closedTrades.length : 0,
+    openPositions: Array.isArray(s.openPositions) ? s.openPositions.length : 0,
+    stopped: !!s.stopped,
+    startedAt: s.startedAt || null,
+  };
+}
+
 async function readFundingArb(paperMode: boolean): Promise<Snapshot> {
   const key = paperMode ? "arb_paper" : "arb_live";
   const s: any = await readJson("hyperliquid-arb-session-v1", key);
@@ -161,14 +180,15 @@ export default async function handler(req: Request, _ctx: Context) {
   const url = new URL(req.url);
   const paperMode = url.searchParams.get("paper") !== "false"; // default paper
 
-  const [crypto, weather, hl, fr] = await Promise.all([
+  const [crypto, weather, hl, fr, sports] = await Promise.all([
     readCrypto(paperMode),
     readWeather(paperMode),
     readHyperliquid(paperMode),
     readFundingArb(paperMode),
+    readSports(paperMode),
   ]);
 
-  const all = [crypto, weather, hl, fr];
+  const all = [crypto, weather, hl, fr, sports];
   const found = all.filter((s) => s.found);
 
   // Skip bankroll for `bankrollShared: true` categories (F-Arb borrows the

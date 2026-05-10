@@ -1,0 +1,136 @@
+// netlify/functions/auto-trader/sports/market-finder.mts
+//
+// Polymarket sports market discovery. Pulls active sports events via
+// the Gamma API, flattens to per-bucket binary markets, and filters
+// for the bot's liquidity + duration thresholds.
+
+import { GAMMA_API } from "../shared/config.mts";
+import type { SportsMarket, SportsLeague } from "./types.mts";
+
+const FETCH_TIMEOUT = 8000;
+
+// League detection from question text. Returns "Other" if no match —
+// the bot still considers these markets but reports a generic label.
+function detectLeague(q: string): SportsLeague {
+  const lower = q.toLowerCase();
+  if (/\bnba\b|basketball/.test(lower))             return "NBA";
+  if (/\bnfl\b|super bowl|american football/.test(lower)) return "NFL";
+  if (/\bmlb\b|world series|baseball/.test(lower))  return "MLB";
+  if (/\bnhl\b|stanley cup|hockey/.test(lower))     return "NHL";
+  if (/premier league|epl\b/.test(lower))            return "EPL";
+  if (/champions league|ucl\b/.test(lower))          return "UCL";
+  return "Other";
+}
+
+interface FinderOptions {
+  minVolume24h:   number;
+  minHoursToEnd:  number;
+  maxMarkets?:    number;          // default 30
+}
+
+export async function findSportsMarkets(opts: FinderOptions): Promise<SportsMarket[]> {
+  // Gamma's `tag=sports` is the documented way. Falls back to keyword
+  // filtering if the tag returns nothing (Gamma occasionally drops tags
+  // on negRisk markets).
+  const taggedUrl =
+    `${GAMMA_API}/events?tag_slug=sports&closed=false&active=true&limit=80&order=volume24hr&ascending=false`;
+  const fallbackUrl =
+    `${GAMMA_API}/events?closed=false&active=true&limit=120&order=volume24hr&ascending=false`;
+
+  let events: any[] = [];
+  for (const url of [taggedUrl, fallbackUrl]) {
+    try {
+      const res = await fetch(url, {
+        headers: { Accept: "application/json", "User-Agent": "EdgeCalc-Sports/1.0" },
+        signal: AbortSignal.timeout(FETCH_TIMEOUT),
+      });
+      if (!res.ok) continue;
+      const data = await res.json();
+      events = Array.isArray(data) ? data : (data?.data ?? []);
+      if (events.length > 0) break;
+    } catch { /* try next */ }
+  }
+  if (events.length === 0) return [];
+
+  const now = Date.now();
+  const minEnd = now + opts.minHoursToEnd * 3_600_000;
+  const out: SportsMarket[] = [];
+
+  for (const evt of events) {
+    const eventSlug = String(evt.slug || "");
+    const tags: any[] = Array.isArray(evt.tags) ? evt.tags : [];
+    const isSportsTagged = tags.some(
+      (t) => /^sport/i.test(typeof t === "string" ? t : (t?.slug || t?.label || "")),
+    );
+    const evtQuestion = String(evt.title || evt.description || "");
+
+    // If the tag filter returned an event without a sports tag (fallback
+    // path), check the title heuristically before accepting it.
+    if (!isSportsTagged) {
+      const looksLikeSports = /\b(nba|nfl|mlb|nhl|premier|champions|fifa|world cup|basketball|football|baseball|hockey|soccer)\b/i
+        .test(evtQuestion);
+      if (!looksLikeSports) continue;
+    }
+
+    const markets: any[] = Array.isArray(evt.markets) ? evt.markets : [];
+    for (const m of markets) {
+      if (m.closed === true || m.active === false) continue;
+
+      // End-date gate: skip markets too close to settlement.
+      const endDate = String(m.endDate || "");
+      if (!endDate) continue;
+      const endTs = new Date(endDate).getTime();
+      if (!Number.isFinite(endTs) || endTs < minEnd) continue;
+
+      // Liquidity gate.
+      const vol24 = parseFloat(m.volume24hr || m.volume || "0");
+      if (!Number.isFinite(vol24) || vol24 < opts.minVolume24h) continue;
+
+      // CLOB token IDs.
+      let yesToken = "", noToken = "";
+      try {
+        const ids = typeof m.clobTokenIds === "string"
+          ? JSON.parse(m.clobTokenIds)
+          : m.clobTokenIds;
+        if (Array.isArray(ids) && ids.length >= 2) {
+          yesToken = String(ids[0]);
+          noToken  = String(ids[1]);
+        }
+      } catch { /* skip */ }
+      if (!yesToken || !noToken) continue;
+
+      // Outcome prices.
+      let yp = 0.5, np = 0.5;
+      try {
+        const op = typeof m.outcomePrices === "string"
+          ? JSON.parse(m.outcomePrices)
+          : m.outcomePrices;
+        if (Array.isArray(op) && op.length >= 2) {
+          yp = parseFloat(String(op[0]));
+          np = parseFloat(String(op[1]));
+        }
+      } catch { /* skip */ }
+      if (!Number.isFinite(yp) || !Number.isFinite(np)) continue;
+      // Skip already-resolved (price snapped to extremes).
+      if (yp <= 0.001 || yp >= 0.999) continue;
+
+      const question = String(m.question || m.title || evtQuestion);
+      out.push({
+        slug:          String(m.slug || ""),
+        conditionId:   String(m.conditionId || ""),
+        question,
+        league:        detectLeague(question),
+        yesTokenId:    yesToken,
+        noTokenId:     noToken,
+        yesPrice:      yp,
+        noPrice:       np,
+        volume24h:     vol24,
+        liquidity:     parseFloat(m.liquidityNum || m.liquidity || "0"),
+        endDate,
+        eventSlug,
+      });
+      if (opts.maxMarkets && out.length >= opts.maxMarkets) return out;
+    }
+  }
+  return out;
+}

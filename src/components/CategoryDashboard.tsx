@@ -4,6 +4,7 @@ import CryptoTrader from "./trader/CryptoTrader";
 import WeatherTrader from "./trader/WeatherTrader";
 import HyperliquidTrader from "./trader/HyperliquidTrader";
 import FundingArbPanel from "./trader/FundingArbPanel";
+import SportsTrader from "./trader/SportsTrader";
 import BybitTrader from "./trader/BybitTrader";
 import BinanceTrader from "./trader/BinanceTrader";
 import PolymarketManualTrader from "./trader/PolymarketManualTrader";
@@ -30,6 +31,11 @@ const CATEGORY_TABS: Record<string, [string, string][]> = {
   ],
   "funding-arb": [
     ["autotrader",   "Funding Arb"],
+    ["edge-tracker", "Edge Tracker"],
+    ["settings",     "⚙ Beállítások"],
+  ],
+  sports: [
+    ["autotrader",   "Sports Bot"],
     ["edge-tracker", "Edge Tracker"],
     ["settings",     "⚙ Beállítások"],
   ],
@@ -83,6 +89,15 @@ function renderFundingArbTab(tab: string, bankroll: number) {
   }
 }
 
+function renderSportsTab(tab: string, bankroll: number) {
+  switch (tab) {
+    case "autotrader":   return <SportsTrader bankroll={bankroll} />;
+    case "edge-tracker": return <EdgeTrackerPanel defaultCategory="sports" />;
+    case "settings":     return <SettingsPanel category="sports" title="Sports Bot paraméterek" subtitle="Contrarian fan-bias fade · Polymarket sports markets" />;
+    default:             return <SportsTrader bankroll={bankroll} />;
+  }
+}
+
 function renderBybitTab(tab: string) {
   switch (tab) {
     case "trader":   return <BybitTrader />;
@@ -116,6 +131,7 @@ export default function CategoryDashboard({ category }: { category: string }) {
       case "weather":            return renderWeatherTab(tab, bankroll);
       case "hyperliquid":        return renderHyperliquidTab(tab, bankroll);
       case "funding-arb":        return renderFundingArbTab(tab, bankroll);
+      case "sports":             return renderSportsTab(tab, bankroll);
       case "bybit":              return renderBybitTab(tab);
       case "binance":            return renderBinanceTab(tab);
       case "polymarket-manual":  return renderPolymarketManualTab(tab);

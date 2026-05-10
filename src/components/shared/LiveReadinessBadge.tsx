@@ -38,7 +38,7 @@ export interface LiveReadinessReport {
 type Variant = "full" | "compact";
 
 interface Props {
-  category: "crypto" | "weather" | "hyperliquid" | "funding-arb";
+  category: "crypto" | "weather" | "hyperliquid" | "funding-arb" | "sports";
   variant?: Variant;
   // If supplied, skip the network call. Useful for the auto-trader status
   // payload which already carries `liveReadiness` per response.

@@ -32,15 +32,31 @@ export function setCooldown(slug: string): void {
 // evaluating a market AND by the runner to pad early-exit rows so every
 // scan row reports the same Y on the "X/Y gates" chip. Keep in sync with
 // the gates pushed in makeDecision below.
+//
+// 2026-05-11 audit expansion: 9 → 12 gates. The legacy "Kelly conviction
+// (combiner > 0)" gate was a paper-thin defence — kellyFraction = 0.0001
+// would clear it and then the $1 floor on the position size would silently
+// pad the trade up to $1, defeating the entire ¼-Kelly system. Three new
+// gates now enforce convergence at the same thresholds the combiner uses
+// internally:
+//   - Combiner confidence ( |p − 0.5| ≥ 5% ) — combiner's own WAIT gate
+//   - Combiner recommendation === BUY        — combiner's verdict
+//   - Resolution-risk trade_recommended ≠ false — risk-adjustment helper
+// And the floor itself moved from an implicit silent pad to an explicit
+// "Kelly méret ≥ minimum" gate, so under-conviction signals now show up
+// as gate failures in the UI instead of being padded into real trades.
 export const CRYPTO_GATE_LABELS = [
   "Session loss limit",
   "Aktív signal források",
+  "Combiner confidence (|p − 0.5|)",
+  "Combiner recommendation",
+  "Resolution-risk gate",
   "Market cooldown",
   "Open interest ≥ küszöb",
   "Entry window (BTC short markets)",
   "OB imbalance konvergencia",
   "Net edge ≥ küszöb",
-  "Kelly conviction (combiner)",
+  "Kelly méret ≥ minimum",
   "Kelly méret ≤ cap",
 ] as const;
 
@@ -72,6 +88,13 @@ export function makeDecision(
   const grossEdge   = Math.abs(finalProb - marketPrice);
   const netEdge     = grossEdge - config.roundtripFeePct;
   const direction: "YES" | "NO" = finalProb > marketPrice ? "YES" : "NO";
+  // Compute the candidate position size up-front so the "Kelly méret ≥
+  // minimum" gate has a real USDC number to evaluate. The legacy code
+  // computed this only on the happy path AFTER all gates passed and then
+  // silently padded sub-min sizes up to $1; now the size is a first-class
+  // gate input.
+  const kellyCapped       = Math.min(Math.max(0, kellyFraction), config.maxKellyFraction);
+  const candidatePosition = bankrollUSDC * kellyCapped;
 
   const gates: DecisionGate[] = [];
   const reasons: string[] = [];
@@ -92,13 +115,68 @@ export function makeDecision(
   gates.push({
     label: "Aktív signal források",
     passed: activeOk,
-    actual:   `${signal.activeSignals}/5`,
+    actual:   `${signal.activeSignals}/8`,
     required: "≥ 2",
     hint: "Egyetlen signal-tól nem nyitunk pozíciót — több forrás konvergenciája kell.",
   });
   if (!activeOk) reasons.push(`Too few active signals: ${signal.activeSignals} < 2`);
 
-  // 3. Cooldown
+  // 3. Combiner-confidence gate (audit fix #4, 2026-05-11). Mirrors the
+  // signal-combiner's own `recommend()` WAIT threshold: if |p − 0.5| <
+  // combinerConfidenceMin, the 8-signal weighted average is statistically
+  // indistinguishable from noise (each signal defaults to 0.5 when absent).
+  // Without this gate the engine would see "model 0.505 vs market 0.255"
+  // and report a 25% edge built entirely on combiner noise.
+  const combinerEdgeAbs = Math.abs(finalProb - 0.5);
+  const convergenceOk   = combinerEdgeAbs >= config.combinerConfidenceMin;
+  gates.push({
+    label: "Combiner confidence (|p − 0.5|)",
+    passed: convergenceOk,
+    actual:   `${(combinerEdgeAbs * 100).toFixed(2)}%`,
+    required: `≥ ${(config.combinerConfidenceMin * 100).toFixed(1)}%`,
+    hint: "Ha a kombinált predikció 5%-nál közelebb van 50%-hoz, az nem signal, hanem zaj — a 8 jelzés default 0.5-höz konvergál ha nincs valódi input.",
+  });
+  if (!convergenceOk) reasons.push(
+    `Combiner output too close to 0.5: |${finalProb.toFixed(4)} − 0.5| = ${(combinerEdgeAbs * 100).toFixed(2)}% < ${(config.combinerConfidenceMin * 100)}% — noise, not signal`,
+  );
+
+  // 4. Combiner recommendation gate (audit fix #3, 2026-05-11). The
+  // combiner runs its OWN WAIT/WATCH/SKIP/BUY decision (recommend()), but
+  // before this gate the engine ignored that verdict and re-derived an
+  // entry purely from finalProb vs. marketPrice. The combiner applies the
+  // stricter joint gate (|edge| ≥ 5% AND ir ≥ 0.1 AND kellyQ ≥ 0.005) and
+  // also flips BUY → WATCH/SKIP when resolution-risk vetoes the trade.
+  const recAction = (signal.combinerRecommendation || "").toUpperCase();
+  const recOk     = recAction.startsWith("BUY");
+  gates.push({
+    label: "Combiner recommendation",
+    passed: recOk,
+    actual:   recAction || "n/a",
+    required: "BUY YES / BUY NO",
+    hint: "A signal-combiner saját ajánlása: WAIT = nem konvergens, WATCH = túl kis pozíció, SKIP = resolution-risk veto. Csak BUY-ra trade-elünk.",
+  });
+  if (!recOk) reasons.push(`Combiner recommendation: ${recAction || "n/a"} (not BUY)`);
+
+  // 5. Resolution-risk gate (audit fix #5, 2026-05-11). The combiner's
+  // analyseResolutionRisk() helper flags markets with off-platform
+  // resolution sources, ambiguous rules, or dispute history. Previously
+  // this verdict was logged in the combiner UI but never read by the
+  // trader. `null` means the helper didn't run (skip_risk=1 or fetch
+  // failed) — gate passes so we don't block on missing data.
+  const riskFlag = signal.tradeRecommendedByRisk;
+  const riskOk   = riskFlag !== false;
+  gates.push({
+    label: "Resolution-risk gate",
+    passed: riskOk,
+    actual:   riskFlag === null || riskFlag === undefined
+      ? "n/a (risk score missing)"
+      : (riskFlag ? "trade_recommended: true" : "trade_recommended: false"),
+    required: "trade_recommended ≠ false",
+    hint: "A resolution-risk helper átállítja a kombinátor ajánlását SKIP/WATCH-ra ha a piac rules / source / dispute kockázata túl magas.",
+  });
+  if (!riskOk) reasons.push("Resolution-risk: trade_recommended = false");
+
+  // 6. Cooldown
   const cooldownOk = !isOnCooldown(market.slug, config.cooldownSeconds);
   gates.push({
     label: "Market cooldown",
@@ -109,7 +187,7 @@ export function makeDecision(
   });
   if (!cooldownOk) reasons.push(`Market on cooldown: ${market.slug}`);
 
-  // 4. Open interest
+  // 7. Open interest
   const oiOk = market.openInterest >= config.minOpenInterest;
   gates.push({
     label: "Open interest ≥ küszöb",
@@ -120,7 +198,7 @@ export function makeDecision(
   });
   if (!oiOk) reasons.push(`Low OI: $${market.openInterest} < $${config.minOpenInterest}`);
 
-  // 5. Entry-window filter for short BTC up/down markets (P1.2). Always
+  // 8. Entry-window filter for short BTC up/down markets (P1.2). Always
   // present in the gate list so Y stays stable across rows; for daily
   // markets the gate is reported as "n/a" and counts as passed.
   if (market.openedAtEstimate) {
@@ -148,7 +226,7 @@ export function makeDecision(
     });
   }
 
-  // 6. OB-imbalance convergence (P1.3)
+  // 9. OB-imbalance convergence (P1.3)
   if (signal.obImbalance && signal.obImbalance.direction !== "NEUTRAL") {
     const obWantsYes = signal.obImbalance.direction === "UP";
     const weWantYes  = direction === "YES";
@@ -174,7 +252,7 @@ export function makeDecision(
     });
   }
 
-  // 7. Net edge ≥ threshold
+  // 10. Net edge ≥ threshold
   const edgeOk = netEdge >= config.edgeThreshold;
   gates.push({
     label: "Net edge ≥ küszöb",
@@ -188,22 +266,27 @@ export function makeDecision(
     `(gross ${(grossEdge * 100).toFixed(1)}% - fees ${(config.roundtripFeePct * 100).toFixed(1)}%)`,
   );
 
-  // 8. Kelly conviction gate — block when the signal-combiner says no edge.
-  const kellyConvictionOk = kellyFraction > 0;
+  // 11. Kelly méret ≥ minimum (audit fix #1, 2026-05-11). Replaces the
+  // legacy "Kelly conviction (combiner > 0)" gate AND the implicit $1
+  // floor inside positionSize calculation. Now the floor is an explicit
+  // gate the operator can see fail on the UI — kelly = 0.03% × $250 =
+  // $0.075 cleanly fails this gate at $0.50 minimum instead of being
+  // silently padded to a $1 trade.
+  const sizeMinOk = candidatePosition >= config.minPositionSizeUSDC;
   gates.push({
-    label: "Kelly conviction (combiner)",
-    passed: kellyConvictionOk,
-    actual:   `${(kellyFraction * 100).toFixed(2)}%`,
-    required: "> 0%",
-    hint: "Ha a signal-combiner ¼-Kellyje 0, a jelek nem konvergálnak — nem nyitunk minimum-size pozíciót.",
+    label: "Kelly méret ≥ minimum",
+    passed: sizeMinOk,
+    actual:   `$${candidatePosition.toFixed(2)} (Kelly ${(kellyCapped * 100).toFixed(2)}% × bankroll $${bankrollUSDC.toFixed(2)})`,
+    required: `≥ $${config.minPositionSizeUSDC.toFixed(2)}`,
+    hint: "Ha a Kelly-méret a minimum alatt van, a jel túl gyenge — sub-min trade-et NEM padding-elünk $1-re.",
   });
-  if (!kellyConvictionOk) reasons.push(
-    `Signal-combiner Kelly=0 → no conviction (${signal.activeSignals} signals active but they don't converge)`,
+  if (!sizeMinOk) reasons.push(
+    `Kelly position size $${candidatePosition.toFixed(2)} < minimum $${config.minPositionSizeUSDC.toFixed(2)} ` +
+    `(kellyCapped ${(kellyCapped * 100).toFixed(2)}% — combiner doesn't have enough conviction)`,
   );
 
-  // 9. Kelly cap (always passes after Math.min — informational, but kept in
+  // 12. Kelly cap (always passes after Math.min — informational, but kept in
   // the gate list so the operator sees the cap value alongside the actual).
-  const kellyCapped = Math.min(Math.max(0, kellyFraction), config.maxKellyFraction);
   gates.push({
     label: "Kelly méret ≤ cap",
     passed: kellyCapped <= config.maxKellyFraction,
@@ -227,7 +310,10 @@ export function makeDecision(
     };
   }
 
-  const positionSize = Math.max(1, bankrollUSDC * kellyCapped); // min $1
+  // No more Math.max(1, ...) floor: the "Kelly méret ≥ minimum" gate above
+  // already rejected sub-min sizes. Round to cent precision for CLOB
+  // tickSize alignment.
+  const positionSize = candidatePosition;
   const entryPrice =
     direction === "YES"
       ? Math.min(marketPrice + 0.01, 0.99)
@@ -242,8 +328,8 @@ export function makeDecision(
     kellyUsed: kellyCapped,
     reason:
       `Net edge ${(netEdge * 100).toFixed(1)}% (gross ${(grossEdge * 100).toFixed(1)}%), ` +
-      `Kelly ${(kellyCapped * 100).toFixed(1)}%, ` +
-      `${signal.activeSignals} signals active`,
+      `Kelly ${(kellyCapped * 100).toFixed(1)}% = $${positionSize.toFixed(2)}, ` +
+      `${signal.activeSignals} signals active, combiner ${recAction || "n/a"}`,
     gates,
   };
 }

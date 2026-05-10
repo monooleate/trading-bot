@@ -67,11 +67,12 @@ interface LiveReadinessReport {
 
 // Categories the cron loop force-flips back to paper if liveReadiness.ready
 // is false. Matches the auto-trader categories handled by live-readiness.mts.
-const READINESS_CATEGORIES: { key: "crypto" | "weather" | "hyperliquid" | "funding-arb"; label: string; statusUrl: string }[] = [
+const READINESS_CATEGORIES: { key: "crypto" | "weather" | "hyperliquid" | "funding-arb" | "sports"; label: string; statusUrl: string }[] = [
   { key: "crypto",       label: "Crypto",        statusUrl: "/.netlify/functions/auto-trader-api?action=status&category=crypto" },
   { key: "weather",      label: "Weather",       statusUrl: "/.netlify/functions/auto-trader-api?action=status&category=weather" },
   { key: "hyperliquid",  label: "Hyperliquid",   statusUrl: "/.netlify/functions/auto-trader-api?action=status&category=hyperliquid" },
   { key: "funding-arb",  label: "Funding Arb",   statusUrl: "/.netlify/functions/auto-trader-api?action=status&category=hyperliquid&layer=arb" },
+  { key: "sports",       label: "Sports",        statusUrl: "/.netlify/functions/auto-trader-api?action=status&category=sports" },
 ];
 
 // ─── Capability cards ─────────────────────────────────────────────────
@@ -139,6 +140,18 @@ const CARDS: Card[] = [
     href: "/trade/weather/",
     mode: "PAPER+LIVE",
     category: "weather",
+    group: "execution",
+    venue: "Polymarket",
+    auto: "auto",
+  },
+  {
+    id: "sports",
+    title: "Sports Bot",
+    blurb: "Contrarian fan-bias fade · NBA/NFL/EPL · registry-native bot pilot",
+    icon: "🏀",
+    href: "/trade/sports/",
+    mode: "PAPER-ONLY",
+    category: "sports",
     group: "execution",
     venue: "Polymarket",
     auto: "auto",

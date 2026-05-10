@@ -25,10 +25,26 @@
 // filters resolved markets out. Resolved markets only appear when you
 // explicitly add `&closed=true`.
 
-import { GAMMA_API } from "../shared/config.mts";
+import { GAMMA_API, getTraderConfig } from "../shared/config.mts";
 import { log } from "../shared/logger.mts";
 import { closePosition } from "./session-manager.mts";
 import type { ClosedTrade, SessionState } from "../shared/types.mts";
+
+// Settlement fee model (audit fix #6, 2026-05-11). The decision-engine
+// gates entries with `netEdge = grossEdge − roundtripFeePct` so the paper
+// resolver MUST apply the same fee on close, otherwise paper PnL is
+// systematically more optimistic than live PnL and signal-IC calibration
+// drifts. Live Polymarket CLOB charges 0% taker fees today, but the 3.6%
+// roundtrip captures real-world entry slippage (already baked into
+// avgEntry as `marketPrice + $0.01`) PLUS the implicit cost of bid-ask
+// spread on early exits, redemption gas (~$0.50 per claim), and
+// occasional cross-book fills. Applying it once per close on the larger
+// of (proceeds, costBasis) is the most conservative interpretation and
+// matches the gate logic exactly.
+function applySettlementFee(pnlGross: number, proceeds: number, costBasis: number, feePct: number): number {
+  const notional = Math.max(proceeds, costBasis);
+  return pnlGross - notional * feePct;
+}
 
 interface ResolutionInfo {
   resolved: boolean;
@@ -251,7 +267,13 @@ export async function resolvePendingPositions(
     const exitSnap = exitPrice >= 0.999 ? 1 : exitPrice <= 0.001 ? 0 : exitPrice;
 
     const proceeds = pos.shares * exitSnap;
-    const pnl = proceeds - pos.costBasis;
+    const pnlGross = proceeds - pos.costBasis;
+    // Apply the same roundtrip fee the decision-engine gates against, so
+    // closed-paper PnL matches what live execution would have produced.
+    // Pulls feePct from the env-default config — the runtime override
+    // isn't async-available here and the value is stable (0.036).
+    const feePct = getTraderConfig().roundtripFeePct;
+    const pnl    = applySettlementFee(pnlGross, proceeds, pos.costBasis, feePct);
     const trade: ClosedTrade = {
       market: pos.market,
       direction: pos.direction,
@@ -280,7 +302,9 @@ export async function resolvePendingPositions(
       mode: session.paperMode ? "paper" : "live",
       entryPrice: pos.avgEntry,
       exitPrice: exitSnap,
-      pnl: Math.round(pnl * 100) / 100,
+      pnlGross: Math.round(pnlGross * 100) / 100,
+      pnlNet:   Math.round(pnl * 100) / 100,
+      feePct,
       // Live positions need a separate on-chain CTF redemption to receive
       // USDC; flag that explicitly so the operator can claim via the
       // existing /polymarket-redeem endpoint.

@@ -13,7 +13,7 @@
 import { useCallback, useState } from "react";
 
 export type ExportCategory =
-  | "crypto" | "weather" | "hyperliquid" | "funding-arb";
+  | "crypto" | "weather" | "hyperliquid" | "funding-arb" | "sports";
 
 interface UseTradeExportOptions {
   category: ExportCategory;

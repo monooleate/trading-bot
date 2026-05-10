@@ -32,6 +32,10 @@ interface FanOutTarget {
 const TARGETS: FanOutTarget[] = [
   { label: "hyperliquid-perp",  body: { action: "run", category: "hyperliquid", layer: "directional" } },
   { label: "hyperliquid-arb",   body: { action: "run", category: "hyperliquid", layer: "arb" } },
+  // Registry-native bots (Sports is the first one). The dispatcher's
+  // strangler-fig path routes these through bot-registry without any
+  // switch-case in auto-trader/index.mts.
+  { label: "sports",            body: { action: "run", category: "sports" } },
 ];
 
 async function runOne(target: FanOutTarget, ctx: Context): Promise<{ label: string; ok: boolean; status?: number; error?: string }> {

@@ -18,9 +18,9 @@ import ConfirmDialog from "./ConfirmDialog";
 import { traderShellCSS } from "./traderShellStyles";
 
 type CalibrationCategory =
-  | "crypto" | "weather" | "hyperliquid" | "funding-arb" | "all";
+  | "crypto" | "weather" | "hyperliquid" | "funding-arb" | "sports" | "all";
 
-type LiveCategory = "crypto" | "weather" | "hyperliquid" | "funding-arb";
+type LiveCategory = "crypto" | "weather" | "hyperliquid" | "funding-arb" | "sports";
 
 export interface TraderStat {
   label: string;

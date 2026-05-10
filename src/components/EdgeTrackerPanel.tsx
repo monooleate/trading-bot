@@ -95,7 +95,7 @@ const COLORS = {
 
 // ─── Main panel ─────────────────────────────────────────
 
-type EdgeCategory = "crypto" | "weather" | "hyperliquid" | "funding-arb" | "all";
+type EdgeCategory = "crypto" | "weather" | "hyperliquid" | "funding-arb" | "sports" | "all";
 
 interface Props {
   defaultCategory?: EdgeCategory;
