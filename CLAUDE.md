@@ -351,6 +351,32 @@ netlify deploy --prod --dir=dist
 
 ## AKTUÁLIS ÁLLAPOT (2026-05-11) – Claude Code folytatáshoz
 
+### Huszonötödik session (2026-05-11) – Env-vars dokumentáció
+
+Új doksi: **`internal-docs/env-vars.md`** — 61 env-változó kategorizálva
+13 csoportba (auth / Polymarket / HL / Binance / Bybit / Anthropic /
+Telegram / Supabase / globális mode-flags + 4 bot tunable szett). Minden
+változónál: mire való, hol használt (fájl:sor), default érték, kockázati
+szint (🔴 kötelező / 🟠 live-only / 🟡 opcionális), generálási parancs
+ha secret.
+
+Plusz: minimum env-szettek 5 deployment szcenárióhoz (csak elemzés /
+paper / live Polymarket / live HL / Bybit-Binance manual), Settings tab
+vs env-var prioritás magyarázat, biztonsági szempontok (secret rotáció,
+paper-to-live váltás 2-fázisa, testnet-előbb policy).
+
+`internal-docs/README.md` "Environment Variables" szekciója kibővítve
+egy hivatkozással a teljes doksira (rövid példa megmaradt a quick-start
+miatt).
+
+### Hova nyúlj legközelebb (env)
+
+- Új tunable env hozzáadásakor: 1) config.mts default, 2) ha
+  runtime-állítható, trader-settings.mts SCHEMA, 3) env-vars.md
+  frissítés. A README.md csak summary, ott nem kell minden detail.
+- Új API integrációnál: minta-trió `*_API_KEY` / `*_API_SECRET` /
+  `*_TESTNET` — kategorizálva az env-vars.md "API" szekciójába.
+
 ### Huszonnegyedik session (2026-05-11) – Crypto Reconcile + per-position Gamma diagnostic
 
 A user észlelte: /trade/crypto/ oldalon 1 pending paper position past

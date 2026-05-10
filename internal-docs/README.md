@@ -133,6 +133,14 @@ position_size = bankroll * kelly_capped
 
 ## Environment Variables
 
+A teljes részletes referencia: **[`env-vars.md`](./env-vars.md)** —
+61 env-változó kategorizálva (auth / Polymarket / HL / Binance / Bybit /
+Anthropic / Telegram / Supabase / mode flags + 4 bot tunable szettje).
+Minimum env-szettek (csak elemzés / paper / live Polymarket / live HL),
+Settings tab vs env priority, biztonsági szempontok.
+
+Gyors példa (a fontosabbak):
+
 ```env
 # Required for live trading
 POLY_PRIVATE_KEY=0x...
@@ -142,7 +150,7 @@ POLY_SIGNATURE_TYPE=1
 # Auto-trader config
 PAPER_MODE=true                  # MUST be explicitly set to false for live
 SESSION_LOSS_LIMIT=20
-MAX_KELLY_FRACTION=0.20
+MAX_KELLY_FRACTION=0.08
 EDGE_THRESHOLD_CRYPTO=0.15
 COOLDOWN_SECONDS=300
 
