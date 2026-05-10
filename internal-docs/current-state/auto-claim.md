@@ -85,7 +85,7 @@ CLOB hívásokat. Csak egy új `polymarket-redeem-execute.mts` kell, ami a
 
 ## Hetzner roadmap-ben hová kerül
 
-A `internal-docs/migration/hetzner-migration-plan.md` Fázis 2 (HL
+A `internal-docs/roadmap/hetzner-migration.md` Fázis 2 (HL
 execution port) után érdemes megcsinálni egy **server-side auto-claim
 ütemezett process-t**: PM2 daemon napi 1× scan + redeem + Telegram
 report. Postgres-be log: melyik piacot, mikor, mennyiért claim-eltünk.

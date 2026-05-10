@@ -158,7 +158,7 @@ await migrateSession('weather');
 
 ```
 □ Hetzner CCX23 felvétel Falkenstein DC
-□ Ubuntu 24.04 install + base hardening (infrastructure.md §2)
+□ Ubuntu 24.04 install + base hardening (hetzner-infrastructure.md §2)
 □ Postgres + Redis + Caddy + Bun + Node.js + PM2 install
 □ Database schema migration (init.sql)
 □ DNS setup: edgecalc.jmeszaros.dev + api.edgecalc.jmeszaros.dev
@@ -454,4 +454,4 @@ HL_BYBIT_ARB_FEE_BYBIT_SPOT=0.002  # roundtrip Bybit spot fee
 
 ---
 
-**Következő dokumentum**: `risk-coordinator.md` — bár pilléres modellt választottál (és NEM építünk koordinátort), érdemes dokumentálni mit ad fel ezzel és mikor érdemes később bevezetni.
+**Következő dokumentum**: `risk-coordinator-considerations.md` — bár pilléres modellt választottál (és NEM építünk koordinátort), érdemes dokumentálni mit ad fel ezzel és mikor érdemes később bevezetni.

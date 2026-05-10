@@ -3,7 +3,7 @@
 > **Dátum:** 2026-04-24
 > **Cél:** A Netlify-ról saját VPS-re költöztetett EdgeCalc rendszer infrastruktúra-specifikációja. Ez a dokumentum **a fizikai/logikai layer**: szerver, network, processzek, szolgáltatások, deploy pipeline.
 > **Modell:** Pilléres (saját bankroll, saját kill switch pillérenként). Cross-venue risk koordinátor NINCS — minden pillér izolált.
-> **Kapcsolódó docok:** `migration-plan.md`, `risk-coordinator.md` (csak referencia, nem implementáljuk), `new-strategies-roadmap.md`
+> **Kapcsolódó docok:** `migration-strangler-fig.md`, `risk-coordinator-considerations.md` (csak referencia, nem implementáljuk), `new-strategies.md`
 
 ---
 
@@ -608,8 +608,8 @@ pm2 monit                                 # TUI dashboard
 │
 └── docs/                                 # Belső dokumentáció (jelenlegi internal-docs/ átemelve)
     ├── architecture.md                   # Ez maradhat
-    ├── infrastructure.md                 # EZ A FÁJL
-    ├── migration-plan.md                 # Külön doc
+    ├── hetzner-infrastructure.md         # EZ A FÁJL
+    ├── migration-strangler-fig.md        # Külön doc
     ├── pillars/                          # Pillér-specifikus matek doc-ok
     └── changelog/
 ```
@@ -902,4 +902,4 @@ echo "✓ Kész. Manual restart: pm2 start ecosystem.config.cjs"
 
 ---
 
-**Következő lépés:** `migration-plan.md` — melyik Netlify Function → melyik VPS process / endpoint, fázisokra bontva.
+**Következő lépés:** `migration-strangler-fig.md` — melyik Netlify Function → melyik VPS process / endpoint, fázisokra bontva.

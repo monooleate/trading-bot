@@ -1,8 +1,8 @@
 # Hetzner VPS Migrációs Action Plan
 
 > **Olvasás sorrend:** ezt a fájlt egy következő session-nek készítettük el.
-> A meglévő `internal-docs/migration/` doksik (`infrastructure.md`,
-> `migration-plan.md`, `risk-coordinator.md`) megtartják az érvényüket —
+> A meglévő `internal-docs/roadmap/` doksik (`hetzner-infrastructure.md`,
+> `migration-strangler-fig.md`, `risk-coordinator-considerations.md`) megtartják az érvényüket —
 > ez a plan a **konkrét, EdgeCalc-specifikus** lépéseket írja le, amiket
 > egy implementáló sessionben sorrendben végre lehet hajtani.
 
@@ -393,7 +393,7 @@ további 1 hét megfigyelés. Sorrend: Funding arb → HL execution → Divergen
 - **Postgres replication** második VPS-re (HA setup) — csak ha napi PnL
   > $500 stabilan
 - **Grafana / Prometheus** dashboardok — Telegram daily summary elég eleinte
-- **Bybit execution venue** — a `migration-plan.md` említi, de nem kritikus
+- **Bybit execution venue** — a `migration-strangler-fig.md` említi, de nem kritikus
 - **HLP Vault automatizálás** — manuális USDC deposit elég
 - **Multi-region failover** — egy CX22 elég 99.5% uptime-hoz
 
@@ -417,14 +417,13 @@ további 1 hét megfigyelés. Sorrend: Funding arb → HL execution → Divergen
 
 ## Kapcsolódó már elkészült doksik
 
-- `migration/infrastructure.md` — alacsonyabb szintű VPS spec (Postgres,
+- `hetzner-infrastructure.md` — alacsonyabb szintű VPS spec (Postgres,
   Caddy, Bun verzió)
-- `migration/migration-plan.md` — 9 fázisos absztrakt strangler-fig terv
-- `migration/risk-coordinator.md` — miért NINCS cross-pillér koordinátor és
+- `migration-strangler-fig.md` — 9 fázisos absztrakt strangler-fig terv
+- `risk-coordinator-considerations.md` — miért NINCS cross-pillér koordinátor és
   mit kell helyette beépíteni (per-venue watchdog, HL 2 wallet, globális stop)
-- `migration/new-strategies-roadmap_1.md` — 37 stratégia, top 11 a Hetzner
-  utánra
-- `migration/reference/VPS-SETUP_detailed_done_26-04-03.md` — referencia
-  setup script egy korábbi VPS-ről (CX22, ugyanazon stack)
+- `new-strategies.md` — 37 stratégia, top 11 a Hetzner utánra
+- `../archive/grabit-vps-setup.md` — referencia setup script egy korábbi
+  VPS-ről (CX22, ugyanazon stack)
 
 Ezeket a Fázis 1 előtt egyszer át kell olvasni.

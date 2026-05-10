@@ -11,9 +11,12 @@ Ez a fájl Claude Code számára készült. Minden fejlesztési session elején 
 Mielőtt a sessiont lezárod (utolsó válasz a usernek), végezd el az alábbi ellenőrző listát:
 
 1. **CLAUDE.md `AKTUÁLIS ÁLLAPOT` szekció** – ha bármi élő rendszerállapot változott (működő/hibás tabok, ismert bugok, deploy státusz), frissítsd a dátummal együtt (`AKTUÁLIS ÁLLAPOT (YYYY-MM-DD)`).
-2. **`internal-docs/` érintett fájlok** – ha egy tab/function/algoritmus logikája változott, frissítsd a hozzá tartozó markdown fájlt (pl. `06-orderflow.md`, `08-apex-wallets.md`).
+2. **`internal-docs/` érintett fájlok** – ha egy tab/function/algoritmus logikája változott, frissítsd a hozzá tartozó markdown fájlt:
+   - **`current-state/`** – ha élő rendszer-állapot változott (architecture, deploy, settings, env, trading-status, auto-claim).
+   - **`math/`** – ha egy signal vagy bot algoritmusa változott (pl. `math/06-orderflow.md`, `math/13-crypto-bot.md`).
+   - **`roadmap/`** – ha a jövőbeli tervek / Hetzner-migráció / új stratégiák állapota változott.
 3. **`internal-docs/changelog/`** – minden nem-triviális változásnál hozz létre vagy egészíts ki egy `CHANGELOG-YYYY-MM-DD.md` fájlt: mit változtattál, miért, melyik fájl(ok)ban.
-4. **Új tab vagy function** – kötelezően új `internal-docs/NN-name.md` fájl + bejegyzés a `README.md`-ben + a CLAUDE.md tab-táblázat bővítése.
+4. **Új tab vagy function** – kötelezően új `internal-docs/math/NN-name.md` fájl + bejegyzés az `internal-docs/README.md`-ben + a CLAUDE.md tab-táblázat bővítése.
 5. **TODO / Hiányos implementációk** – ha új technikai debt keletkezett vagy egy meglévő megoldódott, frissítsd az `Ismert limitációk és TODO-k` szekciót.
 
 **Ha nem volt érdemi változás** (csak kérdés/olvasás történt), akkor sem kell üres commit – de mondd ki explicit a session végén: *"Nincs dokumentáció-frissítés szükséges, mert csak X történt."*
@@ -54,14 +57,12 @@ edge-calc/
 ├── netlify/
 │   └── functions/           ← 16 Netlify Function (.mts)
 ├── internal-docs/           ← Részletes technikai dokumentáció
-│   ├── README.md            ← Főoldal, architektúra, quick start
-│   ├── 06-orderflow.md      ← Kyle λ, VPIN, Hawkes, AS
-│   ├── 07-vol-harvest.md    ← IV vs RV, locked profit
-│   ├── 08-apex-wallets.md   ← Payout ratio, bot detector, consensus
-│   ├── 09-cond-prob.md      ← Marginal polytope, violations
-│   ├── 10-signal-combiner.md ← Fundamental Law, IR = IC × √N
-│   ├── 11-arb-matrix.md     ← VWAP arb, LLM dep, Frank-Wolfe
-│   └── roadmap.md           ← Fejlesztési útvonal
+│   ├── README.md            ← Index — itt kezdj
+│   ├── current-state/       ← Élő rendszer (architecture, env-vars, deploy, settings, trading-status, auto-claim)
+│   ├── math/                ← Signal math + bot implementation reference (02-ev-kelly … 16-weather-bot + 151-Trading-Strategies.pdf)
+│   ├── roadmap/             ← Hetzner migráció, master-plan, új stratégiák, infrastructure
+│   ├── changelog/           ← Session-by-session history
+│   └── archive/             ← Elkészült promptok + historikus tanulságok (paper-pnl-v2-bug, prompts/)
 ├── apex_wallet_profiler.py
 ├── vol_divergence.py
 ├── orderflow_analyzer.py
@@ -263,7 +264,7 @@ python conditional_prob_matrix.py --custom slug-a slug-b
 3. Demo data: mindig legyen DEMO konstans, `is_demo: true` flag
 4. Dashboard: `Dashboard.tsx`-ben import + tab array + render bővítése
 5. Function: `netlify/functions/new-panel.mts`
-6. Dokumentáció: `internal-docs/NN-new-panel.md`
+6. Dokumentáció: `internal-docs/math/NN-new-panel.md`
 
 ### Új Netlify Function
 
@@ -351,6 +352,60 @@ netlify deploy --prod --dir=dist
 
 ## AKTUÁLIS ÁLLAPOT (2026-05-11) – Claude Code folytatáshoz
 
+### Huszonhetedik session (2026-05-11) – `internal-docs/` átszervezés (current-state / math / roadmap / archive)
+
+A user kérése: az `internal-docs/` mappát logikus mappaszerkezetbe rendezni
+("current-state ; math ; future-state és roadmap-to-reach future state"),
+duplikációk törlésével. Az addigi flat-ish `app/`, `migration/`, `app/done/`,
+`math/weather/` keveréket egységes szemantikai mappákra bontottam.
+
+**Új struktúra:**
+
+```
+internal-docs/
+├── README.md                       ← újraírva, indexszel
+├── current-state/   (6 fájl)       ← élő rendszer snapshot
+│   ├── architecture.md             (← app/architecture.md)
+│   ├── trading-status.md           (← app/trading-status.md)
+│   ├── settings-reference.md       (← app/settings-help.md)
+│   ├── auto-claim.md               (← app/auto-claim.md)
+│   ├── env-vars.md                 (← env-vars.md root-ból)
+│   └── deploy.md                   (← app/DEPLOY.md)
+├── math/            (13 fájl)      ← signal math + bot impl reference
+│   ├── 02 … 15-funding-arb.md      (változatlan)
+│   ├── 16-weather-bot.md           (← math/weather/README.md, flatbe)
+│   └── 151-Trading-Strategies.pdf
+├── roadmap/         (7 fájl)       ← jövőbeli rendszer + action plan
+│   ├── README.md                   (új, olvasási sorrend)
+│   ├── master-plan.md              (← edgecalc-master-plan.md)
+│   ├── hetzner-migration.md        (← migration/hetzner-migration-plan.md)
+│   ├── hetzner-infrastructure.md   (← migration/infrastructure.md)
+│   ├── migration-strangler-fig.md  (← migration/migration-plan.md)
+│   ├── new-strategies.md           (← migration/new-strategies-roadmap_1.md)
+│   └── risk-coordinator-considerations.md (← migration/risk-coordinator.md)
+├── changelog/                      ← VÁLTOZATLAN
+└── archive/                        ← elkészült promptok + historikus tanulságok
+    ├── prompts/  (5 fájl)          (← app/done/edgecalc-*.md)
+    ├── paper-pnl-v2-bug.md         (← app/paper-pnl-analysis.md)
+    ├── grabit-vps-setup.md         (← migration/reference/VPS-SETUP_*.md)
+    └── matekmegoldasok-content-roadmap.md (← másik projekt)
+```
+
+**Törölve (4 dupli/elavult):**
+- `app/done/hyperliquid.md` (átfedi `math/14-hl-directional.md`)
+- `app/done/weather-patch.md` (átfedi CHANGELOG-2026-04-21)
+- `app/done/roadmap.md` (Sprint 1 status, elavult)
+- `migration/README_2.md` (csak meta-olvasási sorrend, beépítve `roadmap/README.md`-be)
+
+**Cross-ref-ek frissítve:**
+- CLAUDE.md: mappaszerkezet block + "Új tab" / "Új function" path-ok + 14-15-26. session env-vars/migration hivatkozások
+- internal-docs/README.md teljes újraírás
+- 7 belső roadmap-cross-ref + 1 math/13-crypto-bot.md hivatkozás
+- A CHANGELOG-* fájlokat **NEM** módosítottam (történelem)
+
+`tsc --noEmit` és Astro build NEM futott (csak markdown átszervezés, kód érintetlen).
+Részletek: `internal-docs/changelog/CHANGELOG-2026-05-11.md` "(c)" szekció.
+
 ### Huszonhatodik session (2026-05-11) – Reconcile "Unknown error" — Netlify 10s timeout fix
 
 A user a "⟳ Reconcile pending" gombra "Unknown error"-t kapott. Root cause:
@@ -378,7 +433,7 @@ Részletek: `internal-docs/changelog/CHANGELOG-2026-05-11.md` "(b)" szekció.
 
 ### Huszonötödik session (2026-05-11) – Env-vars dokumentáció
 
-Új doksi: **`internal-docs/env-vars.md`** — 61 env-változó kategorizálva
+Új doksi: **`internal-docs/current-state/env-vars.md`** — 61 env-változó kategorizálva
 13 csoportba (auth / Polymarket / HL / Binance / Bybit / Anthropic /
 Telegram / Supabase / globális mode-flags + 4 bot tunable szett). Minden
 változónál: mire való, hol használt (fájl:sor), default érték, kockázati
@@ -397,10 +452,10 @@ miatt).
 ### Hova nyúlj legközelebb (env)
 
 - Új tunable env hozzáadásakor: 1) config.mts default, 2) ha
-  runtime-állítható, trader-settings.mts SCHEMA, 3) env-vars.md
+  runtime-állítható, trader-settings.mts SCHEMA, 3) `internal-docs/current-state/env-vars.md`
   frissítés. A README.md csak summary, ott nem kell minden detail.
 - Új API integrációnál: minta-trió `*_API_KEY` / `*_API_SECRET` /
-  `*_TESTNET` — kategorizálva az env-vars.md "API" szekciójába.
+  `*_TESTNET` — kategorizálva az `internal-docs/current-state/env-vars.md` "API" szekciójába.
 
 ### Huszonnegyedik session (2026-05-11) – Crypto Reconcile + per-position Gamma diagnostic
 
@@ -1495,7 +1550,7 @@ visszaadja `runStatus` mezőben.
 - **A.5 LP Subgroup A/B/C:** apex-wallets bővítve `lp_profile` (maker_ratio, two_sided, top-5 concentration) + `classifySubgroup` (FADE A/B, COPY C). Új `LPSubgroupCard` az ApexWalletsPanel-ben.
 - **A.6 Pair-Cost Arb scanner:** új `pair-cost-arb.mts` + Tab 11 D chip — VWAP-validált YES+NO redeem arb.
 - **SETTINGS rendszer:** új `trader-settings.mts` (auth-protected, Blobs runtime override store, range-clamp validáció) + új `SettingsPanel.tsx` komponens („⚙ Beállítások" 13. tab) saját login overlay-jel. `getEffectiveTraderConfig()` async wrapper merge-eli env+Blobs.
-- **B (külön MD):** `internal-docs/migration/hetzner-migration-plan.md` 7-fázisos action plan a következő sessionnek (HL+funding-arb+P2.2+P3.3 Hetzner-re költözés).
+- **B (külön MD):** `internal-docs/roadmap/hetzner-migration.md` 7-fázisos action plan a következő sessionnek (HL+funding-arb+P2.2+P3.3 Hetzner-re költözés).
 
 ### Hova nyúlj legközelebb
 - Settings tabon paraméter állítás → 3 perc múlva a következő cron tick már az új értékekkel fut (env override redeploy nélkül)

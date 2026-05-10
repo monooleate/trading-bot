@@ -517,7 +517,7 @@ SCHEMA-ban):
 - **Új tunable env hozzáadása:** 1) Add a megfelelő `config.mts`-hez a
   `process.env.X || "default"` mintát, 2) ha runtime-állítható kell
   legyen, vedd fel a `trader-settings.mts` SCHEMA-jába, 3) frissítsd
-  ezt a doksit (`internal-docs/env-vars.md`).
+  ezt a doksit (`internal-docs/current-state/env-vars.md`).
 - **Új API integráció:** kövesd a Bybit / Binance mintát: `*_API_KEY`,
   `*_API_SECRET`, `*_TESTNET` triót. A trade endpointban első dolog
   legyen az env-hiány error.

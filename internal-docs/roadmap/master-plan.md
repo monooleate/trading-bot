@@ -284,7 +284,7 @@ per-category routing `/trade/{category}/edge-tracker`.
 ## KORÁBBI CHATEKBŐL HIÁNYZÓ ELEMEK
 
 ### C1 – Hetzner VPS Migráció 📋 **PLAN-ONLY**
-**Státusz:** A `internal-docs/migration/hetzner-migration-plan.md`-ban 7-fázisos
+**Státusz:** A `internal-docs/roadmap/hetzner-migration.md`-ban 7-fázisos
 action plan készen áll, **de Hetzner deploy nincs**.
 
 **Hátra (a plan szerint):**
@@ -484,7 +484,7 @@ amiket az audit talált meg:
 - ✅ **Funding-Arb 4-cell stats parity** a többi bottal (session 29, 2026-05-11)
 
 ### Dokumentáció
-- ✅ **internal-docs/env-vars.md** — 61 env-változó részletes referencia (2026-05-11)
+- ✅ **internal-docs/current-state/env-vars.md** — 61 env-változó részletes referencia (2026-05-11)
 - ✅ **internal-docs/math/13-crypto-bot.md** — runtime walkthrough
 - ✅ **internal-docs/math/14-hl-directional.md** — HL implementation reference
 - ✅ **internal-docs/math/15-funding-arb.md** — F-Arb implementation reference
@@ -525,7 +525,7 @@ amiket az audit talált meg:
 ### 🟡 NAGY SPRINT (új infra + új bot)
 
 7. **C1 — Hetzner VPS migráció**
-   A `hetzner-migration-plan.md` 7-fázisa. ~1-2 hét.
+   A `hetzner-migration.md` 7-fázisa. ~1-2 hét.
    **Előfeltétele:** P2.2, P3.3, és long-term operábilis bot-mátrix.
 
 8. **P2.2 — Real-time WebSocket divergencia (Hetzner-en)**
@@ -570,9 +570,9 @@ amiket az audit talált meg:
 
 ## REFERENCIÁK
 
-- **Részletes env-doksi:** [`env-vars.md`](./env-vars.md) (2026-05-11)
-- **Architektúra-doksi:** [`README.md`](./README.md)
-- **Math/implementation references:** [`math/`](./math/) (15-bot referencia + 6 algoritmus-doksi)
-- **Changelog:** [`changelog/`](./changelog/) (session-by-session, 2026-04-08 óta)
-- **Hetzner migration plan:** [`migration/hetzner-migration-plan.md`](./migration/hetzner-migration-plan.md)
+- **Részletes env-doksi:** [`../current-state/env-vars.md`](../current-state/env-vars.md) (2026-05-11)
+- **Architektúra-doksi:** [`../README.md`](../README.md)
+- **Math/implementation references:** [`../math/`](../math/) (15-bot referencia + 6 algoritmus-doksi)
+- **Changelog:** [`../changelog/`](../changelog/) (session-by-session, 2026-04-08 óta)
+- **Hetzner migration plan:** [`hetzner-migration.md`](./hetzner-migration.md)
 - **CLAUDE.md "AKTUÁLIS ÁLLAPOT"** — minden session aktuális statusz-bejegyzéssel

@@ -498,32 +498,69 @@ A market-finder a question-ből parseol time hint-et (`(\d+)\s*(second|minute|ho
 ## 4. Decision engine (`crypto/decision-engine.mts`)
 
 A `makeDecision()` egy **rendezett gate-listát** épít. Minden gate egy
-`DecisionGate { label, passed, actual, required, hint }` objektumot kap;
-az első bukó gate után rögtön visszatér a `noResult(reason)`-nel, de a
-`gates[]` lista tartalmazza az addig kiértékelteket — ezt a UI rendereli
-a "Why?" panel-en.
+`DecisionGate { label, passed, actual, required, hint }` objektumot kap.
+A motor **MINDEN** gate-et kiértékel (nincs short-circuit), és csak a
+végén dönt `shouldTrade = gates.every(g => g.passed)` — így a UI a
+teljes pass/fail listát megjeleníti a "Why?" panel-en. A `reason` mező
+az első bukó gate üzenetét hordozza, hogy a sor footer-en olvasható maradjon.
 
-### A 8 gate
+### A 12 gate (2026-05-11 audit fix után)
 
 | # | Gate | Match rule | Default | Where to tune |
 |---|------|------------|---------|---------------|
 | 1 | **Session loss limit** | `sessionLoss < cfg.sessionLossLimit` | $20 | `SESSION_LOSS_LIMIT` env / Settings `sessionLossLimit` |
 | 2 | **Aktív signal források** | `signal.activeSignals ≥ 2` | 2 (hard-coded) | – (kódban) |
-| 3 | **Market cooldown** | `now - lastTrade(slug) ≥ cooldownSeconds * 1000` | 300s | `COOLDOWN_SECONDS` / Settings `cooldownSeconds` |
-| 4 | **Open interest** | `market.openInterest ≥ cfg.minOpenInterest` | $500 | `minOpenInterest` (kódban — nincs Settings knob) |
-| 4b | **Entry window** ⚠ | csak ha `market.openedAtEstimate != null`. `ageMs ∈ [start, end]` | [60s, 180s] | `BTC_ENTRY_WINDOW_*` env / Settings `btcEntryWindow*Ms` |
-| 5b | **OB imbalance konvergencia** | `signal.obImbalance.direction != decision.direction.opposite` | UP ≥ 1.80, DOWN ≤ 0.55 | `obImbalanceUpRatio` / `obImbalanceDownRatio` |
-| 6 | **Net edge ≥ küszöb** | `\|finalProb − marketPrice\| − roundtripFeePct ≥ edgeThreshold` | 15% (3.6% fee után) | `EDGE_THRESHOLD_CRYPTO` / Settings `edgeThreshold` |
-| 7 | **Kelly conviction** ⚠ | `signal.kellyFraction > 0` | hard-coded | – (a `signal-combiner` `kelly.quarter` outputja) |
-| 8 | **Kelly cap** (informational) | `min(kellyFraction, maxKellyFraction)` | 8% bankroll | `MAX_KELLY_FRACTION` / Settings `maxKellyFraction` |
+| 3 | **Combiner confidence (\|p − 0.5\|)** ✦ | `\|finalProb − 0.5\| ≥ combinerConfidenceMin` | 0.05 | `COMBINER_CONFIDENCE_MIN` env / Settings `combinerConfidenceMin` |
+| 4 | **Combiner recommendation** ✦ | `signal.combinerRecommendation.startsWith("BUY")` | hard-coded | – (a `signal-combiner` `recommend()` outputja) |
+| 5 | **Resolution-risk gate** ✦ | `signal.tradeRecommendedByRisk !== false` | hard-coded | – (a `signal-combiner` `analyseResolutionRisk()` helper-éből) |
+| 6 | **Market cooldown** | `now - lastTrade(slug) ≥ cooldownSeconds * 1000` | 300s | `COOLDOWN_SECONDS` / Settings `cooldownSeconds` |
+| 7 | **Open interest** | `market.openInterest ≥ cfg.minOpenInterest` | $500 | `minOpenInterest` (kódban — nincs Settings knob) |
+| 8 | **Entry window** ⚠ | csak ha `market.openedAtEstimate != null`. `ageMs ∈ [start, end]` | [60s, 180s] | `BTC_ENTRY_WINDOW_*` env / Settings `btcEntryWindow*Ms` |
+| 9 | **OB imbalance konvergencia** | `signal.obImbalance.direction != decision.direction.opposite` | UP ≥ 1.80, DOWN ≤ 0.55 | `obImbalanceUpRatio` / `obImbalanceDownRatio` |
+| 10 | **Net edge ≥ küszöb** | `\|finalProb − marketPrice\| − roundtripFeePct ≥ edgeThreshold` | 15% (3.6% fee után) | `EDGE_THRESHOLD_CRYPTO` / Settings `edgeThreshold` |
+| 11 | **Kelly méret ≥ minimum** ✦ | `bankroll * kellyCapped ≥ minPositionSizeUSDC` | $0.50 | `MIN_POSITION_SIZE_USDC` env / Settings `minPositionSizeUSDC` |
+| 12 | **Kelly méret ≤ cap** (informational) | `min(kellyFraction, maxKellyFraction)` | 8% bankroll | `MAX_KELLY_FRACTION` / Settings `maxKellyFraction` |
 
-⚠ A **#4b entry window** csak rövid (5m/15m) BTC piacokon aktív. Daily piacokon idle, mert az `openedAtEstimate` null.
+✦ Új gate-ek a 2026-05-11 audit fixből (3 új konvergencia-gate + Kelly minimum gate). A korábbi 9 gate listából a régi "Kelly conviction (combiner > 0)" gate-et kivettem — a "Kelly méret ≥ minimum" (#11) funkcionálisan ekvivalens, csak a tényleges $ méreten ellenőriz, nem a 0-küszöbös conviction-en.
 
-⚠ A **#7 Kelly conviction gate** 2026-05-10-ben került be (lásd
-`changelog/CHANGELOG-2026-05-10.md`). Korábban a `Math.max(1, bankroll * 0)`
-$1-os floor miatt akkor is nyílt $1-os pozíció, ha a `kelly.quarter = 0` (és
-ezzel a combiner `recommendation = WAIT` volt) — ez 3 fantom paper trade-et
-generált, mielőtt a hard-skip bekerült.
+⚠ Az **#8 entry window** csak rövid (5m/15m) BTC piacokon aktív. Daily piacokon idle, mert az `openedAtEstimate` null — ekkor a gate "n/a (daily market)" actual-lal és `passed: true`-val szerepel a listán, hogy Y = 12 stabil maradjon a UI-on.
+
+### A 3 új konvergencia-gate miértje (2026-05-11 audit)
+
+A 2026-05-11 audit kimutatta, hogy a 9-gates verzió átengedte a 3 nyitott
+paper pozíciót, miközben:
+
+- `finalProb = 0.505` — **a 8 signal súlyozott átlaga**, ahol minden
+  egyes signal default 0.5 ha nincs jel (vol_divergence, momentum,
+  contrarian, pairs_spread mind 0.5-höz konvergál input nélkül).
+  Tehát `finalProb ≈ 0.5` **NEM "modell-szerinti 50/50"** — hanem "nincs
+  konvergens jel". A decision-engine ezt mégis összehasonlította a
+  marketPrice = 0.255-szel és 25% edge-et detektált.
+- `kelly.quarter = 0.0003` (0.03%) — a combiner saját `recommend()`
+  függvénye `WATCH`-ot ad vissza (`kellyQ < 0.005`), de a régi
+  `kellyFraction > 0` gate átengedte.
+- `trade_recommended = false` (resolution-risk veto) — a combiner UI
+  blokkolta volna, de a trader sose olvasta ezt a mezőt.
+
+A 3 új gate (#3, #4, #5) ezt a 3 réteget zárja: matematikai konvergencia
+(|p − 0.5| ≥ 5%), combiner saját ajánlása (BUY*), és resolution-risk
+verdict (`!== false`). Mindhárom **párhuzamosan védi** a botot, mert
+minden réteg külön failure mode-ot fog. Részletek:
+`changelog/CHANGELOG-2026-05-11.md` "(c)" szekció.
+
+### A "Kelly méret ≥ minimum" gate (#11) miértje
+
+A pre-audit verzióban a `positionSize = Math.max(1, bankroll * kellyCapped)`
+**$1 hard floor**-t alkalmazott. Ez 13× over-sized minden paper trade-et
+0.03% Kelly mellett ($250 bankroll × 0.0003 = $0.075 javasolt, de $1
+ténylegesen került allokálva). Az új gate **explicit gate-ként** kezeli
+a floor-t: ha `bankroll * kellyCapped < minPositionSizeUSDC` → SKIP
+("Kelly méret ≥ minimum" gate bukik), nem padding $1-re.
+
+**Live deployment note:** a Polymarket CLOB minimum order size **$5 USDC**.
+Live módra kapcsolás előtt a Settings tabon a `minPositionSizeUSDC`-t
+$5.00-ra (vagy magasabbra) kell állítani, különben a CLOB visszadob
+minden $5 alatti orderet. A $0.50 default csak paper módra optimális.
 
 ### Math: edge
 
@@ -561,14 +598,16 @@ $$
 f_{\text{used}} = \min(f_{\text{combiner}},\ \text{maxKellyFraction})
 $$
 
-A pozíció méret USDC-ben:
+A pozíció méret USDC-ben (2026-05-11 audit fix után — **nincs többé $1
+floor**):
 
 $$
-\text{positionSize} = \max(1,\ \text{bankroll} \cdot f_{\text{used}})
+\text{positionSize} = \text{bankroll} \cdot f_{\text{used}}
 $$
 
-A `Math.max(1, ...)` $1-os floor csak a **#7 Kelly conviction gate** után fut,
-így csak akkor érvényesül, ha $f_{\text{used}} > 0$.
+A floor most az **#11 "Kelly méret ≥ minimum" gate-ként** él, $0.50 default
+küszöbbel. Ha a Kelly-méret a küszöb alatt van, a bot SKIP-pel, nem
+padding-eli fel. Live módra emelni kell $5-re (CLOB minimum order size).
 
 ### Math: entry price (1-tick agresszív)
 
@@ -758,6 +797,8 @@ Csak az alábbi kulcsok érvényesek crypto botra (a többi `category: "weather"
 | `maxKellyFraction` | 0.08 | 0.01 / 0.25 | Risk & sizing |
 | `cooldownSeconds` | 300 | 30 / 3600 | Risk & sizing |
 | `sessionLossLimit` | 20 | 5 / 1000 | Risk & sizing |
+| `minPositionSizeUSDC` ✦ | 0.50 | 0.10 / 50 | Risk & sizing — **live módra emelni $5-re (CLOB minimum)** |
+| `combinerConfidenceMin` ✦ | 0.05 | 0.01 / 0.20 | Risk & sizing — gate #3 küszöb |
 | `btcTpTarget` | 0.75 | 0.55 / 0.95 | BTC short-market exit (⚠ unused, lásd §9) |
 | `btcSlTarget` | 0.35 | 0.05 / 0.45 | BTC short-market exit (⚠ unused) |
 | `btcEntryWindowStartMs` | 60000 | 0 / 600000 | BTC short-market exit |
@@ -789,8 +830,30 @@ egyszer).
 
 ## 9. Audit findings + fix history
 
-A 2026-05-10 audit során 6 hibát azonosítottunk; **mindegyiket javítottuk**
-ugyanazon a napon. A status oszlop a deployment utáni állapotot mutatja.
+### 2026-05-11 audit — 6 új hiba
+
+A bot live `mj-trading.netlify.app/trade/crypto/` 3 nyitott paper pozícióját
+vizsgáltam. A 9-gates rendszer mindhárom trade-et átengedte azonos mintázat
+mellett: `finalProb ≈ 0.505`, `kellyRaw = 0.03%`, $1 méret. A combiner saját
+ajánlása "WATCH"/"WAIT" volt, a resolution-risk vétót vetózott, de a trader
+egyik mezőt sem nézte.
+
+| ID | Probléma (pre-fix) | Status | Fix lényege |
+|----|---------------------|--------|-------------|
+| **#1** | `Math.max(1, bankroll * kellyCapped)` $1 hard floor — 0.03% Kelly × $250 = $0.075 javasolt, de $1 lett ténylegesen allokálva (13× over-sized). | ✅ FIXED | `decision-engine.mts:230` floor eltávolítva. Új gate #11 "Kelly méret ≥ minimum" explicit pass/fail kontroll. `MIN_POSITION_SIZE_USDC` env var (default 0.50) + Settings knob `minPositionSizeUSDC`. |
+| **#2** | `signal-aggregator.mts:77-83` csak `combined_probability` + `kelly.quarter`-t olvasott. A combiner saját `recommendation.action`-je + `trade_recommended` flag-je teljesen ignorálva. | ✅ FIXED | `AggregatedSignal`-re 3 új optional mező: `combinerRecommendation`, `tradeRecommendedByRisk`, `adjustedProbability`. Aggregator most átemeli ezeket a combiner válaszából. |
+| **#3** | Combiner saját `recommend()`-je `WAIT`/`WATCH`/`SKIP`-et adott, de a trader nem nézte. Egyetlen védelem (`kellyFraction > 0`) átengedett 0.0001 Kelly-t is. | ✅ FIXED | Új gate #4 "Combiner recommendation" — pass csak ha `recAction.startsWith("BUY")`. WAIT/WATCH/SKIP/null mind blokk. |
+| **#4** | `finalProb ≈ 0.5` valójában "nincs signal" (a 8 raw jelzés mindegyike 0.5-höz konvergál input nélkül), de a trader 25%-os edge-et látott a 0.255-ös marketPrice ellenében. | ✅ FIXED | Új gate #3 "Combiner confidence (\|p − 0.5\|)" — küszöb 5% default, megegyezik a combiner saját `recommend()` WAIT-küszöbével. |
+| **#5** | `data.trade_recommended = false` (resolution-risk veto) a UI-on látszott, de a trader nem olvasta. | ✅ FIXED | Új gate #5 "Resolution-risk gate" — pass csak ha `tradeRecommendedByRisk !== false`. `null` = helper nem futott → gate passes (defensive). |
+| **#6** | `paper-resolver.mts` `pnl = proceeds − costBasis` képletet használt, fee nélkül. Decision-engine `netEdge = grossEdge − 0.036` küszöböléssel gate-elt, így paper PnL szisztematikusan optimistábbnak látszott mint live. | ✅ FIXED | `applySettlementFee(pnlGross, proceeds, costBasis, feePct)` helper. Fee = `max(proceeds, costBasis) × roundtripFeePct`. A `PAPER_RESOLVED` log entry mostantól `pnlGross + pnlNet + feePct` mind kiírja. |
+
+**Nem-trivialis következmény:** a régi 9-gates rendszerből a "Kelly conviction (combiner > 0)" gate KIKERÜLT. Az új "Kelly méret ≥ minimum" (#11) funkcionálisan ekvivalens (mindkettő blokkolja a 0-Kelly trade-et), csak konkrét $ küszöbön ellenőriz a 0-küszöb helyett. Y: 9 → 12. UI auto-rendererel a `gates.length`-ből.
+
+**Magyarázat a UI gate-listán:** sorrendben mostantól 12 chip jelenik meg a "Why?" panelen + a scan row inline blocker line-on. A 3 új konvergencia-gate (#3 #4 #5) a "Aktív signal források" után, a "Market cooldown" előtt, hogy a kemény gate-ek elöl legyenek.
+
+### 2026-05-10 audit — 6 régi hiba
+
+Az alábbi 6 hiba 2026-05-10-ben került javításra ugyanazon a napon. A status oszlop a deployment utáni állapotot mutatja.
 
 | ID | Probléma (pre-fix) | Status | Fix lényege |
 |----|---------------------|--------|-------------|
@@ -891,7 +954,7 @@ netlify/functions/
 - `math/09-cond-prob.md` — Monotonicity violations (cond_prob signal)
 - `math/10-signal-combiner.md` — Grinold-Kahn IR + 8-jelzés kombinátor
 - `math/11-arb-matrix.md` — VWAP arb scanner (orthogonal eszköz, a crypto bot nem használja)
-- `app/architecture.md` — Cross-bot architektúra snapshot
-- `app/paper-pnl-analysis.md` — A v2 fake-PnL bug forensic analízise
+- `current-state/architecture.md` — Cross-bot architektúra snapshot
+- `archive/paper-pnl-v2-bug.md` — A v2 fake-PnL bug forensic analízise
 - `changelog/CHANGELOG-2026-05-09.md` — simVersion 2 → 3 átmenet
 - `changelog/CHANGELOG-2026-05-10.md` — Kelly conviction gate + Why? panel

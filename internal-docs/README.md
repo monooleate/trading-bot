@@ -1,209 +1,40 @@
-# EdgeCalc Auto-Trader – Architecture
+# EdgeCalc Auto-Trader — Internal Docs
 
-> Quantitative Polymarket auto-trading system built on EdgeCalc signal infrastructure.
-
----
-
-## Overview
-
-EdgeCalc Auto-Trader is a **serverless trading bot** that runs on Netlify Functions.
-It consumes signals from the existing EdgeCalc dashboard endpoints and executes
-trades on Polymarket via the CLOB API.
-
-**Core principle:** Signal layer is inherited (not rewritten), execution layer is new.
+> Quantitative Polymarket + Hyperliquid auto-trading system built on EdgeCalc signal infrastructure.
 
 ---
 
-## System Architecture
+## Hogyan navigálj ebben a mappában
 
-```
-┌─────────────────────────────────────────────────────────┐
-│  SIGNAL LAYER  (inherited from EdgeCalc v8)             │
-│                                                         │
-│  /funding-rates        → funding rate anomaly score     │
-│  /orderflow-analysis   → Kyle λ + VPIN + Hawkes         │
-│  /vol-divergence       → IV vs RV spread                │
-│  /apex-wallets         → smart money consensus          │
-│  /signal-combiner      → IR = IC × √N aggregation      │
-│  /cond-prob-matrix     → monotonicity violations        │
-└─────────────────────┬───────────────────────────────────┘
-                      │
-┌─────────────────────▼───────────────────────────────────┐
-│  AUTO-TRADER  (new, /auto-trader endpoint)              │
-│                                                         │
-│  1. Market Discovery   → Gamma API BTC up/down finder   │
-│  2. Signal Aggregation → parallel fetch from above      │
-│  3. Decision Engine    → edge threshold + Kelly sizing  │
-│  4. Execution          → @polymarket/clob-client orders │
-│  5. Session Manager    → PnL tracking, loss limits      │
-│  6. Monitoring         → Telegram alerts + NDJSON log   │
-└─────────────────────────────────────────────────────────┘
-```
+| Mappa | Mit tartalmaz | Mikor olvasd |
+|-------|---------------|--------------|
+| **`current-state/`** | Élő rendszer snapshot — mi van most | Új session elején: "mi működik, mi a deploy state, milyen env-ek kellenek" |
+| **`math/`** | Signal math + bot implementation reference | Algoritmus-szintű kérdéseknél: "hogy számol a Kyle λ", "mi a 8-gates HL-en" |
+| **`roadmap/`** | Jövőbeli rendszer + action plan | "Mit építsünk legközelebb", "Hetzner-migráció lépései" |
+| **`changelog/`** | Session-by-session history | "Mit változtattam tegnap" |
+| **`archive/`** | Elkészült promptok + historikus tanulságok | Ritkán; csak ha egy régi döntés indokát keresed |
+
+A **CLAUDE.md** a repo gyökerében az **AKTUÁLIS ÁLLAPOT** szekcióval — minden sessionben kötelezően frissítjük. Az itt található doksik a részletek.
 
 ---
 
-## File Structure
+## current-state/ — Élő rendszer
 
-```
-netlify/functions/auto-trader/
-├── index.ts                    ← Netlify Function entry point
-│                                  Actions: run | status | reset | stop
-│                                  Scheduled: */3 * * * *
-├── crypto/
-│   ├── btc-market-finder.ts    ← Gamma API: active BTC up/down markets
-│   ├── signal-aggregator.ts    ← Fetches signal-combiner + fallback
-│   ├── decision-engine.ts      ← Edge calc, fee deduction, Kelly cap
-│   ├── execution.ts            ← @polymarket/clob-client BUY/SELL
-│   ├── order-lifecycle.ts      ← Fill polling, emergency FOK sell
-│   └── session-manager.ts      ← Netlify Blobs state persistence
-├── shared/
-│   ├── types.ts                ← All TypeScript interfaces
-│   ├── config.ts               ← Env vars, API endpoints, constants
-│   ├── logger.ts               ← NDJSON event logger
-│   └── telegram.ts             ← Telegram Bot API alerts
-├── sports/index.ts             ← Sprint 2 placeholder
-├── politics/index.ts           ← Sprint 3 placeholder
-└── macro/index.ts              ← Sprint 4 placeholder
-
-src/components/trader/
-├── CategorySelector.tsx        ← 4-category picker UI
-├── CryptoTrader.tsx            ← Crypto dashboard (run/status/reset/stop)
-└── TraderStatus.tsx            ← Router: category → trader view
-```
-
----
-
-## Category Strategy Map
-
-| Category | Sprint | Mode | Edge Source | Min Edge | Fee |
-|----------|--------|------|-------------|----------|-----|
-| Crypto   | 1      | AUTO | FR + VPIN + Vol + Apex + CondProb | 15% | 1.8% |
-| Sports   | 2      | ALERT | Statistical model vs fan bias | 8% | 0.6% |
-| Politics | 3      | ALERT | LLM sentiment + polls | TBD | ~1% |
-| Macro    | 4      | ALERT | Weather/Fed/CPI data | TBD | TBD |
-
-Only **Crypto** is implemented in Sprint 1. Others are placeholder stubs.
-
----
-
-## Decision Engine Parameters
-
-```
-edge_threshold       = 15% net (after 3.6% roundtrip fees)
-max_kelly_fraction   = 20% bankroll per trade
-cooldown             = 300s per market slug
-session_loss_limit   = $20 (configurable via env)
-min_open_interest    = $500
-min_active_signals   = 2
-```
-
-### Edge Calculation
-
-```
-gross_edge  = |final_prob - market_price|
-net_edge    = gross_edge - 0.036          (1.8% entry + 1.8% exit)
-shouldTrade = net_edge > EDGE_THRESHOLD
-```
-
-### Kelly Sizing
-
-```
-kelly_full    = max(0, (p*b - q) / b)     where b = 1/price - 1
-kelly_quarter = kelly_full * 0.25          institutional standard
-kelly_capped  = min(kelly_quarter, 0.20)   hard cap
-position_size = bankroll * kelly_capped
-```
-
----
-
-## Execution Flow
-
-```
-1. findBtcMarkets()           → active BTC up/down markets from Gamma API
-2. aggregateSignals(slug)     → call /signal-combiner (or fallback to individual)
-3. makeDecision(signal, ...)  → edge check, kelly sizing, cooldown/loss guards
-4. placeBuyOrder(...)         → GTC limit order via clob-client (or paper sim)
-5. handleBuyLifecycle(...)    → wait for fill (paper: instant, live: poll)
-6. handleSellLifecycle(...)   → GTC sell → emergency FOK if timeout
-7. saveSession(...)           → persist to Netlify Blobs
-8. alertTradeClosed(...)      → Telegram notification
-```
-
----
-
-## Environment Variables
-
-A teljes részletes referencia: **[`env-vars.md`](./env-vars.md)** —
-61 env-változó kategorizálva (auth / Polymarket / HL / Binance / Bybit /
-Anthropic / Telegram / Supabase / mode flags + 4 bot tunable szettje).
-Minimum env-szettek (csak elemzés / paper / live Polymarket / live HL),
-Settings tab vs env priority, biztonsági szempontok.
-
-Gyors példa (a fontosabbak):
-
-```env
-# Required for live trading
-POLY_PRIVATE_KEY=0x...
-POLY_FUNDER_ADDRESS=0x...
-POLY_SIGNATURE_TYPE=1
-
-# Auto-trader config
-PAPER_MODE=true                  # MUST be explicitly set to false for live
-SESSION_LOSS_LIMIT=20
-MAX_KELLY_FRACTION=0.08
-EDGE_THRESHOLD_CRYPTO=0.15
-COOLDOWN_SECONDS=300
-
-# Monitoring
-TELEGRAM_BOT_TOKEN=...
-TELEGRAM_CHAT_ID=...
-```
-
----
-
-## API Endpoints
-
-```
-GET  /auto-trader?action=status    → current session state
-POST /auto-trader { action: "run" }    → execute one trading cycle
-POST /auto-trader { action: "reset" }  → reset session to defaults
-POST /auto-trader { action: "stop" }   → stop session (manual)
-```
-
-Scheduled: runs automatically every 3 minutes via Netlify cron.
-
----
-
-## Folder Structure
-
-```
-internal-docs/
-├── README.md               ← this file
-├── app/                    ← architecture, deploy, feature patches, prompts
-├── math/                   ← signal math + academic reference
-└── changelog/              ← session-by-session history
-```
-
-## app/ — application-level docs
-
-| File | Topic |
+| Fájl | Topic |
 |------|-------|
-| `app/trading-status.md` | **What works without a server vs what needs Hetzner** (read first if you want to trade) |
-| `app/architecture.md` | **Full current-state snapshot** (start here for any new session) |
-| `app/roadmap.md` | Sprint status + TODO priorities |
-| `app/DEPLOY.md` | Netlify deploy workflow |
-| `app/hyperliquid.md` | Hyperliquid perp engine details |
-| `app/weather-patch.md` | Weather module patch details |
-| `app/edgecalc-autotrader-prompt.md` | Original auto-trader design prompt |
-| `app/edgecalc-hyperliquid-prompt.md` | HL adaptation prompt |
-| `app/edgecalc-funding-arb-patch.md` | Funding arb patch prompt |
-| `app/edgecalc-weather-patch.md` | Weather patch prompt |
-| `app/edgecalc-resolution-risk-prompt.md` | Resolution risk scorer prompt |
+| `current-state/architecture.md` | **Full current-state snapshot** (kódbázis, mappa, 11 tab, 16 function) |
+| `current-state/trading-status.md` | **Mit tudsz most szerver nélkül vs mit Hetznerrel** (olvasd, ha kereskedni akarsz) |
+| `current-state/settings-reference.md` | Minden Settings tab paraméter referenciája (4 bot × 5-11 knob) |
+| `current-state/env-vars.md` | **61 env-változó** kategorizálva 13 csoportba, minimum env-szettek 5 deploy szcenárióhoz |
+| `current-state/auto-claim.md` | Polymarket auto-claim (intent + lokális redeem flow) |
+| `current-state/deploy.md` | Netlify deploy workflow + lokális paper-mode teszt |
 
-## math/ — signal math and academic reference
+---
 
-| File | Signal | Math |
-|------|--------|------|
+## math/ — Signal math + bot implementation reference
+
+| Fájl | Téma | Math / impl |
+|------|------|-------------|
 | `math/02-ev-kelly.md` | EV + Kelly criterion | f* = (pb-q)/b |
 | `math/06-orderflow.md` | Order flow analysis | Kyle λ, VPIN, Hawkes |
 | `math/07-vol-harvest.md` | Volatility divergence | IV vs RV spread |
@@ -211,26 +42,64 @@ internal-docs/
 | `math/09-cond-prob.md` | Conditional probability | Marginal polytope violations |
 | `math/10-signal-combiner.md` | Signal combination | Grinold-Kahn IR = IC × √N |
 | `math/11-arb-matrix.md` | Arbitrage detection | VWAP scanner, LLM dependency |
-| `math/12-realtime-websocket.md` | WebSocket architecture | Future: real-time feed |
-| `math/13-crypto-bot.md` | **Crypto auto-trader implementation** | 8 gate, Kelly sizing, paper-vs-live invariants, known limitations |
-| `math/14-hl-directional.md` | **HL directional perp bot implementation** | 8 gate, ¼-Kelly + 3x lev cap, TP/SL clamps, paper funding accrual, simVersion 2 invariants |
-| `math/15-funding-arb.md` | **Funding-rate arb bot implementation** | 5 gate, atomic 2-leg open, mark-to-market accrual, asymmetric close slippage band |
+| `math/12-realtime-websocket.md` | WebSocket architecture | Phase 3 — math leírva, deploy planned |
+| `math/13-crypto-bot.md` | **Crypto auto-trader implementation** | 8 gate, Kelly sizing, paper-vs-live invariants, runtime walkthrough |
+| `math/14-hl-directional.md` | **HL directional perp bot** | 8 gate, ¼-Kelly + 3x lev cap, TP/SL clamps, paper funding accrual |
+| `math/15-funding-arb.md` | **Funding-rate arb bot** | 5 gate, atomic 2-leg open, mark-to-market accrual, asymmetric close slippage |
+| `math/16-weather-bot.md` | **Weather bot** (ensemble forecast + bucket matching) | Gauss PDF allokáció, METAR settlement, bug audit |
 | `math/151-Trading-Strategies.pdf` | Academic reference (Kakushadze) | 151 strategies anthology |
 
-## changelog/ — change history
+---
 
-| File | Scope |
+## roadmap/ — Hova tart a projekt
+
+Részletes olvasási sorrend a [`roadmap/README.md`](./roadmap/README.md)-ben.
+
+| Fájl | Scope |
 |------|-------|
-| `changelog/CHANGELOG.md` | Main changelog |
-| `changelog/CHANGELOG-2026-04-21.md` | 2026-04-21 session (4 sprints: resolution-risk → HL → funding-arb → weather) |
-| `changelog/CHANGELOG-2026-05-08.md` | 2026-05-08 session (master-plan A.1–A.6, runtime settings UI, Hetzner migration plan) |
+| `roadmap/README.md` | Olvasási sorrend + a 6 doki kapcsolata |
+| `roadmap/master-plan.md` | Teljes rendszer architektúra + P1.x → P3.x prioritások |
+| `roadmap/hetzner-migration.md` | **A következő session action plan-je** — 7 fázisos EdgeCalc-specifikus |
+| `roadmap/hetzner-infrastructure.md` | VPS spec (Postgres, Redis, Caddy, Bun, PM2) |
+| `roadmap/migration-strangler-fig.md` | Strangler Fig 9 fázisos absztrakt terv |
+| `roadmap/new-strategies.md` | 37 stratégia rangsorolva, top 11 a Hetzner utánra |
+| `roadmap/risk-coordinator-considerations.md` | Per-venue watchdog + globális kill switch (no-build referencia) |
 
-## migration/ — Hetzner VPS migration
+---
 
-| File | Scope |
+## changelog/ — Session-by-session history
+
+| Fájl | Scope |
 |------|-------|
-| `migration/hetzner-migration-plan.md` | **Action plan a következő sessionnek** (7 fázis, EdgeCalc-specifikus) |
-| `migration/migration-plan.md` | Strangler-fig 9 fázisos absztrakt terv |
-| `migration/infrastructure.md` | VPS spec (Postgres, Redis, Caddy, Bun, PM2) |
-| `migration/risk-coordinator.md` | Per-venue watchdog + globális kill switch design |
-| `migration/new-strategies-roadmap_1.md` | 37 stratégia rangsorolva, top 11 a Hetzner utánra |
+| `changelog/CHANGELOG.md` | Régi főeredmény-changelog (~v0.4 előtti) |
+| `changelog/CHANGELOG-2026-04-21.md` | Resolution-risk → HL → funding-arb → weather sprint |
+| `changelog/CHANGELOG-2026-05-08.md` | Master-plan A.1–A.6, runtime settings UI, Hetzner migration plan |
+| `changelog/CHANGELOG-2026-05-09.md` | Weather bot 6 bugfix + Settings tab + crypto paper sim v2 + UI unification + HL split |
+| `changelog/CHANGELOG-2026-05-10.md` | Sim v3 (real Polymarket only), audit fixek, HL+F-Arb finding closeolva, gate UI uniform |
+| `changelog/CHANGELOG-2026-05-11.md` | Crypto Reconcile + Gamma diagnostic, env-vars doksi, "Unknown error" timeout fix |
+
+---
+
+## archive/ — Elkészült promptok + historikus tanulságok
+
+| Fájl | Indok |
+|------|-------|
+| `archive/prompts/autotrader-prompt.md` | Eredeti Sprint 1 design prompt (Crypto Execution Core) — implementálva |
+| `archive/prompts/hyperliquid-prompt.md` | HL execution sprint design prompt — implementálva |
+| `archive/prompts/funding-arb-patch.md` | Funding-rate arb patch prompt — implementálva |
+| `archive/prompts/resolution-risk-prompt.md` | Resolution risk scorer design prompt — implementálva |
+| `archive/prompts/weather-patch-prompt.md` | Weather bug fix prompt — implementálva |
+| `archive/paper-pnl-v2-bug.md` | 2026-05-09 paper PnL fake szám analízis — fixelve sim v3-mal |
+| `archive/grabit-vps-setup.md` | Másik projekt VPS setup tanulságai (referencia a Hetzner setup-hoz) |
+| `archive/matekmegoldasok-content-roadmap.md` | Másik projekt cikk-roadmap, nem trading bot |
+
+---
+
+## Quick start a kódhoz
+
+A teljes kódbázis-snapshot a [`current-state/architecture.md`](./current-state/architecture.md)-ben.
+A jelenleg élő funkcionalitás (mit tudsz tradelni szerver nélkül) a
+[`current-state/trading-status.md`](./current-state/trading-status.md)-ben.
+
+A repo gyökerében a **CLAUDE.md** kötelező olvasmány minden session elején — az
+**AKTUÁLIS ÁLLAPOT** szekció a legfrissebb élő statusszal.

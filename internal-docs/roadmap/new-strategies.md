@@ -119,7 +119,7 @@ Minden ötletet 4 dimenzió mentén értékelek:
 ### #7 — Liquidation cascade detection (Score: 7.5)
 **Mit**: Binance `!forceOrder@arr` WebSocket stream → cascading liquidations real-time → opposite side trade (cascade tetején fade-elni).
 
-**Build**: 1-2 hét. binance-ws-collector már subscribe-el rá (infrastructure.md), kell egy detektor: 30s window-ban X+ liquidation, >Y million USD össz → trigger.
+**Build**: 1-2 hét. binance-ws-collector már subscribe-el rá (hetzner-infrastructure.md), kell egy detektor: 30s window-ban X+ liquidation, >Y million USD össz → trigger.
 
 **Miért #7**: **Új edge forrás**, nem korrelál a meglévő signal-okkal. **Aszimmetrikus risk** — a cascade ritka, de nagy mozgással jár, és ezeket a meglévő signal-ek nem fogják.
 
@@ -258,7 +258,7 @@ Minden ötletet 4 dimenzió mentén értékelek:
 ### #25 — Bayesian portfolio optimization
 - **Score**: 4.0
 - Prior + posterior weights több stratégián
-- **Csak ha koordinátorra váltottál** (lásd risk-coordinator.md §4)
+- **Csak ha koordinátorra váltottál** (lásd risk-coordinator-considerations.md §4)
 
 ### #26 — Toxic flow detection (per-wallet VPIN Polymarket-en)
 - **Score**: 4.0
@@ -386,7 +386,7 @@ Minden ötletet 4 dimenzió mentén értékelek:
 
 ## 6. Konkrét következő lépés
 
-**Most**: a #1 (apex bug fix) + a `migration-plan.md` Phase 0 indítás. Az #1 előbb fixáld, mert a #2 (apex v2) ráépül.
+**Most**: a #1 (apex bug fix) + a `migration-strangler-fig.md` Phase 0 indítás. Az #1 előbb fixáld, mert a #2 (apex v2) ráépül.
 
 **1 hónap múlva**: Phase 2 alatt #2 (apex v2) tervezés és kódolás kezdés + #3 (per-coin signal slug) + #4 (WS VWAP) tervezés.
 
@@ -407,7 +407,7 @@ A #2 (apex v2) **ihletet merít** a polyterm Python projekt nyitott forrásábó
 ---
 
 **Összefüggő dokumentumok**:
-- `infrastructure.md` — VPS layout
-- `migration-plan.md` — Netlify→VPS lépések
-- `risk-coordinator.md` — pilléres modell trade-off-jai
-- `architecture.md` (eredeti) — jelenlegi state
+- `hetzner-infrastructure.md` — VPS layout
+- `migration-strangler-fig.md` — Netlify→VPS lépések
+- `risk-coordinator-considerations.md` — pilléres modell trade-off-jai
+- `../current-state/architecture.md` — jelenlegi state

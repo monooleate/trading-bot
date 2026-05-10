@@ -124,7 +124,7 @@ HL_ARB_WALLET_ADDRESS=0x...
 **Trade-off**: két wallet → tőkét el kell osztani előre, nem fluid, manual top-up. De ez konzisztens a pilléres filozófiával.
 
 ### 3.3 Globális kill switch (semi-manual)
-A `scripts/kill-switch.sh` (lásd `infrastructure.md` §11) az "össz-rendszer leállító". **De ez manuális**, te kell hogy kiadd.
+A `scripts/kill-switch.sh` (lásd `hetzner-infrastructure.md` §11) az "össz-rendszer leállító". **De ez manuális**, te kell hogy kiadd.
 
 **Auto-trigger** opció — egyszerű variáns:
 ```typescript

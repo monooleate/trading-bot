@@ -97,7 +97,7 @@ A változások **3 percen belül** érvényesek (a következő cron tickkel) —
   Postgres kell helyette
 - 24/7 WebSocket fillCallback nem működik serverless-ben
 
-**Mit kell csinálni:** `internal-docs/migration/hetzner-migration-plan.md`
+**Mit kell csinálni:** `internal-docs/roadmap/hetzner-migration.md`
 Fázis 2 (HL execution port) + Fázis 3 (Funding-arb port).
 
 **Becsült idő:** 2-3 nap HL, 2-3 nap funding-arb (+ Fázis 1 VPS setup 1 nap).
@@ -295,5 +295,5 @@ perces piacokra optimális.
 ## Kapcsolódó docs
 
 - `internal-docs/changelog/CHANGELOG-2026-05-08.md` — mai session minden változás
-- `internal-docs/migration/hetzner-migration-plan.md` — 7-fázisos action plan szerverre költözéshez
+- `internal-docs/roadmap/hetzner-migration.md` — 7-fázisos action plan szerverre költözéshez
 - `CLAUDE.md` "AKTUÁLIS ÁLLAPOT (2026-05-08)" — gyors session-záró összefoglaló

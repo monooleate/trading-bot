@@ -1,4 +1,115 @@
 
+# 2026-05-11 (c) — `internal-docs/` átszervezés (current-state / math / roadmap / archive)
+
+## A user kérése
+
+"Az internal-docs mappa tartalmát ésszerűsítsük, rendezzük logikus
+mappaszerkezetbe! Elemezd az összes doksit és ha már nincs rá szükség
+akkor vagy archive vagy törlés. Duplikációk nem kellenek. current-state
+; math ; future-state és roadmap-to-reach future state."
+
+## Új struktúra
+
+A korábbi `app/`, `migration/`, `app/done/`, `math/weather/` keverék
+egyszerre 5 szemantikai mappára bontva:
+
+| Mappa | Mit tartalmaz | Mikor olvasod |
+|-------|---------------|---------------|
+| `current-state/` | Élő rendszer snapshot (architecture, env-vars, deploy, settings, trading-status, auto-claim) | Új session elején — "mi van most" |
+| `math/` | Signal math + bot impl reference (02-ev-kelly … 16-weather-bot) | Algoritmus-szintű kérdéseknél |
+| `roadmap/` | Hetzner migráció, master-plan, új stratégiák, infrastructure | "Mit építsünk legközelebb" |
+| `changelog/` | Session-by-session history | "Mit változtattam tegnap" |
+| `archive/` | Elkészült promptok + historikus tanulságok | Ritkán; régi döntések indoka |
+
+## Mozgatások (git mv-vel a tracked fájlokon)
+
+**`current-state/` (6 fájl):**
+- `app/architecture.md` → `current-state/architecture.md`
+- `app/trading-status.md` → `current-state/trading-status.md`
+- `app/settings-help.md` → `current-state/settings-reference.md`
+- `app/auto-claim.md` → `current-state/auto-claim.md`
+- `env-vars.md` (root-ból) → `current-state/env-vars.md`
+- `app/DEPLOY.md` → `current-state/deploy.md`
+
+**`math/` (1 új flat-be hozva):**
+- `math/weather/README.md` → `math/16-weather-bot.md`
+
+**`roadmap/` (6 fájl + új README):**
+- `edgecalc-master-plan.md` (root) → `roadmap/master-plan.md`
+- `migration/hetzner-migration-plan.md` → `roadmap/hetzner-migration.md`
+- `migration/infrastructure.md` → `roadmap/hetzner-infrastructure.md`
+- `migration/migration-plan.md` → `roadmap/migration-strangler-fig.md`
+- `migration/new-strategies-roadmap_1.md` → `roadmap/new-strategies.md`
+- `migration/risk-coordinator.md` → `roadmap/risk-coordinator-considerations.md`
+- **Új:** `roadmap/README.md` — olvasási sorrend a 6 doki-hoz
+
+**`archive/` (5 prompt + 3 misc):**
+- `app/done/edgecalc-{autotrader,hyperliquid,funding-arb,resolution-risk,weather-patch}-{prompt,patch}.md` → `archive/prompts/{autotrader,hyperliquid,funding-arb,resolution-risk,weather-patch}-{prompt,patch}.md`
+- `app/paper-pnl-analysis.md` → `archive/paper-pnl-v2-bug.md` (a v2 sim bug forensics, már fixelve sim v3-mal)
+- `migration/reference/VPS-SETUP_detailed_done_26-04-03.md` → `archive/grabit-vps-setup.md`
+- `content-roadmap-matekmegoldasok.md` (root, untracked) → `archive/matekmegoldasok-content-roadmap.md` (másik projekt cikk-roadmap-je)
+
+## Törlések (4 dupli/elavult)
+
+- `app/done/hyperliquid.md` (átfedi `math/14-hl-directional.md`)
+- `app/done/weather-patch.md` (átfedi CHANGELOG-2026-04-21)
+- `app/done/roadmap.md` (Sprint 1 status, elavult)
+- `migration/README_2.md` (csak meta-olvasási sorrend, beépítve `roadmap/README.md`-be)
+
+## Cross-reference frissítések
+
+**`internal-docs/README.md`** — teljes újraírás. Index 5 mappára, minden
+fájl egysoros leírással.
+
+**`CLAUDE.md`** — irányadó hivatkozások javítva (a session-history
+bejegyzéseket nem nyúltam):
+- "Mappaszerkezet" block (L56) — bemutatja az 5 új almappát
+- "KÖTELEZŐ SESSION-ZÁRÓ SZABÁLY" 2. és 4. pont — `current-state/` /
+  `math/` / `roadmap/` szétbontás
+- "Új tab hozzáadása" 6. pont — `math/NN-new-panel.md` path
+- 14-15. session env-vars hivatkozás → `current-state/env-vars.md`
+- 26. session "B (külön MD)" → `roadmap/hetzner-migration.md`
+
+**Belső roadmap cross-ref-ek** (7 sibling-link javítva):
+- `roadmap/hetzner-migration.md` → `migration-strangler-fig.md` /
+  `hetzner-infrastructure.md` / `risk-coordinator-considerations.md` /
+  `new-strategies.md` / `../archive/grabit-vps-setup.md`
+- `roadmap/master-plan.md` → új env-vars path + relative `../current-state/` /
+  `../math/` / `../changelog/` linkek
+- `roadmap/hetzner-infrastructure.md`, `roadmap/migration-strangler-fig.md`,
+  `roadmap/new-strategies.md`, `roadmap/risk-coordinator-considerations.md`
+  → új sibling-fájlnevekre
+
+**`math/13-crypto-bot.md`** — `app/architecture.md` →
+`current-state/architecture.md`, `app/paper-pnl-analysis.md` →
+`archive/paper-pnl-v2-bug.md`.
+
+**`changelog/`** fájlokat **nem** módosítottam — történelem-marker.
+
+## Üres mappák törlése
+
+`app/done/`, `app/`, `migration/reference/`, `migration/`, `math/weather/`
+mind eltávolítva (üresek lettek a mozgatások után).
+
+## Verifikáció
+
+- `git status`: 13 modified file, 2 új untracked (`roadmap/README.md`,
+  `archive/matekmegoldasok-content-roadmap.md`).
+- Grep verifikáció: nincs maradék `internal-docs/(app|migration)/`
+  hivatkozás a non-changelog fájlokban.
+- TypeScript / build NEM futott (csak markdown, kód érintetlen).
+
+## Hova nyúlj legközelebb
+
+- Új doksi írásakor a megfelelő szemantikus mappába tedd (current-state
+  / math / roadmap / archive). A flat root már nem támogatott.
+- Az `archive/`-ban lévő doksikat NE editáld in-place — történelmi
+  forrás. Ha új tanulság van, az `current-state/` vagy `math/` alá kerül.
+- Egy új CLAUDE.md "Mappaszerkezet" block tükrözi az 5 mappát — új
+  almappa hozzáadásakor frissíteni kell.
+
+---
+
 # 2026-05-11 (a) — Crypto Reconcile + per-position Gamma diagnostic
 
 ## A user észrevett bug
