@@ -351,6 +351,40 @@ netlify deploy --prod --dir=dist
 
 ## AKTUÁLIS ÁLLAPOT (2026-05-10) – Claude Code folytatáshoz
 
+### Huszonegyedik session (2026-05-10) – Crypto + Weather: chip Y-uniformity + pending diagnostics
+
+A 20. session után a user 2 problémát észlelt:
+1. **A 9-gates / 6-gates chip nem jelent meg minden trade-lehetőségen** —
+   csak a teljesen kiértékelt sorokon (decision-skip / position_opened /
+   traded). Az early-exit ágakon (already-has-position, error, weather
+   unknown city / no matching bucket) hiányzott vagy 1/1-et mutatott.
+2. **"Miért vár resolutionra"** — a pending card nem mondta meg, hogy a
+   pozíció UMA window-ra vár-e vagy legacy conditionId hiányzik.
+
+**Y-uniform chip fix:**
+- `crypto/decision-engine.mts`: új `CRYPTO_GATE_LABELS` (9-elem) +
+  `padCryptoGates(evaluated)` helper. Tölti fel "not evaluated" rows-szal.
+- `weather/decision-engine.mts`: ugyanaz `WEATHER_GATE_LABELS` (6) +
+  `padWeatherGates`.
+- `auto-trader/index.mts` + `weather/index.mts`: minden early-exit ág
+  (already-open, no station, no bucket, error) padded gate-listával jön
+  → minden sor pontosan Y=9 / Y=6.
+
+**Pending-card diagnostic:**
+- `getCryptoPendingPositions` kiegészítve `hasConditionId` és `waitReason`
+  mezővel. Per-position szöveg: UMA window / extended window / long wait
+  / missing conditionId.
+- `CryptoTrader.tsx` `PendingPositionsCard` secondary lin most mutatja a
+  waitReason-t. Legacy positions ⚠ chip-pel.
+
+**Magyarázat a "vár resolutionra" UX-re:** simVersion 3 contract — paper
+PnL csak valós Gamma resolution után zár (`closed: true` + outcomePrices
+∈ {0,1}). Tipikus UMA window 5–60 min, vita esetén órák. **Nem bug, hanem
+a v3 invariáns**: paper PnL == live PnL.
+
+`tsc --noEmit` exit 0 (project files), Astro build 9 page.
+Részletek: `internal-docs/changelog/CHANGELOG-2026-05-10.md` "(j)" szekció.
+
 ### Huszadik session (2026-05-10) – Crypto + Weather: backend-driven gate-list (uniform UI follow-up)
 
 A 18. session-ben HL + F-Arb backend-shippelt gate-eket kapott; Crypto és

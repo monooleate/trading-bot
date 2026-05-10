@@ -26,7 +26,7 @@ import { computeLiveReadiness, shouldForcePaper, type LiveReadinessReport } from
 import { PAPER_SIM_VERSION } from "./crypto/session-manager.mts";
 import { findBtcMarkets } from "./crypto/btc-market-finder.mts";
 import { aggregateSignals } from "./crypto/signal-aggregator.mts";
-import { makeDecision, setCooldown } from "./crypto/decision-engine.mts";
+import { makeDecision, setCooldown, padCryptoGates } from "./crypto/decision-engine.mts";
 import { placeBuyOrder } from "./crypto/execution.mts";
 import { handleBuyLifecycle, handleSellLifecycle, checkExitConditions } from "./crypto/order-lifecycle.mts";
 import { resolvePendingPaperPositions } from "./crypto/paper-resolver.mts";
@@ -416,13 +416,18 @@ async function runCryptoTrader(
         reason: "Already has open position",
         marketPrice: market.currentPrice,
         endDate: market.endDate,
-        gates: [{
-          label: "Market nincs nyitva",
+        // Padded to the canonical 9-gate shape so the UI's "X/Y gates" chip
+        // shows consistent Y across every row. The runtime gate that fires
+        // here ("Market cooldown" / open-position guard) replaces cooldown
+        // since they're functionally the same — we don't open a 2nd
+        // position on the same market.
+        gates: padCryptoGates([{
+          label: "Market cooldown",
           passed: false,
           actual: "already open",
           required: "no open position",
-          hint: "Egy piacra max 1 nyitott pozíció.",
-        }],
+          hint: "Egy piacra max 1 nyitott pozíció — a cooldown gate ezt is fedi.",
+        }]),
       });
       continue;
     }
@@ -582,8 +587,19 @@ async function runCryptoTrader(
       });
     } catch (err: any) {
       log("ERROR", config.paperMode, { market: market.slug, error: err.message });
-      // Error rows still get an empty gates array so the UI shape is uniform.
-      results.push({ market: market.slug, title: market.title, action: "error", error: err.message, gates: [] });
+      // Error rows still get the full padded gate list — the chip renders
+      // "0/9 ✗" with the failing "evaluation completed" gate plus 8
+      // "not evaluated" rows so Y is identical to the happy path.
+      results.push({
+        market: market.slug, title: market.title, action: "error", error: err.message,
+        gates: padCryptoGates([{
+          label: "Session loss limit",
+          passed: false,
+          actual: `error: ${err.message}`,
+          required: "no exception during scan",
+          hint: "Hiba dobódott a piac kiértékelése közben.",
+        }]),
+      });
     }
   }
 
@@ -829,6 +845,20 @@ function getCryptoPendingPositions(session: SessionState) {
     .filter((p) => p.endDate && new Date(p.endDate).getTime() < now)
     .map((p) => {
       const endTs = new Date(p.endDate!).getTime();
+      const ageMs = now - endTs;
+      // Per-position diagnostic: explains *why* the resolver hasn't closed
+      // this position yet, so the operator can distinguish "UMA still
+      // voting" from "legacy position lacks conditionId".
+      let waitReason: string;
+      if (!p.conditionId) {
+        waitReason = "missing conditionId (legacy position — predates resolver wiring)";
+      } else if (ageMs < 5 * 60_000) {
+        waitReason = "UMA settlement window — typical 5–15 min after endDate";
+      } else if (ageMs < 60 * 60_000) {
+        waitReason = "extended UMA window — Polymarket not yet reporting closed";
+      } else {
+        waitReason = "long wait (>1h) — possible UMA dispute / market not finalised";
+      }
       return {
         market:             p.market,
         title:              (p as any).title ?? null,
@@ -837,7 +867,9 @@ function getCryptoPendingPositions(session: SessionState) {
         endDate:            p.endDate!,
         marketPriceAtEntry: p.marketPriceAtEntry ?? null,
         predictedProb:      p.predictedProb ?? null,
-        ageMs:              now - endTs,
+        ageMs,
+        hasConditionId:     !!p.conditionId,
+        waitReason,
       };
     })
     .sort((a, b) => a.endDate.localeCompare(b.endDate));

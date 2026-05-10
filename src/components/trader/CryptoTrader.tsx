@@ -92,6 +92,8 @@ interface PendingPosition {
   marketPriceAtEntry: number | null;
   predictedProb: number | null;
   ageMs: number;
+  hasConditionId?: boolean;
+  waitReason?: string;
 }
 
 function formatAgeAgo(ms: number): string {
@@ -283,16 +285,21 @@ export default function CryptoTrader({ bankroll }: { bankroll?: number }) {
           title={`${pending.count} pending paper position${pending.count > 1 ? "s" : ""} past endDate — awaiting Polymarket resolution`}
           positions={pending.positions.map<PendingPositionLite>((p) => ({
             primary: p.title || p.market,
-            secondary: `expired ${formatAgeAgo(p.ageMs)}`,
+            // Surfaces the per-position diagnostic so the operator can tell
+            // a stuck "missing conditionId (legacy)" from a normal "UMA
+            // window — typical 5–15 min".
+            secondary: `expired ${formatAgeAgo(p.ageMs)}${p.waitReason ? ` · ${p.waitReason}` : ""}`,
             direction: p.direction,
             predictionText: p.predictedProb !== null
               ? `pred ${(p.predictedProb * 100).toFixed(0)}%`
               : undefined,
             sizeText: `$${p.size.toFixed(2)}`,
-            whenText: "awaiting Polymarket resolution",
-            isReady: true,
+            whenText: p.hasConditionId === false
+              ? "⚠ missing conditionId"
+              : "awaiting Polymarket resolution",
+            isReady: p.hasConditionId !== false,
           }))}
-          footnote="simVersion 3: paper positions close only on real Gamma outcomePrices. UMA resolution typical 5–60 min, longer during disputes."
+          footnote="simVersion 3: paper positions close only on real Gamma outcomePrices. UMA resolution typical 5–60 min, longer during disputes. Legacy positions without conditionId can never auto-close — reset session to clear them."
         />
       )}
 

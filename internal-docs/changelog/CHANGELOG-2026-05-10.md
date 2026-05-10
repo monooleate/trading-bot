@@ -2221,3 +2221,95 @@ tsconfig-ot** — ezt a user vagy egy későbbi session rendezi.
 Mivel az említett mappa nem része a Netlify build-nek (Astro/Vite csak
 a `src/` és `netlify/functions/` ágat dolgozza fel), a TS hibák nem
 blokkolják a deployt.
+
+# 2026-05-10 (j) — Crypto + Weather: chip Y-uniformity + pending diagnostics
+
+## A user észrevett 2 problémát
+
+1. **Chip nem jelenik meg minden trade-lehetőségen** a /trade/crypto/
+   és /trade/weather/ oldalon. A 9-gates / 6-gates chip csak a teljesen
+   kiértékelt sorokon (decision-skip / position_opened / traded) látszott;
+   az early-exit ágakon (already-has-open-position, error, weather
+   unknown city / no matching bucket) hiányzott vagy 1/1-et mutatott.
+
+2. **"Miért vár resolutionra" — nem érthető**. A pending paper position
+   card csak annyit mondott: "awaiting Polymarket resolution". Nem volt
+   látható a per-position diagnostic: vajon UMA window van, vagy a
+   conditionId hiányzik (legacy session pozíció).
+
+## Fix: Y-uniform chip minden soron
+
+### `crypto/decision-engine.mts`
+
+Új export: `CRYPTO_GATE_LABELS` (9 elemű ordered array) + `padCryptoGates(
+evaluated)` helper. Az evaluated lista bármilyen részhalmaz lehet, a
+helper kitölti a hiányzó label-eket `passed: false, actual: "not
+evaluated"`-del. Eredmény: minden sor pontosan 9 gate-tel jön.
+
+### `auto-trader/index.mts` (crypto runner)
+
+- "Already has open position" early-exit: `padCryptoGates([{ Market
+  cooldown … already open … }])` — Y=9 az 1 evaluated + 8 not-evaluated
+  gate-tel.
+- catch err ágon ugyanaz: 1 gate `Session loss limit … error: <msg> …`
+  + 8 not-evaluated → Y=9.
+
+### `weather/decision-engine.mts`
+
+Ugyanaz: új `WEATHER_GATE_LABELS` (6) + `padWeatherGates`.
+
+### `weather/index.mts`
+
+- Already has open position → `padWeatherGates([{ Forecast confidence … }])`
+- Unknown city → `padWeatherGates([{ Forecast confidence … unknown city }])`
+- No matching bucket → padded 2 evaluated + 4 not-evaluated
+- catch err → padded 1 evaluated + 5 not-evaluated
+
+## Fix: pending-card diagnostic
+
+### `getCryptoPendingPositions(session)` kiterjesztve
+
+Per-position 2 új mező:
+
+- `hasConditionId: boolean` — `true` ha a position rendelkezik
+  conditionId-vel (új, post-resolver-wiring pozíciók); `false` ha legacy
+  pozíció — ezek **soha nem fognak auto-zárni**, csak session reset
+  után kerülnek ki a listából.
+- `waitReason: string` — emberbarát szöveg az `ageMs` alapján:
+  - < 5 min → "UMA settlement window — typical 5–15 min after endDate"
+  - 5–60 min → "extended UMA window — Polymarket not yet reporting closed"
+  - > 1h → "long wait (>1h) — possible UMA dispute / market not finalised"
+  - missing conditionId → "missing conditionId (legacy position — predates
+    resolver wiring)"
+
+### `CryptoTrader.tsx` PendingPositionsCard
+
+Kibővített secondary line: `expired Xm ago · <waitReason>`. A whenText
+most "⚠ missing conditionId" ha legacy, egyébként "awaiting Polymarket
+resolution". Footnote frissítve: legacy positions need session reset.
+
+## Hatás deploy után
+
+- **Crypto scan**: minden 3 BTC market / minden ag (skip / error / open)
+  most "X/9 gates" chippel. Akár 9/9 ✓ (open), 7/9 (decision-skip 2 fail),
+  vagy 0/9 (already-has-position).
+- **Weather scan**: ugyanaz "X/6 gates" formátum.
+- **Crypto pending card**: minden várakozó pozíció megmondja
+  hogy mikor és **miért** vár — UMA window vs missing conditionId.
+
+## Megjegyzés a "vár resolutionra" jelenségre
+
+A simVersion 3 contract: paper PnL **csak** valós Polymarket resolution
+után zár (Gamma `closed: true` + `outcomePrices` ∈ {0, 1}). Tipikus
+UMA settlement window 5–60 min az endDate után; vita esetén órák. **Ez
+nem bug — ez a v3 invariáns**: paper PnL == live PnL. A bot nem
+szimulál.
+
+Ha egy pozíció >1h-ja vár és a `hasConditionId: true`, akkor:
+- Polymarket UMA még szavaz (gyakori daily / nagy bet markets-en).
+- Vagy a Gamma még nem flippelte a `closed` flag-et (timeout).
+
+Ha `hasConditionId: false`, az egy legacy pozíció (a session manager
+simVersion bump-ja előttről). Reset oldja meg.
+
+`tsc --noEmit` exit 0 a project files-on. Astro build 9 page generated.

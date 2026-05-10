@@ -8,7 +8,7 @@ import { getStation, getSeason } from "./station-config.mts";
 import { getForecast } from "./forecast-engine.mts";
 import { detectModelLag } from "./model-lag-detector.mts";
 import { matchBucket } from "./bucket-matcher.mts";
-import { makeWeatherDecision, getWeatherConfig } from "./decision-engine.mts";
+import { makeWeatherDecision, getWeatherConfig, padWeatherGates } from "./decision-engine.mts";
 import type { WeatherTradeDecision, WeatherConfig } from "./decision-engine.mts";
 import { placeBuyOrder } from "../crypto/execution.mts";
 import {
@@ -249,13 +249,14 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
     if (updatedSession.openPositions.some((p) => p.market === market.slug)) {
       results.push({
         market: market.slug, action: "skip", reason: "Already has open position",
-        gates: [{
-          label: "Market nincs nyitva",
+        // Padded to Y=6 for chip uniformity across rows.
+        gates: padWeatherGates([{
+          label: "Forecast confidence ≥ küszöb",
           passed: false,
           actual: "already open",
           required: "no open position",
-          hint: "Egy piacra max 1 nyitott pozíció.",
-        }],
+          hint: "Egy piacra max 1 nyitott pozíció — más gate-ek ki sem értékelődnek.",
+        }]),
       });
       continue;
     }
@@ -265,13 +266,13 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
       if (!station) {
         results.push({
           market: market.slug, action: "skip", reason: `Unknown city: ${market.city}`,
-          gates: [{
-            label: "Ismert station / city",
+          gates: padWeatherGates([{
+            label: "Forecast confidence ≥ küszöb",
             passed: false,
-            actual: market.city || "—",
-            required: "mapped station",
+            actual: `unknown city: ${market.city || "—"}`,
+            required: "mapped METAR station",
             hint: "A bot csak konfigurált METAR állomás alapján trade-elhet.",
-          }],
+          }]),
         });
         continue;
       }
@@ -303,13 +304,19 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
           market: market.slug, city: market.city, action: "skip", reason: "No matching bucket",
           predictedTemp: forecast.predictedMaxC,
           confidence: forecast.confidence,
-          gates: [{
-            label: "Bucket match (forecast → market bucket)",
+          gates: padWeatherGates([{
+            label: "Forecast confidence ≥ küszöb",
+            passed: forecast.confidence >= config.confidenceMin,
+            actual:   `${(forecast.confidence * 100).toFixed(0)}%`,
+            required: `≥ ${(config.confidenceMin * 100).toFixed(0)}%`,
+            hint: "Az ensemble szórása alapján mért bizalmi szint.",
+          }, {
+            label: "Net edge ≥ küszöb",
             passed: false,
             actual: `pred ${forecast.predictedMaxC}°C, no nearby bucket`,
             required: "min 1 bucket within σ",
             hint: "A forecast hőmérséklet egyik szállított bucket center körül se illett be a σ-band-be.",
-          }],
+          }]),
         });
         continue;
       }
@@ -476,7 +483,15 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
       }
     } catch (err: any) {
       log("ERROR", config.paperMode, { market: market.slug, error: err.message });
-      results.push({ market: market.slug, action: "error", error: err.message, gates: [] });
+      results.push({
+        market: market.slug, action: "error", error: err.message,
+        gates: padWeatherGates([{
+          label: "Forecast confidence ≥ küszöb",
+          passed: false,
+          actual: `error: ${err.message}`,
+          required: "no exception during scan",
+        }]),
+      });
     }
   }
 

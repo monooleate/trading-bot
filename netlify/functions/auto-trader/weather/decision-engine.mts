@@ -97,6 +97,29 @@ export async function getEffectiveWeatherConfig(): Promise<WeatherConfig> {
 
 const KELLY_CAP = 0.15;
 
+// Canonical labels for weather-bot gates. Used by the engine when fully
+// evaluating + by the runner to pad early-exit rows so every scan row
+// reports Y=6 on the unified "X/Y gates" chip.
+export const WEATHER_GATE_LABELS = [
+  "Forecast confidence ≥ küszöb",
+  "Idő a settlementig ≥ küszöb",
+  "Forecast model frissesség",
+  "Net edge ≥ küszöb",
+  "Sanity cap (gross edge ≤ cap)",
+  "Kelly méret ≤ cap",
+] as const;
+
+export function padWeatherGates(evaluated: DecisionGate[]): DecisionGate[] {
+  const have = new Set(evaluated.map((g) => g.label));
+  const out  = [...evaluated];
+  for (const label of WEATHER_GATE_LABELS) {
+    if (!have.has(label)) {
+      out.push({ label, passed: false, actual: "not evaluated", required: "—" });
+    }
+  }
+  return out;
+}
+
 // Evaluates the full ordered gate list for one (forecast × bucket) pair.
 // Like the crypto engine, it does NOT short-circuit — every gate is added
 // to the list and shouldTrade is `gates.every(g => g.passed)`. That keeps

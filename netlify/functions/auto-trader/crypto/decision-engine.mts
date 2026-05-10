@@ -28,6 +28,37 @@ export function setCooldown(slug: string): void {
 // Reason string still tracks the first failing gate so the row footer reads
 // naturally.
 
+// Canonical labels for crypto-bot gates. Used by the engine when fully
+// evaluating a market AND by the runner to pad early-exit rows so every
+// scan row reports the same Y on the "X/Y gates" chip. Keep in sync with
+// the gates pushed in makeDecision below.
+export const CRYPTO_GATE_LABELS = [
+  "Session loss limit",
+  "Aktív signal források",
+  "Market cooldown",
+  "Open interest ≥ küszöb",
+  "Entry window (BTC short markets)",
+  "OB imbalance konvergencia",
+  "Net edge ≥ küszöb",
+  "Kelly conviction (combiner)",
+  "Kelly méret ≤ cap",
+] as const;
+
+// Build a fully-padded gate list for early-exit code paths (no signal data
+// available yet). Caller passes the gates that DID get evaluated; the rest
+// are filled with `passed: false, actual: "not evaluated"` so Y stays
+// stable at 9 across every row in the UI.
+export function padCryptoGates(evaluated: DecisionGate[]): DecisionGate[] {
+  const have = new Set(evaluated.map((g) => g.label));
+  const out  = [...evaluated];
+  for (const label of CRYPTO_GATE_LABELS) {
+    if (!have.has(label)) {
+      out.push({ label, passed: false, actual: "not evaluated", required: "—" });
+    }
+  }
+  return out;
+}
+
 export function makeDecision(
   signal: AggregatedSignal,
   market: MarketInfo,
