@@ -29,6 +29,12 @@ export interface SignalBreakdown {
   vol_divergence: number | null;  // 0–1 score
   apex_consensus: number | null;  // 0–1 score
   cond_prob: number | null;       // 0–1 score
+  // Kakushadze 151-strategies signals (signal-combiner v9). They feed the
+  // IR-weighted combined probability + Kelly; surfacing them here lets the
+  // UI "Why?" panel and IC computation see the same set the engine used.
+  momentum: number | null;        // 0–1 score (Kakushadze 3.1, price momentum)
+  contrarian: number | null;      // 0–1 score (Kakushadze 10.3, mean-reversion)
+  pairs_spread: number | null;    // 0–1 score (Kakushadze 3.8, pairs Z-score)
 }
 
 export interface AggregatedSignal {

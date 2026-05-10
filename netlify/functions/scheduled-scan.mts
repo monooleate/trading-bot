@@ -128,5 +128,5 @@ export const handler = schedule("0 * * * *", async () => {
   } catch {}
 
   console.log("[scheduled-scan]", log.join(" | "));
-  return new Response(JSON.stringify({ ok: true, log }), { status: 200 });
+  return { statusCode: 200, body: JSON.stringify({ ok: true, log }) };
 });

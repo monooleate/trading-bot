@@ -44,11 +44,14 @@ function makeSignalBreakdown(outcomeWin: boolean): SignalBreakdown {
   // Loser trades: signals slightly below 0.5
   const bias = outcomeWin ? 0.08 : -0.08;
   return {
-    funding_rate: clamp01(0.5 + bias + gaussian(0, 0.12)),
-    orderflow:    clamp01(0.5 + bias * 1.5 + gaussian(0, 0.14)),  // strongest signal
+    funding_rate:   clamp01(0.5 + bias       + gaussian(0, 0.12)),
+    orderflow:      clamp01(0.5 + bias * 1.5 + gaussian(0, 0.14)),  // strongest signal
     vol_divergence: clamp01(0.5 + bias * 0.8 + gaussian(0, 0.15)),
     apex_consensus: clamp01(0.5 + bias * 1.2 + gaussian(0, 0.13)),
-    cond_prob:    clamp01(0.5 + bias + gaussian(0, 0.15)),
+    cond_prob:      clamp01(0.5 + bias       + gaussian(0, 0.15)),
+    momentum:       clamp01(0.5 + bias * 0.9 + gaussian(0, 0.16)),
+    contrarian:     clamp01(0.5 - bias * 0.7 + gaussian(0, 0.17)),  // mean-reverts vs market
+    pairs_spread:   clamp01(0.5 + bias * 1.0 + gaussian(0, 0.15)),
   };
 }
 

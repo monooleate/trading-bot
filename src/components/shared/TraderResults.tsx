@@ -582,6 +582,11 @@ export interface OpenPositionRationale {
     vol_divergence?: number | null;
     apex_consensus?: number | null;
     cond_prob?: number | null;
+    // Kakushadze 151-strategies signals — also fed into the combiner +
+    // Kelly. Optional so older snapshots (pre-2026-05-10) keep parsing.
+    momentum?: number | null;
+    contrarian?: number | null;
+    pairs_spread?: number | null;
   } | null;
   obImbalance: { ratio: number; direction: "UP" | "DOWN" | "NEUTRAL" } | null;
   gates: CriteriaGate[];
@@ -611,7 +616,8 @@ export interface OpenPositionRow {
 }
 
 const SIGNAL_LABELS: Array<[
-  "funding_rate" | "orderflow" | "vol_divergence" | "apex_consensus" | "cond_prob",
+  | "funding_rate" | "orderflow" | "vol_divergence" | "apex_consensus" | "cond_prob"
+  | "momentum"    | "contrarian" | "pairs_spread",
   string,
 ]> = [
   ["funding_rate",   "FR"],
@@ -619,6 +625,9 @@ const SIGNAL_LABELS: Array<[
   ["vol_divergence", "VOL"],
   ["apex_consensus", "APEX"],
   ["cond_prob",      "CP"],
+  ["momentum",       "MOM"],
+  ["contrarian",     "CTR"],
+  ["pairs_spread",   "PRS"],
 ];
 
 function RationaleBlock({ r }: { r: OpenPositionRationale }) {

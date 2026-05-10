@@ -103,14 +103,20 @@ function extractBreakdown(rawSignals: any): SignalBreakdown {
       vol_divergence: null,
       apex_consensus: null,
       cond_prob: null,
+      momentum: null,
+      contrarian: null,
+      pairs_spread: null,
     };
   }
   return {
-    funding_rate: rawSignals.funding_rate ?? null,
-    orderflow: rawSignals.orderflow ?? null,
+    funding_rate:   rawSignals.funding_rate   ?? null,
+    orderflow:      rawSignals.orderflow      ?? null,
     vol_divergence: rawSignals.vol_divergence ?? null,
     apex_consensus: rawSignals.apex_consensus ?? null,
-    cond_prob: rawSignals.cond_prob ?? null,
+    cond_prob:      rawSignals.cond_prob      ?? null,
+    momentum:       rawSignals.momentum       ?? null,
+    contrarian:     rawSignals.contrarian     ?? null,
+    pairs_spread:   rawSignals.pairs_spread   ?? null,
   };
 }
 
@@ -137,21 +143,32 @@ async function fetchIndividualSignals(
     safeFetch(`${FN}/funding-rates`),
   ]);
 
+  // The fallback path only fetches the 5 legacy signal endpoints; the 3
+  // Kakushadze signals (momentum/contrarian/pairs_spread) live inside the
+  // signal-combiner only, so they're null here.
   const breakdown: SignalBreakdown = {
-    vol_divergence: vol?.signal_score ?? null,
-    orderflow: flow?.signal_score ?? null,
+    vol_divergence: vol?.signal_score  ?? null,
+    orderflow:      flow?.signal_score ?? null,
     apex_consensus: apex?.signal_score ?? null,
-    cond_prob: cond?.signal_score ?? null,
-    funding_rate: fund?.signal_score ?? null,
+    cond_prob:      cond?.signal_score ?? null,
+    funding_rate:   fund?.signal_score ?? null,
+    momentum:       null,
+    contrarian:     null,
+    pairs_spread:   null,
   };
 
-  // Simple IC-weighted combination (mirrors signal-combiner logic)
+  // Simple IC-weighted combination (mirrors signal-combiner logic). Only the
+  // 5 legacy signals are weighted in the fallback — Kakushadze signals get
+  // weight 0 here since they're never populated by this path.
   const IC: Record<keyof SignalBreakdown, number> = {
     vol_divergence: 0.06,
-    orderflow: 0.09,
+    orderflow:      0.09,
     apex_consensus: 0.08,
-    cond_prob: 0.07,
-    funding_rate: 0.05,
+    cond_prob:      0.07,
+    funding_rate:   0.05,
+    momentum:       0,
+    contrarian:     0,
+    pairs_spread:   0,
   };
 
   let weightedSum = 0;

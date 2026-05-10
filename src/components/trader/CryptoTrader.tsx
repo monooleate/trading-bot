@@ -61,6 +61,9 @@ interface ScanResult {
     vol_divergence?: number | null;
     apex_consensus?: number | null;
     cond_prob?: number | null;
+    momentum?: number | null;
+    contrarian?: number | null;
+    pairs_spread?: number | null;
   } | null;
   obImbalance?: { ratio: number; direction: "UP" | "DOWN" | "NEUTRAL" } | null;
   endDate?: string;
@@ -135,6 +138,9 @@ const SIGNAL_ORDER = [
   ["vol_divergence", "VOL"],
   ["apex_consensus", "APEX"],
   ["cond_prob",      "CP"],
+  ["momentum",       "MOM"],
+  ["contrarian",     "CTR"],
+  ["pairs_spread",   "PRS"],
 ] as const;
 
 function pct(v: number | undefined, digits = 1): string {

@@ -269,6 +269,7 @@ export interface SignalICResult {
 
 const SIGNAL_NAMES: (keyof SignalBreakdown)[] = [
   "funding_rate", "orderflow", "vol_divergence", "apex_consensus", "cond_prob",
+  "momentum", "contrarian", "pairs_spread",
 ];
 
 function classifyIC(ic: number): SignalICResult["strength"] {

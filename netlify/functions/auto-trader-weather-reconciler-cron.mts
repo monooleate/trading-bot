@@ -30,7 +30,7 @@ export const handler = schedule("*/15 * * * *", async () => {
       failed:  result.failed,
       pending: result.pendingTotal,
     }));
-    return { statusCode: 200, body: JSON.stringify({ ok: true, ...result }) };
+    return { statusCode: 200, body: JSON.stringify(result) };
   } catch (err: any) {
     console.error("[weather-reconciler] error:", err?.message || err);
     return {

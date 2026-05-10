@@ -54,6 +54,7 @@ export async function placeBuyOrder(
   price: number,
   sizeUSDC: number,
   paperMode: boolean,
+  isNegRisk: boolean = false, // weather events are negRisk groups; crypto BTC markets are not
 ): Promise<OrderRecord> {
   const tokenId =
     direction === "YES" ? market.clobTokenIds[0] : market.clobTokenIds[1];
@@ -104,7 +105,7 @@ export async function placeBuyOrder(
         side: "BUY",
         size: sizeUSDC,
       },
-      { tickSize: "0.01", negRisk: false },
+      { tickSize: "0.01", negRisk: isNegRisk },
       "GTC",
     );
 

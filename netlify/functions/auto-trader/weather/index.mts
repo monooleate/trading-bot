@@ -3,7 +3,7 @@ import { log } from "../shared/logger.mts";
 import { alertError, alertLiveBlocked } from "../shared/telegram.mts";
 import { computeLiveReadiness, shouldForcePaper, type LiveReadinessReport } from "../shared/live-readiness.mts";
 import { findWeatherMarketsDetailed } from "./market-finder.mts";
-import type { WeatherMarket, DroppedEvent } from "./market-finder.mts";
+import type { WeatherMarket, DroppedEvent, TemperatureBucket } from "./market-finder.mts";
 import { getStation, getSeason } from "./station-config.mts";
 import { getForecast } from "./forecast-engine.mts";
 import { detectModelLag } from "./model-lag-detector.mts";
@@ -115,15 +115,21 @@ async function sendWeatherAlert(
 }
 
 // ─── Convert WeatherMarket to MarketInfo for execution ────
-
-function toMarketInfo(wm: WeatherMarket, tokenId: string): MarketInfo {
+//
+// Critical: weather events are negRisk groups where each bucket is its own
+// sub-market with a distinct conditionId AND distinct YES/NO clob tokenIds.
+// We pass the matched bucket directly so execution + settlement target the
+// right sub-market — using the event-level conditionId (or only the YES
+// token) settles or places against the WRONG bucket and silently mis-books
+// PnL in paper mode / rejects in live mode.
+function toMarketInfo(wm: WeatherMarket, bucket: TemperatureBucket): MarketInfo {
   return {
     slug: wm.slug,
-    conditionId: wm.conditionId,
+    conditionId: bucket.conditionId,
     questionId: "",
     title: wm.title,
-    clobTokenIds: [tokenId, ""], // YES token, NO not used directly
-    currentPrice: wm.outcomes.find((o) => o.tokenId === tokenId)?.currentPrice || 0.5,
+    clobTokenIds: [bucket.tokenId, bucket.noTokenId], // [YES, NO] of this bucket
+    currentPrice: bucket.currentPrice,
     openInterest: 0,
     volume24h: wm.volume24h,
     endDate: wm.endDate,
@@ -310,7 +316,7 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
       });
 
       // 8. Execute
-      const marketInfo = toMarketInfo(market, decision.tokenId);
+      const marketInfo = toMarketInfo(market, match.bucket);
       const entryPrice = decision.direction === "YES"
         ? Math.min(decision.marketPrice + 0.01, 0.99)
         : Math.max(1 - decision.marketPrice + 0.01, 0.01);
@@ -321,9 +327,10 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
         entryPrice,
         decision.positionSizeUSDC,
         config.paperMode,
+        true, // weather events are negRisk groups; CLOB routes differently
       );
 
-      if (buyOrder.status === "FILLED" || (config.paperMode && buyOrder.status === "FILLED")) {
+      if (buyOrder.status === "FILLED") {
         // Reconcile a target buffer past endDate. Polymarket's settlement
         // window plus a 1h safety margin so the daily-max METAR observation
         // is in.
@@ -358,16 +365,24 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
           reason:           decision.reason,
         };
 
+        // For NO bets we must record the NO clob tokenId on the position
+        // so any future close/redeem path operates on the right side.
+        const positionTokenId = decision.direction === "YES"
+          ? match.bucket.tokenId
+          : match.bucket.noTokenId;
+
         const position: Position = {
           market: market.slug,
-          tokenId: decision.tokenId,
+          tokenId: positionTokenId,
           direction: decision.direction,
           shares: buyOrder.filledShares,
           avgEntry: entryPrice,
           costBasis: decision.positionSizeUSDC,
           openedAt: new Date().toISOString(),
           buyOrderId: buyOrder.orderId,
-          conditionId: market.conditionId,
+          // Per-bucket conditionId so polymarket-resolver settles on the
+          // matched sub-market — not the event's first bucket.
+          conditionId: match.bucket.conditionId,
           endDate: market.endDate,
           marketPriceAtEntry: decision.marketPrice,
           predictedProb: match.probability,

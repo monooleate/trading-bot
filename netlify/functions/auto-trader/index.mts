@@ -76,6 +76,11 @@ export default async function handler(req: Request, _ctx: Context) {
     // input value here so reset mints a session with that bankroll instead
     // of falling back to the per-bot DEFAULT_BANKROLL.
     let bankrollOverride: number | undefined;
+    // Netlify scheduled functions POST a body with `next_run` (ISO timestamp
+    // of the next scheduled invocation). Detecting it here lets the run-state
+    // tag direct cron ticks as "cron" even though netlify.toml doesn't let us
+    // pin a `?source=cron` query string on the schedule.
+    let isScheduledTick = false;
     if (req.method === "POST") {
       try {
         const body = await req.json();
@@ -86,6 +91,9 @@ export default async function handler(req: Request, _ctx: Context) {
           // Clamp into a sane range so a typo can't mint a million-dollar
           // session or a $0 one. Matches the min={10} on the dashboard input.
           bankrollOverride = Math.max(10, Math.min(1_000_000, body.bankroll));
+        }
+        if (typeof body.next_run === "string" && body.next_run.length > 0) {
+          isScheduledTick = true;
         }
       } catch {
         action = "run";
@@ -119,9 +127,10 @@ export default async function handler(req: Request, _ctx: Context) {
           case "run": {
             // ?source=cron lets the dispatcher tag the run-state as
             // cron-driven, so the UI status pill says "Scanning… (cron)".
+            // Netlify scheduled invocations also count (`next_run` body).
             const url = new URL(req.url);
             const source: "manual" | "cron" =
-              url.searchParams.get("source") === "cron" ? "cron" : "manual";
+              (url.searchParams.get("source") === "cron" || isScheduledTick) ? "cron" : "manual";
             return jsonResponse(await runFundingArbLoop(source));
           }
           case "status": return jsonResponse(await getArbStatus());
@@ -135,10 +144,11 @@ export default async function handler(req: Request, _ctx: Context) {
       switch (action) {
         case "run": {
           // Distinguish manual UI calls from the auto-trader-multi-cron
-          // fan-out so the live status pill shows the right source.
+          // fan-out (or a direct Netlify schedule) so the live status pill
+          // shows the right source.
           const url = new URL(req.url);
           const source: "manual" | "cron" =
-            url.searchParams.get("source") === "cron" ? "cron" : "manual";
+            (url.searchParams.get("source") === "cron" || isScheduledTick) ? "cron" : "manual";
           return jsonResponse(await runHyperliquidTrader(undefined, source));
         }
         case "status": return jsonResponse(await getHlStatus());
@@ -153,15 +163,27 @@ export default async function handler(req: Request, _ctx: Context) {
       case "run":
         if (cat === "weather") {
           const wConfig = await getEffectiveWeatherConfig();
-          return jsonResponse(await runWeatherTrader(wConfig, "manual"));
+          // Same scheduled-vs-manual detection: weather has its own */5 cron
+          // (`auto-trader-weather-cron`), but if anyone hits this dispatcher
+          // with `category: "weather", action: "run"` from a schedule body,
+          // tag it accordingly.
+          const url = new URL(req.url);
+          const source: "manual" | "cron" =
+            (url.searchParams.get("source") === "cron" || isScheduledTick) ? "cron" : "manual";
+          return jsonResponse(await runWeatherTrader(wConfig, source));
         }
         // The crypto trader records run-state itself so cron and manual
-        // invocations both surface in the UI status pills. Source defaults
-        // to "manual" — the cron caller passes `?source=cron`.
+        // invocations both surface in the UI status pills. Three signals can
+        // mark a run as cron-driven:
+        //   1. ?source=cron query (multi-cron fan-out)
+        //   2. internal _source override (legacy direct call)
+        //   3. body.next_run from the Netlify scheduled invocation
         {
           const url = new URL(req.url);
           const source: "manual" | "cron" =
-            (url.searchParams.get("source") === "cron" || (req as any)._source === "cron")
+            (url.searchParams.get("source") === "cron"
+              || (req as any)._source === "cron"
+              || isScheduledTick)
               ? "cron"
               : "manual";
           return await runCryptoTrader(config, source);
@@ -759,16 +781,22 @@ function sessionSummary(s: SessionState) {
     closedTrades: s.closedTrades.length,
     openPositions: s.openPositions.length,
     startedAt: s.startedAt,
+    // simVersion is needed by run-state.mts:getCryptoRunStatus to invalidate
+    // stale lastResult snapshots written under an older paper simulator.
+    simVersion: s.simVersion ?? null,
   };
 }
 
 function formatSignalArrows(breakdown: SignalBreakdown): string {
   const arrows: string[] = [];
-  if (breakdown.funding_rate !== null) arrows.push(`FR${breakdown.funding_rate > 0.5 ? "↑" : "↓"}`);
-  if (breakdown.orderflow !== null) arrows.push(`VPIN${breakdown.orderflow > 0.5 ? "↑" : "↓"}`);
-  if (breakdown.vol_divergence !== null) arrows.push(`VOL${breakdown.vol_divergence > 0.5 ? "↑" : "↓"}`);
+  if (breakdown.funding_rate   !== null) arrows.push(`FR${breakdown.funding_rate     > 0.5 ? "↑" : "↓"}`);
+  if (breakdown.orderflow      !== null) arrows.push(`VPIN${breakdown.orderflow      > 0.5 ? "↑" : "↓"}`);
+  if (breakdown.vol_divergence !== null) arrows.push(`VOL${breakdown.vol_divergence  > 0.5 ? "↑" : "↓"}`);
   if (breakdown.apex_consensus !== null) arrows.push(`APEX${breakdown.apex_consensus > 0.5 ? "↑" : "↓"}`);
-  if (breakdown.cond_prob !== null) arrows.push(`CP${breakdown.cond_prob > 0.5 ? "↑" : "↓"}`);
+  if (breakdown.cond_prob      !== null) arrows.push(`CP${breakdown.cond_prob        > 0.5 ? "↑" : "↓"}`);
+  if (breakdown.momentum       !== null) arrows.push(`MOM${breakdown.momentum        > 0.5 ? "↑" : "↓"}`);
+  if (breakdown.contrarian     !== null) arrows.push(`CTR${breakdown.contrarian      > 0.5 ? "↑" : "↓"}`);
+  if (breakdown.pairs_spread   !== null) arrows.push(`PRS${breakdown.pairs_spread    > 0.5 ? "↑" : "↓"}`);
   return arrows.join(" ") || "–";
 }
 

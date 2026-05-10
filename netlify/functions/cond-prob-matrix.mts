@@ -161,9 +161,9 @@ function detectViolations(markets: any[]): any[] {
       const qa = (sorted[i].question || "").toLowerCase();
       const qb = (sorted[i+1].question || "").toLowerCase();
       // Csak ha van közös szó (pl. "btc", "fed", "rate") -> valódi implication
-      const wordsA = qa.split(/\s+/).filter(w => w.length > 3);
-      const wordsB = qb.split(/\s+/).filter(w => w.length > 3);
-      const commonWords = wordsA.filter(w => qb.includes(w));
+      const wordsA = qa.split(/\s+/).filter((w: string) => w.length > 3);
+      const wordsB = qb.split(/\s+/).filter((w: string) => w.length > 3);
+      const commonWords = wordsA.filter((w: string) => qb.includes(w));
       if (commonWords.length < 1) continue; // nincs közös szó -> kihagyjuk
       const v = checkMonotonicity(sorted[i], sorted[i + 1]);
       if (v) violations.push(v);

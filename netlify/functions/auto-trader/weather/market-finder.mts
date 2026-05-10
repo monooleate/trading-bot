@@ -26,7 +26,13 @@ export interface DroppedEvent {
 
 export interface TemperatureBucket {
   label: string;             // e.g. "18°C" or "65°F or higher"
-  tokenId: string;
+  tokenId: string;           // YES token of this sub-market
+  noTokenId: string;         // NO token (needed when direction=NO; live order otherwise rejected)
+  conditionId: string;       // per-bucket conditionId — each weather bucket is its own
+                             // negRisk sub-market with a distinct conditionId, so
+                             // settlement must be queried per matched bucket, not at
+                             // event level. Empirical proof: HK May-10 event has 6
+                             // distinct conditionIds across 19/20/21/22/23/24°C buckets.
   currentPrice: number;
   tempC: number | null;      // parsed center temp in °C, null if unparseable
 }
@@ -167,7 +173,9 @@ function parseBucketsFromEvent(evt: any): TemperatureBucket[] {
 
     buckets.push({
       label,
-      tokenId: clobIds[0] || "",           // YES token
+      tokenId:     clobIds[0] || "",       // YES token
+      noTokenId:   clobIds[1] || "",       // NO token (clobIds[1] for direction=NO bets)
+      conditionId: m.conditionId || "",    // per-bucket — see TemperatureBucket comment
       currentPrice: prices[0] ?? 0.5,      // YES price
       tempC: parseTempFromLabel(label),
     });
@@ -252,7 +260,10 @@ export async function findWeatherMarketsDetailed(): Promise<FindResult> {
 
     results.push({
       slug,
-      conditionId: evt.markets?.[0]?.conditionId || "",  // not used for negRisk exec
+      // Event-level conditionId is the FIRST sub-market's id and is preserved
+      // only for diagnostic/UI purposes. Execution and settlement always use
+      // the matched bucket's per-conditionId (see TemperatureBucket).
+      conditionId: evt.markets?.[0]?.conditionId || "",
       title,
       city,
       date,
