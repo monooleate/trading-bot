@@ -351,6 +351,56 @@ netlify deploy --prod --dir=dist
 
 ## AKTUÁLIS ÁLLAPOT (2026-05-10) – Claude Code folytatáshoz
 
+### Tizenegyedik session (2026-05-10) – Crypto: Kelly=0 hard-skip + entry-decision visibility ("Why?" panel)
+
+A live `mj-trading.netlify.app/trade/crypto/` 3 nyitott paper pozíció
+felülvizsgálata 2 hibát mutatott meg:
+1. A signal-combiner kelly.full=0 / recommendation=WAIT mellett is nyíltak
+   trade-ek, mert a `decision-engine.mts` `Math.max(1, bankrollUSDC * kellyCapped)`
+   $1-es minimum size-zal akkor is bevitt pozíciót, ha a Kelly 0 volt.
+2. UI-on nem volt utólag visszanézhető, mi alapján döntött a bot.
+
+**Backend** (`shared/types.mts` + `crypto/decision-engine.mts` +
+`auto-trader/index.mts`):
+- Új `EntryDecisionSnapshot` + `DecisionGate` típusok.
+- A `decision-engine` mostantól ordered `gates[]` listát ad vissza —
+  minden gate label/passed/actual/required/hint mezőkkel.
+- **Új gate (P2.1): "Kelly conviction (combiner)"** — `signal.kellyFraction > 0`.
+  Ha a combiner Kelly=0-t ad, a bot nem nyit minimum-size $1 pozíciót,
+  hanem skip-elteti "Signal-combiner Kelly=0 → no conviction" reasonnel.
+- Az entry-snapshot `paperPosition.entryDecision`-ként mentődik a
+  Blobs `auto-trader-state`-be. `getCryptoOpenActive()` kifelé adja
+  `openDetails[].entryDecision` mezőként.
+
+**Frontend** (`shared/TraderResults.tsx` + `traderShellStyles.ts` +
+`trader/CryptoTrader.tsx`):
+- `OpenPositionRow.rationale` mező → ha jelen (akár null), a sor
+  `<details>` expandable-ré alakul "Why?" toggle-lel.
+- Új `RationaleBlock`: tézis-mondat (modell vs piac → irány), 4-cellás
+  grid (gross/net edge, Kelly raw→capped, aktív signal-ok), signal-chip-
+  bontás (FR/VPIN/VOL/APEX/CP + OB imbalance), gate-lista pass/fail
+  vizualizációval, meta sor decidedAt + reason-nel.
+- Régebbi (snapshot nélküli) pozíciók muted "Adat nem elérhető" placeholderrel.
+
+A 3 már nyitott pozíción placeholder lesz; a következő cron-tick után
+nyitott trade-ek teljes "Why?" panelt kapnak.
+
+Részletes leírás: `internal-docs/changelog/CHANGELOG-2026-05-10.md`
+"Crypto bot entry decision visibility + Kelly=0 hard-skip" szekciója.
+
+### Hova nyúlj legközelebb (rationale UI)
+
+- **Weather + HL entry-decision**: a `OpenPositionRationale` típus generikus,
+  csak a megfelelő backend (`weather/index.mts`, `hyperliquid/index.mts`)
+  építse fel ugyanezt a snapshot shape-et a pozícióra → minden bot
+  ugyanazt a "Why?" panelt kapja kódváltoztatás nélkül a UI-ban.
+- **Closed trades**: a `ClosedTrade` típus szintén megérdemli ezt — most
+  csak `signalBreakdown` van rajta. Edge tracker per-trade view-ban szintén
+  látszódna a teljes belépési kontextus.
+- **Daily markets entry-window**: a `parseDurationMs` jelenleg csak
+  "X minute/hour" patternt fog. Daily piacokra (ahol az `openedAtEstimate`
+  null) az entry-window gate idle. Ráragasztható egy "morning-window" gate.
+
 ### Tizedik session (2026-05-10) – Stale-UI bugfix: 3 fantom weather-trade + simVersion auto-reset persistence
 
 A live `mj-trading.netlify.app/trade/weather/` Tab 1-en 3 sor mutatott
