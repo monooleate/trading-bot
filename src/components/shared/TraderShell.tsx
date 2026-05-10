@@ -379,12 +379,36 @@ export function useTraderAction<R extends ActionResponseBase = ActionResponseBas
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      const data: R = await res.json();
+      // Read raw text first so we can surface the HTTP status + body shape
+      // even when the response isn't JSON (e.g. Netlify 504 timeout, which
+      // returns `{"message":"..."}` with no `error` field — the previous
+      // fallback then collapsed to a generic "Unknown error").
+      const raw = await res.text();
+      let data: R;
+      try {
+        data = JSON.parse(raw) as R;
+      } catch {
+        // Body isn't JSON — surface the raw response so the operator can
+        // see exactly what Netlify (or an upstream proxy) returned.
+        setError(
+          `HTTP ${res.status} ${res.statusText || ""} (non-JSON response): ` +
+          raw.slice(0, 200),
+        );
+        return null;
+      }
       setLastResult(data);
-      if (!data.ok) setError(data.error || "Unknown error");
+      if (!data.ok) {
+        // Compose a richer message: backend `error`, fallback to Netlify's
+        // `message`, then HTTP status. Beats the old "Unknown error" string.
+        const backendErr = (data as any).error
+          || (data as any).message
+          || (data as any).errorMessage
+          || `HTTP ${res.status} ${res.statusText || "no error message"}`;
+        setError(String(backendErr));
+      }
       return data;
     } catch (e: any) {
-      setError(e?.message || String(e));
+      setError(e?.message || String(e) || "fetch failed");
       return null;
     } finally {
       setLoading(false);
