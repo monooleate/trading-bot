@@ -345,7 +345,26 @@ async function fetchBtcPriceAt(timestampMs: number): Promise<number | null> {
   }
 }
 
-async function getVolSignal(market: MarketInfo): Promise<{ prob: number | null; detail: any }> {
+interface VolSignalOptions {
+  /** Master kill-switch for the BS digital signal. Default true. */
+  enabled?: boolean;
+  /** Fetch the strike from Binance 1m kline at openedAt. If false, K=S
+   *  fallback (ATM, signal ≈ 0.5). Saves 1 Binance call per signal. */
+  strikeFetchEnabled?: boolean;
+}
+
+async function getVolSignal(
+  market: MarketInfo,
+  options: VolSignalOptions = {},
+): Promise<{ prob: number | null; detail: any }> {
+  // Master kill-switch: if disabled, return null so the combiner skips
+  // this signal entirely (effectively reverts to the pre-Tier 1 7-signal
+  // setup). Useful if the new BS pricing turns out to be IC-noise on the
+  // user's market mix.
+  if (options.enabled === false) {
+    return { prob: null, detail: { skipped: "vol_divergence disabled via Settings" } };
+  }
+  const strikeFetchEnabled = options.strikeFetchEnabled !== false;
   try {
     // Time horizon (years) a resolution-ig. Negatív/nulla horizonton skip.
     let timeHours = 0.25; // default 15min — overridden below
@@ -383,17 +402,21 @@ async function getVolSignal(market: MarketInfo): Promise<{ prob: number | null; 
     //    saját parsing-jából csak az endDate van; az openedAt-et a
     //    durationMs-ből származtatjuk a kérdésből.
     let K = S; // fallback: ATM (signal ≈ 0.5)
-    let strikeSource: "fetched" | "spot-fallback" = "spot-fallback";
-    const durationMs = parseDurationFromQuestion(market.question);
-    if (durationMs && market.endDate) {
-      const endTs = new Date(market.endDate).getTime();
-      if (Number.isFinite(endTs)) {
-        const openTs = endTs - durationMs;
-        if (openTs < Date.now() && openTs > Date.now() - 24 * 60 * 60 * 1000) {
-          const fetched = await fetchBtcPriceAt(openTs);
-          if (fetched && fetched > 0) {
-            K = fetched;
-            strikeSource = "fetched";
+    let strikeSource: "fetched" | "spot-fallback" | "fetch-disabled" = "spot-fallback";
+    if (!strikeFetchEnabled) {
+      strikeSource = "fetch-disabled";
+    } else {
+      const durationMs = parseDurationFromQuestion(market.question);
+      if (durationMs && market.endDate) {
+        const endTs = new Date(market.endDate).getTime();
+        if (Number.isFinite(endTs)) {
+          const openTs = endTs - durationMs;
+          if (openTs < Date.now() && openTs > Date.now() - 24 * 60 * 60 * 1000) {
+            const fetched = await fetchBtcPriceAt(openTs);
+            if (fetched && fetched > 0) {
+              K = fetched;
+              strikeSource = "fetched";
+            }
           }
         }
       }
@@ -424,6 +447,23 @@ async function getVolSignal(market: MarketInfo): Promise<{ prob: number | null; 
     };
   } catch (err: any) {
     return { prob: null, detail: { error: err?.message ?? "unknown" } };
+  }
+}
+
+// Load the Tier 1 vol-signal toggles from the trader-settings Blobs store.
+// Dynamic import + try/catch so a settings outage doesn't take down the
+// signal combiner. Defaults match the hardcoded values: signal ON, strike
+// fetch ON.
+async function loadVolSignalOptions(): Promise<VolSignalOptions> {
+  try {
+    const mod: any = await import("./trader-settings.mts");
+    const ov = await mod.loadRuntimeOverrides();
+    return {
+      enabled:            ov.volSignalEnabled      === undefined ? true : ov.volSignalEnabled === 1,
+      strikeFetchEnabled: ov.volStrikeFetchEnabled === undefined ? true : ov.volStrikeFetchEnabled === 1,
+    };
+  } catch {
+    return { enabled: true, strikeFetchEnabled: true };
   }
 }
 
@@ -1041,6 +1081,11 @@ export default async function handler(req: Request, _ctx: Context) {
       return new Response(JSON.stringify({ ok: false, error: "Market not found" }), { status: 404, headers: CORS });
     }
 
+    // 1.5. Load Tier 1 toggles from trader-settings (Blobs overrides).
+    // Dynamic import to avoid circular module init; falls back to defaults
+    // on any error so the combiner is never broken by a settings outage.
+    const volOptions = await loadVolSignalOptions();
+
     // 2. Parallel signal fetch — 8 signals + resolution-risk
     // Resolution-risk runs in parallel; never blocks the primary signals.
     const skipRisk    = url.searchParams.get("skip_risk") === "1";
@@ -1058,7 +1103,7 @@ export default async function handler(req: Request, _ctx: Context) {
       : analyseResolutionRisk(riskMeta).catch(() => null);
 
     const [vol, flow, apex, cond, fund, mom, contr, pairs, risk] = await Promise.all([
-      getVolSignal(market),
+      getVolSignal(market, volOptions),
       getOrderflowSignal(market),
       getApexSignal(market),
       getCondProbSignal(market),

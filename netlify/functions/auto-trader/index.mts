@@ -300,7 +300,7 @@ async function runCryptoTrader(
     if (typeof ov.obImbalanceUpRatio    === "number") obUp                 = ov.obImbalanceUpRatio;
     if (typeof ov.obImbalanceDownRatio  === "number") obDown               = ov.obImbalanceDownRatio;
     if (typeof ov.btcMinPriceBand       === "number") btcMinPriceBand      = ov.btcMinPriceBand;
-    for (const k of ["liveReadyMinTrades", "liveReadyMinWinRate", "liveReadyMinIC", "liveReadyMaxCalibDev", "liveReadyMinSharpe", "liveReadyMaxDrawdownPct"]) {
+    for (const k of ["liveReadyMinTrades", "liveReadyMinWinRate", "liveReadyMinIC", "liveReadyMaxCalibDev", "liveReadyMinSharpe", "liveReadyMaxDrawdownPct", "bonferroniAlpha", "bonferroniGoodMultiplier"]) {
       if (typeof ov[k] === "number") readyOv[k] = ov[k];
     }
   } catch {}
@@ -387,10 +387,16 @@ async function runCryptoTrader(
     }
   }
 
-  // Calibration-noise alarm: when paper has accumulated ≥30 trades and every
-  // signal still has |IC|<0.02, surface a Telegram alert (once per session)
-  // and force-stop live sessions. Paper continues so the user can iterate.
-  const health = computeCalibrationHealth(session.closedTrades, 30);
+  // Calibration-noise alarm: when paper has accumulated ≥30 trades and the
+  // Bonferroni-corrected weak threshold is not cleared, surface a Telegram
+  // alert (once per session) and force-stop live sessions. Paper continues
+  // so the user can iterate. The Bonferroni params (familywise α, good
+  // multiplier) are now Settings-tunable — defaults preserve Tier 1
+  // behaviour (α=0.05, multiplier=2.0).
+  const health = computeCalibrationHealth(session.closedTrades, 30, {
+    bonferroniAlpha:          readyOv.bonferroniAlpha,
+    bonferroniGoodMultiplier: readyOv.bonferroniGoodMultiplier,
+  });
   if (health.shouldSuspendLive && !session.calibrationAlertSentAt) {
     log("CALIBRATION_ALARM", config.paperMode, {
       maxAbsIC: health.maxAbsIC,

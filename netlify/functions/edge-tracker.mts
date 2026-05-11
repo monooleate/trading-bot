@@ -55,6 +55,28 @@ const STORE_NAME = "auto-trader-state";
 const PAPER_KEYS = ["auto-trader-session", "auto-trader-session-weather"];
 const LIVE_KEYS = ["auto-trader-session-live", "auto-trader-session-live-weather"];
 
+// Tier 1 Settings overrides loader (lazy import to avoid circular module
+// init). Returns undefined fields when no override is set, so callers can
+// `?? defaultValue` cleanly. Wraps any error in a safe fallback.
+interface Tier1Overrides {
+  bonferroniAlpha?: number;
+  bonferroniGoodMultiplier?: number;
+  collinearityHighThreshold?: number;
+}
+async function loadTier1Overrides(): Promise<Tier1Overrides> {
+  try {
+    const mod: any = await import("./trader-settings.mts");
+    const ov = await mod.loadRuntimeOverrides();
+    return {
+      bonferroniAlpha:           ov.bonferroniAlpha,
+      bonferroniGoodMultiplier:  ov.bonferroniGoodMultiplier,
+      collinearityHighThreshold: ov.collinearityHighThreshold,
+    };
+  } catch {
+    return {};
+  }
+}
+
 // ─── Helpers ──────────────────────────────────────────────
 
 interface SessionLike {
@@ -186,9 +208,16 @@ export default async function handler(req: Request, _ctx: Context) {
     const summary = computeSummary(trades);
     const cumulativePnl = computeCumulativePnl(trades);
     const calibration = computeCalibration(trades);
+    // Load Tier 1 Settings overrides (Bonferroni + collinearity threshold).
+    // Defaults preserve the original Tier 1 hardcoded behaviour.
+    const tier1Overrides = await loadTier1Overrides();
+
     const signalIC = computeSignalIC(trades);
-    const calibrationHealth = computeCalibrationHealth(trades, 30);
-    const collinearity = computeSignalCollinearity(trades);
+    const calibrationHealth = computeCalibrationHealth(trades, 30, {
+      bonferroniAlpha:          tier1Overrides.bonferroniAlpha,
+      bonferroniGoodMultiplier: tier1Overrides.bonferroniGoodMultiplier,
+    });
+    const collinearity = computeSignalCollinearity(trades, 20, tier1Overrides.collinearityHighThreshold);
     const edgeDecay = computeEdgeDecay(trades);
     const heatmap = computeWinRateHeatmap(trades);
     const distribution = computePnlDistribution(trades);

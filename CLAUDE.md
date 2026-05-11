@@ -448,26 +448,64 @@ szekció, math reference `internal-docs/math/13-crypto-bot.md` §9
   — ha pl. 6.4 / 8 effektív N van, a Kelly méret ~12%-kal overaggressive.
   UI-on nincs még explicit render, de az API-n keresztül elérhető.
 
-### Mit NE várj el ezektől a fixektől (őszinte értékelés)
+### Mit NE várj el ezektől a fixektől (őszinte értékelés — session során korrigált)
 
-A Tier 1 fix-ek **szigorúbbá teszik a rendszert, nem agresszívabbá**.
-Várhatóan:
-- Több profit/trade? **Bizonytalan** — empirikus validáció kell.
-- Magasabb Sharpe rövid távon? **Opportunity-cost van** a szigorúbb IC
-  threshold miatt.
-- Több trade? **Nem, kevesebb** — Bonferroni + collinearity-visibility
-  konzervatívabb.
-- Live-aktiválás gyorsabb? **Nem, lassabb** — szigorúbb gate-ek.
+A Tier 1 fix-ek **két szinten hatnak különbözően**, ezt a session
+során pontosítottuk a korábbi túlzó megfogalmazáshoz képest:
 
-A rendszer **statisztikailag védhetőbb lesz**, nem "profitabilisabb".
-A "profitabilisabb" csak empirikus validáció után mondható ki, ami
-**több paper trade adatot** igényel.
+| Szint | Hatás | Magyarázat |
+|-------|-------|-----------|
+| **Paper trade-ek száma** | **≈ változatlan, esetleg +5-10%** | A Bonferroni-korrigált `shouldSuspendLive` flag csak Telegram alertet ad paper módban (`auto-trader/index.mts:394`); a bot **folytatja a paper trade-eket**. Az új `vol_divergence` MOST aktív 5m/15m piacokon → enyhén MAGASABB `activeSignals` count → potenciálisan TÖBB trade. |
+| **Paper trade minősége** | tisztább | Nincs degenerált zaj-signal a `vol_divergence`-en, kollinearitás láthatóvá vált. |
+| **Live aktiválás** | lényegesen lassabb | A Bonferroni weak küszöb ~0.23 (n=143, 8 signal) — a `live-readiness` gate csak akkor enged át live módra, ha statisztikailag bizonyítható edge van. |
+
+A korábbi "kevesebb trade" megfogalmazás **félrevezető volt**:
+csak a **live aktiválás** lett szigorúbb, **a paper aktivitás
+gyakorlatilag azonos**. A rendszer **statisztikailag védhetőbb** a
+live-readiness gate-nél, de a "profitabilisabb" csak empirikus
+validáció után mondható ki.
+
+### B opció (Tier 1 belső konstansok → Settings tab)
+
+A 32. session során a user feltette a kérdést: "lehet állítani a
+beállítások tabon?" — válasz: a Tier 1 belső konstansok eredetileg
+hardcoded-ak voltak. A B opció során **5 új field** került a
+`trader-settings.mts` SCHEMA-ba, default értékkel = az eredeti Tier 1
+hardcoded értékkel:
+
+| Field | Default | Range | Kategória | Hatás |
+|-------|---------|-------|-----------|-------|
+| `bonferroniAlpha` | 0.05 | 0.01–0.20 | common | Familywise α a Calibration Health-ben. Magasabb = enyhébb live-gate. |
+| `bonferroniGoodMultiplier` | 2.0 | 1.0–4.0 | common | A `good` küszöb = z × SE × multiplier. Magasabb = szigorúbb 'good'. |
+| `collinearityHighThreshold` | 0.7 | 0.5–0.95 | common | A `highPairs[]` listába azok a párok kerülnek, ahol \|ρ\| > ez. Csak observability. |
+| `volSignalEnabled` | 1 (ON) | 0/1 bool | crypto | Kill-switch: 0 → `vol_divergence` mindig null. |
+| `volStrikeFetchEnabled` | 1 (ON) | 0/1 bool | crypto | Strike Binance-kline fetch toggle. 0 → K=S fallback (ATM, semleges). |
+
+**Wire-up**:
+- `computeCalibrationHealth(trades, minTrades, options?)` — új 3.
+  paraméter, `CalibrationHealthOptions { bonferroniAlpha?, bonferroniGoodMultiplier? }`
+- `computeSignalCollinearity(trades, minPair?, highThreshold?)` — már
+  paraméteres, csak a callsite-ot bővítettük
+- `getVolSignal(market, options?)` — új 2. paraméter,
+  `VolSignalOptions { enabled?, strikeFetchEnabled? }`
+- `auto-trader/index.mts`: a calibration-noise alarm hívás most
+  átadja a Settings override-okat
+- `edge-tracker.mts`: új `loadTier1Overrides()` helper, a 3 Tier 1
+  konstans közvetlenül a `computeCalibrationHealth` + `computeSignalCollinearity`
+  hívásokba megy
+- `signal-combiner.mts`: új `loadVolSignalOptions()` helper, dinamikus
+  trader-settings import + fallback default
+
+Default értékek mellett a viselkedés **bit-azonos** az implementáció
+előttihez — vagyis ha a felhasználó nem nyúl a Settings-hez, a Tier 1
+hardcoded értékek pontosan ugyanúgy működnek.
 
 ### Hova nyúlj legközelebb (32. session után)
 
 1. **Várj 30+ új trade-et** az új vol_divergence outputtal. A `computeSignalIC`
    mostantól mérni fogja az új signal IC-jét. Ha érdemi (>0.23 Bonferroni
-   `weak`-küszöb fölött), akkor a redesign bizonyítottan értékes.
+   `weak`-küszöb fölött a default alpha-val), akkor a redesign bizonyítottan
+   értékes. Ha noise, a `volSignalEnabled = 0` toggle-lel kikapcsolható.
 
 2. **Tier 2** — reliability diagram per-prediction bin (200+ closed
    trade precondition, ~2-4 hét). A saját model overconfident-e a
@@ -477,6 +515,27 @@ A "profitabilisabb" csak empirikus validáció után mondható ki, ami
 3. **Tier 3** — MAE + time-based invalidation a HL Perp bot-on
    (30+ HL trade precondition). Statikus TP/SL clamp helyett empirikus
    "cut losers early" gate.
+
+### Harminckettedik session (2026-05-11) – Signal Combiner UI "Edge" javítás (50% deviation → valódi trade edge)
+
+A `/tools/#signals` tab élesen validáláskor (Spain WC YES @ 16¢, model
+adj prob 49%) látszott, hogy a UI 0.55% edge-et mutat (= deviation from
+50%), miközben a valódi trade edge 32.88% lenne (= adj_prob − market).
+A backend mindig is szállítja az `adjusted_edge_pct`-t, csak a UI a
+legacy `edge_pct` mezőt használta.
+
+**Fix `SignalCombinerPanel.tsx`** (4 régió):
+1. Prop-mapping: új `tradeEdge` (elsődleges: `adjusted_edge_pct`, fallback:
+   `adj_prob − yes_price`)
+2. 3-cellás Combined Probability card: primary "Trade edge: +X% vs Y¢
+   market" (accent ≥ 5%, danger ≤ -5%), secondary "Δ from 50%: ±X%"
+3. Multi-Market Scanner: oszlop "Edge vs mkt" + rendezés trade edge szerint
+   (moonshot piacok felülre kerülnek)
+4. ToolInfoBox: "Edge < 5%" → "Trade edge < 3%" (a backend
+   `applyResolutionAdjustment` defaultjának megfelelően)
+
+`tsc --noEmit` exit 0, Astro build 10 page.
+Részletek: `internal-docs/changelog/CHANGELOG-2026-05-11.md` "(i)" szekció.
 
 ### Harmincegyedik session (2026-05-11) – Roadmap SSOT-konszolidáció + new-strategies.md 37 ötlet státusz-audit
 

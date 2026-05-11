@@ -1,4 +1,59 @@
 
+# 2026-05-11 (i) — Signal Combiner UI: "Edge" → valódi trade edge (model prob − market price)
+
+## Háttér
+A `/tools/#signals` tab élesen validáláskor kiderült, hogy a UI "Edge"
+mező a `data.edge_pct`-t mutatja, ami a **50%-tól való eltérés**
+(`(combined - 0.5) * 100`), NEM a tényleges trade edge a market price
+ellenében. Konkrét példa: Spain WC YES @ 16.15¢, modell adjusted prob
+49.03% → valódi trade edge 32.88%, **de a UI 0.55%-ot mutatott**.
+
+A backend mindig is szállítja az `adjusted_edge_pct`-t (resolution-risk
+modul `applyResolutionAdjustment` számolja: `adj_prob - market_yes_price`),
+csak a UI nem használta.
+
+## Fix
+**`src/components/SignalCombinerPanel.tsx`** (4 helyen):
+
+1. **Fő komponens prop-mapping**: új `tradeEdge` változó.
+   - Elsődleges forrás: `data.adjusted_edge_pct` (ha jelen)
+   - Fallback: `(adjusted_probability ?? combined_probability) - yes_price`
+   - A legacy `data.edge_pct` átnevezve `dev50`-re
+
+2. **3-cellás "Combined Probability" card**:
+   - Primary line (accent/danger szín ha |edge| ≥ 5%):
+     `Trade edge: +32.9% vs 16¢ market`
+   - Secondary line (halvány): `Δ from 50%: -0.5%`
+
+3. **Multi-Market Scanner**:
+   - "Edge" oszlop átnevezve "Edge vs mkt" + tooltip
+   - A számolt `tradeEdgePct` (adj_prob − market) jelenik meg
+   - **Rendezés is** ez alapján — moonshot piacok (alacsony market price
+     + magas model prob) felülre kerülnek
+   - Helper `tradeEdgeOf()` a sortolás és cella-megjelenítés között
+
+4. **ToolInfoBox magyarázat**: "Edge < 5% → WAIT" cserélve
+   "**Trade edge** (model prob − market price) < 3% → WAIT"-re.
+
+## Mit NEM csináltam
+- **Backend változatlan**: a `signal-combiner.mts` továbbra is szállítja
+  `edge_pct` (legacy) és `adjusted_edge_pct` (trade edge).
+- **Crypto bot signal-aggregator** változatlan — már az
+  `adjustedProbability`-t használja a Kelly + decision-engine-be.
+
+## Eredmény
+- `/tools/#signals` UI **a tényleges trading edge-et mutatja**
+- Multi-Market Scanner moonshot piacokon helyesen jelzi a +30% edge-et
+  0.5% helyett
+- "Δ from 50%" megőrződött másodlagos infóként saját címkével
+
+`tsc --noEmit` exit 0, Astro build 10 page.
+
+## Érintett fájlok
+- `src/components/SignalCombinerPanel.tsx`
+
+---
+
 # 2026-05-11 (h) — Roadmap SSOT-konszolidáció + new-strategies.md implementáció-státusz audit
 
 ## Háttér
@@ -1173,3 +1228,116 @@ az új vol_divergence MOST jelez ott ahol eddig idle volt. Az eredmény:
 
 Részletes math reference: `internal-docs/math/13-crypto-bot.md` §9
 "2026-05-11 Tier 1" szekció.
+
+---
+
+# 2026-05-11 (j) — Tier 1 B opció: belső konstansok → Settings tab + "kevesebb trade" megfogalmazás korrekció
+
+## Háttér
+
+A 32. session során a user feltette a kérdést: "lehet állítani a
+beállítások tabon?" és "sokkal kevesebbet nyit?". Két kérdésre két
+részből álló válasz:
+
+1. **Korrekció**: a Tier 1 `(i)` szekciójában a "kevesebb trade"
+   megfogalmazás túlzó volt. A Bonferroni `shouldSuspendLive` flag
+   csak Telegram alertet ad paper módban (`auto-trader/index.mts:394`)
+   — a paper bot folytatja a trade-eket. Az új `vol_divergence` MOST
+   aktív 5m/15m piacokon (eddig `null`), tehát **enyhén MAGASABB**
+   `activeSignals` count → enyhén MAGASABB trade-szám várható, nem
+   alacsonyabb. A "kevesebb trade" csak a **live aktiválást** érinti
+   (Bonferroni weak küszöb ~0.23 n=143-on, 8 signal). CLAUDE.md
+   32. session blokk frissítve.
+
+2. **B opció implementálva**: 5 új SCHEMA field a `trader-settings.mts`-ben,
+   default = az eredeti Tier 1 hardcoded értékek. Vagyis a Settings
+   nem-érintése esetén a viselkedés **bit-azonos** az implementáció
+   előttihez.
+
+## Mit csináltam
+
+### 5 új Settings field (`trader-settings.mts`)
+
+```typescript
+bonferroniAlpha:           { default: 0.05, min: 0.01, max: 0.20, category: "common", group: "IC threshold (Bonferroni)" }
+bonferroniGoodMultiplier:  { default: 2.0,  min: 1.0,  max: 4.0,  category: "common", group: "IC threshold (Bonferroni)" }
+collinearityHighThreshold: { default: 0.7,  min: 0.5,  max: 0.95, category: "common", group: "Signal collinearity" }
+volSignalEnabled:          { default: 1,    min: 0,    max: 1,    category: "crypto", group: "Signal toggles" }  // bool
+volStrikeFetchEnabled:     { default: 1,    min: 0,    max: 1,    category: "crypto", group: "Signal toggles" }  // bool
+```
+
+A SCHEMA-vezérelt Settings UI automatikusan renderel — nincs külön
+frontend kód kell.
+
+### Statistics paraméterezhetővé tétele
+
+| Function | Új paraméter | Backward-compat |
+|----------|--------------|------------------|
+| `computeCalibrationHealth(trades, minTrades, options?)` | `CalibrationHealthOptions { bonferroniAlpha?, bonferroniGoodMultiplier? }` | ✅ — meglévő hívások működnek; ha nincs options, default Tier 1 értékek |
+| `computeSignalCollinearity(trades, minPair?, highThreshold?)` | `highThreshold` már paraméter volt | ✅ — csak callsite-bővítés kell |
+| `getVolSignal(market, options?)` | `VolSignalOptions { enabled?, strikeFetchEnabled? }` | ✅ — ha `options.enabled === false`, korai exit `null`-lal |
+
+### Config propagation a callsite-okra
+
+- **`edge-tracker.mts`**: új `loadTier1Overrides()` helper (lazy
+  trader-settings import), a 3 Tier 1 konstans közvetlenül a
+  `computeCalibrationHealth` + `computeSignalCollinearity` hívásokba
+  megy. Fallback safe-default-okkal.
+- **`auto-trader/index.mts`**: a meglévő `readyOv` Record bővítve
+  `bonferroniAlpha` és `bonferroniGoodMultiplier` kulcsokkal, a
+  calibration-noise alarm `computeCalibrationHealth` hívás most
+  átadja az override-okat. Konzisztens Bonferroni-szigorítás az
+  edge-tracker UI-ral és a Telegram alert-tel.
+- **`signal-combiner.mts`**: új `loadVolSignalOptions()` helper —
+  dinamikus `trader-settings.mts` import (a top-level Netlify function
+  saját maga tölt). Defaults: `{ enabled: true, strikeFetchEnabled: true }`.
+  A `getVolSignal(market, options)` hívás a handler legelején a
+  market resolve után megy.
+
+## Bit-azonos default viselkedés
+
+Az 5 új field default értéke pontosan az eredeti Tier 1 hardcoded
+értékek:
+
+| Field | Új default | Eredeti Tier 1 érték |
+|-------|-----------|---------------------|
+| `bonferroniAlpha` | 0.05 | 0.05 (hardcoded a `computeCalibrationHealth`-ben) |
+| `bonferroniGoodMultiplier` | 2.0 | 2.0 (hardcoded a `bonferroniICThreshold` `strengthMultiplier`-ében) |
+| `collinearityHighThreshold` | 0.7 | 0.7 (hardcoded a `computeSignalCollinearity`-ban) |
+| `volSignalEnabled` | 1 (ON) | always ON (nincs toggle) |
+| `volStrikeFetchEnabled` | 1 (ON) | always ON (nincs toggle) |
+
+Ha a felhasználó nem nyúl a Settings-hez, a következő cron tick után
+a bot ugyanúgy viselkedik mint az "(i)" szekcióbeli Tier 1 commit
+után — nincs viselkedés-változás.
+
+## Mit lehet most a Settings-ből módosítani
+
+- **Live aktiválás enyhítése**: `bonferroniAlpha` 0.05 → 0.15 → a
+  per-signal α 0.019-re nő, küszöbök lecsökkennek → enyhébb live-gate.
+  Vagy `bonferroniGoodMultiplier` 2.0 → 1.5 → "good" küszöb csökken.
+- **Vol-signal kikapcsolása**: ha a paper-validáció után az új
+  Black-Scholes signal IC noise marad → `volSignalEnabled = 0` → a
+  combiner 7 signal-ra megy, az eredeti pre-Tier-1 állapot.
+- **Strike-fetch latency-szűkítés**: ha a Binance kline-call túl
+  költséges (cold-start tickeken) → `volStrikeFetchEnabled = 0` → K=S
+  fallback (ATM, fairYes ≈ 0.5 semleges signal). A vol signal effektíven
+  idle-lá válik, de nem törlődik a SignalBreakdown-ből.
+- **Collinearity sensitivity**: `collinearityHighThreshold` 0.7 → 0.5
+  → szigorúbb párokat jelez (több `highPair`).
+
+## Type check + build
+
+`tsc --noEmit` exit 0, `npm run build` 10 page generated.
+
+## Mit NE tegyél (a user explicit kérése szerint)
+
+A user kérése: **"max nem változtatok rajta a beállításokban"** —
+vagyis a Settings field-ek **DEFAULT állapotban maradnak**, és a
+Tier 1 viselkedés változatlanul az `(i)` szekcióban leírt módon
+fut. A B opció csak **a finomhangolás lehetőségét** adja meg, nem
+módosítja a viselkedést.
+
+Részletek: CLAUDE.md 32. session blokk "B opció" szekciója,
+`internal-docs/math/13-crypto-bot.md` §9 (a Tier 1 belső konstansok
+mostantól mind override-able).

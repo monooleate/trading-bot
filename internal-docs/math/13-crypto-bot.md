@@ -906,7 +906,27 @@ A 3 fix **együttesen szigorítja a paper → live átkapcsolást**:
 - (2) IR-haircut látható: ha nominálisan 8 signal IC × √8, de effektív 5 → ténylegesen IR × √5
 - (3) IC küszöb adaptív és Bonferroni-szigorúbb → false-positive átengedés blokkolva
 
-Eredmény: kevesebb fals "ready" jel, kevesebb live-mode kockázat. Ez **kevesebb trade is**, de a megmaradó trade-ek statisztikailag erősebbek.
+Eredmény: kevesebb fals "ready" jel a live-átkapcsoláshoz. **Paper aktivitás
+azonban gyakorlatilag azonos** — a Bonferroni `shouldSuspendLive` flag csak
+Telegram alertet ad paper módban, a bot folytatja a paper trade-eket
+(`auto-trader/index.mts:393-414`). A korábbi "kevesebb trade" megfogalmazás
+**csak a live aktiválásra** vonatkozik, paper-en nem.
+
+#### Settings tab override-ok (B opció, 2026-05-11)
+
+A 3 fix belső konstansai mind tunable-k a `trader-settings.mts` SCHEMA-n
+keresztül:
+
+| Field | Default | Tier 1 belső konstans | Hatás |
+|-------|---------|----------------------|-------|
+| `bonferroniAlpha` | 0.05 | familywise α | magasabb → enyhébb gate |
+| `bonferroniGoodMultiplier` | 2.0 | good küszöb SE × multiplier | magasabb → szigorúbb 'good' |
+| `collinearityHighThreshold` | 0.7 | highPairs ρ küszöb | magasabb → kevesebb highPair (observability only) |
+| `volSignalEnabled` | 1 | kill-switch | 0 → vol_divergence `null` (7-signal combiner) |
+| `volStrikeFetchEnabled` | 1 | strike fetch toggle | 0 → K=S fallback (ATM, semleges signal) |
+
+Default = bit-azonos a Tier 1 implementáció előtti viselkedéshez.
+Részletek: CHANGELOG-2026-05-11.md "(j)" szekció.
 
 ### 2026-05-11 mély-audit round 2 — 8 új signal-layer + arithmetic hiba
 

@@ -426,9 +426,17 @@ function inverseNormalCdf(p: number): number {
   }
 }
 
+export interface CalibrationHealthOptions {
+  /** Familywise false-positive rate for Bonferroni correction. */
+  bonferroniAlpha?: number;
+  /** Multiplier of SE for the `good` boundary; `weak` is fixed at 1×. */
+  bonferroniGoodMultiplier?: number;
+}
+
 export function computeCalibrationHealth(
   trades: ClosedTrade[],
   minTrades: number = 30,
+  options: CalibrationHealthOptions = {},
 ): CalibrationHealth {
   const ics = computeSignalIC(trades);
   const tc = trades.length;
@@ -441,11 +449,16 @@ export function computeCalibrationHealth(
   // `forecast_edge`), use the actual non-empty signal count, not 8.
   const signalCount = Math.max(1, ics.filter((s) => s.tradeCount > 0).length);
 
-  // Bonferroni-corrected thresholds (familywise α = 0.05).
+  // Bonferroni-corrected thresholds. Defaults match the original Tier 1
+  // hardcoded values (familywise α = 0.05, good multiplier = 2.0); the
+  // Settings UI now exposes both via `bonferroniAlpha` and
+  // `bonferroniGoodMultiplier` knobs.
+  const familywiseAlpha = options.bonferroniAlpha ?? 0.05;
+  const goodMultiplier = options.bonferroniGoodMultiplier ?? 2.0;
   // `weakThreshold` = 1× SE boundary (the "noise vs weak" line)
-  // `goodThreshold` = 2× SE boundary (the "weak vs good" line)
-  const weakThreshold = bonferroniICThreshold(tc, signalCount, 0.05, 1.0);
-  const goodThreshold = bonferroniICThreshold(tc, signalCount, 0.05, 2.0);
+  // `goodThreshold` = goodMultiplier × SE boundary (the "weak vs good" line)
+  const weakThreshold = bonferroniICThreshold(tc, signalCount, familywiseAlpha, 1.0);
+  const goodThreshold = bonferroniICThreshold(tc, signalCount, familywiseAlpha, goodMultiplier);
 
   if (tc < minTrades) {
     return {
