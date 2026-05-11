@@ -148,7 +148,14 @@ export default function SignalCombinerPanel({ bankroll }: { bankroll: number }) 
   }, [auto, analyze, slug]);
 
   const p        = data?.combined_probability ?? 0.5;
-  const edge     = data?.edge_pct ?? 0;
+  const dev50    = data?.edge_pct ?? 0; // deviation from 50% (legacy semantic)
+  const yesPrice = data?.market?.yes_price ?? 0.5;
+  const adjProb  = data?.adjusted_probability ?? p;
+  // Real trade edge: model probability vs market price. Use adjusted_edge_pct
+  // from backend if present (resolution-risk applied), else compute locally.
+  const tradeEdge = typeof data?.adjusted_edge_pct === "number"
+    ? data.adjusted_edge_pct
+    : (adjProb - yesPrice) * 100;
   const weights  = data?.signal_weights ?? {};
   const raw      = data?.raw_signals ?? {};
   const fl       = data?.fundamental_law ?? {};
@@ -170,7 +177,7 @@ export default function SignalCombinerPanel({ bankroll }: { bankroll: number }) 
             <>"⟳ Combine" / "▶ Auto 3m" — egyetlen piac elemzéséhez.</>,
             <>Multi-Market Scanner ("⟳ Scan Top 10"): 10 piac párhuzamos elemzése, abszolút edge szerint sorba rendezve.</>,
             <>"Log Trade" → trade logger Blobs store-ba (csak BUY ajánláskor jelenik meg). Edge tracker innen olvassa.</>,
-            <>IR &gt; 0.30 = HIGH conf, 0.20-0.30 = MEDIUM, &lt; 0.20 = LOW. Edge &lt; 5% vagy IR &lt; 0.10 → automatikus WAIT.</>,
+            <>IR &gt; 0.30 = HIGH conf, 0.20-0.30 = MEDIUM, &lt; 0.20 = LOW. <strong>Trade edge</strong> (model prob − market price) &lt; 3% vagy IR &lt; 0.10 → WAIT.</>,
           ]}
           marketScope={<>Egy piacra fut (<code>?slug=…</code>) vagy auto-pickel top forgalmú aktív piacot. A 8 jel mindegyike különböző helyről húz: CLOB <code>/book</code> + <code>/midpoint</code> a piac YES token-jén, Data API <code>/trades</code> apex agg-hez, Gamma <code>/markets</code> related-pair-ekhez, Binance/Bybit BTC funding rate-hez. Resolution-risk score is része (UMA dispute kockázat).</>}
           relatedBot={{ label: "Crypto bot — same combinator", href: "/trade/crypto/" }}
@@ -308,8 +315,13 @@ export default function SignalCombinerPanel({ bankroll }: { bankroll: number }) 
               {(p*100).toFixed(1)}%
             </div>
             <div className="sc-lbl">Combined Probability</div>
-            <div style={{ fontFamily:"var(--mono)",fontSize:10,color:"var(--muted)",marginTop:8 }}>
-              Edge: {edge >= 0 ? "+" : ""}{edge.toFixed(1)}% a 50%-tól
+            <div style={{ fontFamily:"var(--mono)",fontSize:10,color:"var(--muted)",marginTop:8,lineHeight:1.6 }}>
+              <div style={{ color: Math.abs(tradeEdge) >= 5 ? (tradeEdge >= 0 ? "var(--accent)" : "var(--danger)") : "var(--muted)", fontWeight:700 }}>
+                Trade edge: {tradeEdge >= 0 ? "+" : ""}{tradeEdge.toFixed(1)}% vs {(yesPrice*100).toFixed(0)}¢ market
+              </div>
+              <div style={{ fontSize:9,color:"var(--border)" }}>
+                Δ from 50%: {dev50 >= 0 ? "+" : ""}{dev50.toFixed(1)}%
+              </div>
             </div>
           </div>
           <div className="sc-card">
@@ -484,8 +496,15 @@ function MultiMarketScanner({ bankroll, markets, onSelectMarket }: { bankroll: n
       setResults([...scanResults]);
     }
 
-    // Sort by absolute edge (strongest signal first)
-    scanResults.sort((a, b) => Math.abs(b.edge_pct) - Math.abs(a.edge_pct));
+    // Sort by absolute TRADE edge (adjusted_edge_pct = adj_prob - market_price),
+    // not by deviation-from-50% — high-edge moonshot markets should bubble up.
+    const tradeEdgeOf = (r: any): number => {
+      if (typeof r?.adjusted_edge_pct === "number") return r.adjusted_edge_pct;
+      const adj = r?.adjusted_probability ?? r?.combined_probability ?? 0.5;
+      const mkt = r?.market?.yes_price ?? 0.5;
+      return (adj - mkt) * 100;
+    };
+    scanResults.sort((a, b) => Math.abs(tradeEdgeOf(b)) - Math.abs(tradeEdgeOf(a)));
     setResults(scanResults);
     setScanning(false);
     setScanned(true);
@@ -519,7 +538,8 @@ function MultiMarketScanner({ bankroll, markets, onSelectMarket }: { bankroll: n
             <tr style={{ borderBottom: "1px solid var(--border)" }}>
               <th style={{ textAlign: "left", padding: "5px 8px", fontSize: 10, color: "var(--muted)" }}>Piac</th>
               <th style={{ textAlign: "center", padding: "5px 4px", fontSize: 10, color: "var(--muted)" }}>Jelzés</th>
-              <th style={{ textAlign: "right", padding: "5px 4px", fontSize: 10, color: "var(--muted)" }}>Edge</th>
+              <th style={{ textAlign: "right", padding: "5px 4px", fontSize: 10, color: "var(--muted)" }}
+                title="Trade edge: model probability − market YES price">Edge vs mkt</th>
               <th style={{ textAlign: "right", padding: "5px 4px", fontSize: 10, color: "var(--muted)" }}>Prob</th>
               <th style={{ textAlign: "right", padding: "5px 4px", fontSize: 10, color: "var(--muted)" }}>IR</th>
               <th style={{ textAlign: "right", padding: "5px 4px", fontSize: 10, color: "var(--muted)" }}>Kelly</th>
@@ -532,7 +552,10 @@ function MultiMarketScanner({ bankroll, markets, onSelectMarket }: { bankroll: n
               const mkt = r.market || {};
               const isBuy = rec.action?.includes("BUY");
               const isYes = rec.action?.includes("YES");
-              const edgeColor = Math.abs(r.edge_pct) > 10 ? (r.edge_pct > 0 ? "var(--accent)" : "var(--danger)") : "var(--muted)";
+              const tradeEdgePct = typeof r.adjusted_edge_pct === "number"
+                ? r.adjusted_edge_pct
+                : ((r.adjusted_probability ?? r.combined_probability ?? 0.5) - (mkt.yes_price ?? 0.5)) * 100;
+              const edgeColor = Math.abs(tradeEdgePct) > 10 ? (tradeEdgePct > 0 ? "var(--accent)" : "var(--danger)") : "var(--muted)";
               return (
                 <tr key={i} style={{ borderBottom: "1px solid #151520", cursor: "pointer" }}
                   onClick={() => onSelectMarket(mkt.slug || "")}>
@@ -546,8 +569,9 @@ function MultiMarketScanner({ bankroll, markets, onSelectMarket }: { bankroll: n
                     color: isBuy ? (isYes ? "var(--accent)" : "var(--danger)") : "var(--warn)" }}>
                     {actionIcon(rec.action)} {rec.action || "WAIT"}
                   </td>
-                  <td style={{ textAlign: "right", padding: "7px 4px", fontWeight: 700, color: edgeColor }}>
-                    {r.edge_pct >= 0 ? "+" : ""}{r.edge_pct.toFixed(1)}%
+                  <td style={{ textAlign: "right", padding: "7px 4px", fontWeight: 700, color: edgeColor }}
+                    title="Trade edge: model probability − market price">
+                    {tradeEdgePct >= 0 ? "+" : ""}{tradeEdgePct.toFixed(1)}%
                   </td>
                   <td style={{ textAlign: "right", padding: "7px 4px" }}>
                     {(r.combined_probability * 100).toFixed(0)}%
