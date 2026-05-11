@@ -830,6 +830,84 @@ egyszer).
 
 ## 9. Audit findings + fix history
 
+### 2026-05-11 Tier 1 — vol_divergence Black-Scholes redesign + collinearity + Bonferroni IC
+
+A 8 cikkből (Neural Networks / Quant Roadmap / Game Theory / Mean-reversion /
+Hedge Fund Dataset / Hermes Agent / Black-Scholes / Trillion Equation)
+szintetizált **3 független, struktúrális fix**, mind a crypto botra +
+cross-bot edge-trackerre. Mind a 3 ott javít ahol a rendszerben konkrét
+matematikai gyengeség volt; egymástól független, sorrendi függés nélkül.
+
+#### 1. vol_divergence → Black-Scholes digital pricing
+
+| Komponens | Előtte | Utána |
+|-----------|--------|-------|
+| Képlet | `iv = 2 \|yp-0.5\| / √T × 100`; `spread = iv − rv`; `prob = clamp(0.5 − spread × 0.4, 0.1, 0.9)` | `fair YES = N(d₂)`, ahol `d₂ = [ln(S/K) − σ²/2 × T] / (σ × √T)` |
+| `S` (spot) | nem használt | Binance/CoinGecko BTC current close |
+| `K` (strike) | nem használt | `fetchBtcPriceAt(openedAt)` — Binance 1m kline a piac kezdetekor |
+| `T` (lejárat) | hours | years (`hours / (365 × 24)`) |
+| `σ` | RV15 annualizált | RV20 annualizált (ugyanaz a logika, kicsit szélesebb ablak) |
+| Output | normalizált [0.1, 0.9] score | **fair YES price közvetlenül** [0, 1] |
+| Short-horizon gate | `< 1h → null` (kötelező, mert degenerált) | **eltörölve** — d₂ T → 0 limit-en jól viselkedik |
+
+Az új output **közvetlenül összevethető a market YES árhoz** — `edge = fairYes − marketYes` formálisan értelmes. A signal-combiner ezt 0–1-es valószínűségként súlyozza a Grinold-Kahn IR keretbe.
+
+**Hatás 5m/15m BTC piacokra**: az 1h gate kikerült → a `vol_divergence` signal MOST aktív rövid piacokon is, ahol eddig `null`-t adott. Várhatóan `activeSignals` 7 → 8 a leggyakoribb piacokon. A combiner IR növekszik **realisztikusan** mert az új signal nem degenerált zaj.
+
+**Strike-source fallback**: ha a piac kezdete > 24h-val ezelőtt vagy nem parseolható durationMs, `K = S` (ATM fallback) → `d₂ ≈ −σ√T/2`, `fairYes ≈ 0.5` (semleges signal). Daily piacokon ez idle viselkedést ad — ami helyes.
+
+#### 2. Collinearity matrix a 8 signal-on
+
+A Grinold-Kahn `IR = IC × √N` képlet **statisztikai függetlenséget feltételez**. Az új `computeSignalCollinearity()` Pearson-mátrixot ad a 8 signal-vektorra a closed trade-eken:
+
+- `signals[]` — a legalább 20 pair-observation-val rendelkező signalok
+- `matrix[][]` — Pearson korrelációs mátrix (NaN-safe, joint-finite filter)
+- `highPairs[]` — `|ρ| > 0.7` párok (Grinold-Kahn sértve)
+- `effectiveSignalCount` — pszeudo-rank: nominal N haircut by collinearity. Egyszerű proxy: minden signal `1 − max|ρ|` súllyal hozzájárul, sorrendben.
+
+**Mit jelez**: ha pl. `momentum` és `pairs_spread` ρ = 0.85, a `√N` valójában nem √8 hanem √6.4 — vagyis a Kelly méreted ~12% over-szám. A UI a `Calibration Health` mellé renderelheti az `effectiveSignalCount` értéket.
+
+Exposed: `/.netlify/functions/edge-tracker` response `collinearity` mező.
+
+#### 3. Bonferroni-korrigált IC threshold
+
+A `computeCalibrationHealth` eddigi küszöbei (`|IC| ≥ 0.05` good, `≥ 0.02` weak, `< 0.02` noise) **statikus számok** voltak, multi-comparison korrekció nélkül. 8 signal egyszerre tesztelve `α = 0.05`-on familywise error rate **~33%** — a 8 jó-signal közül ~3 véletlenül átment.
+
+Új Bonferroni-derived threshold:
+
+| Komponens | Képlet |
+|-----------|--------|
+| Per-signal α | `α_familywise / signal_count = 0.05 / 8 = 0.00625` |
+| `z_{α/2}` | inverz normal CDF (Beasley-Springer-Moro), `≈ 2.73` 8 signal-on |
+| Pearson SE | `1 / √(n − 2)` (H₀: ρ=0 alatt) |
+| `weakThreshold` | `z × SE × 1.0` (egy SE) |
+| `goodThreshold` | `z × SE × 2.0` (két SE) |
+
+Numerikus példa: **n=143, 8 signal** → `weakThreshold ≈ 0.082`, `goodThreshold ≈ 0.164`. Ez **lényegesen szigorúbb** mint a régi `0.02 / 0.05`. A `signalCount` adaptív: weather kategória csak `forecast_edge`-et populál → 1 signal → threshold ≈ `1.96 × SE`, ami a 8-signal verzióhoz képest tágabb (nincs multi-comparison büntetés ha csak 1 signal van).
+
+**Hatás a `live-readiness` gate-re**: ami eddig "good" volt 0.05 IC-vel, MOST `weak` lehet → live trading suspended. Ez intent szerinti — a rendszer akkor enged át, ha **statisztikailag bizonyítható** edge van, nem ha "valami signal random átszaladt 0.05-ön".
+
+Exposed: a `CalibrationHealth` típus most tartalmazza `goodThreshold`, `weakThreshold`, `signalCount` mezőket (transparency in UI/logs).
+
+#### Implementációs file-ok
+
+| Fix | File | Sor |
+|-----|------|-----|
+| 1. Black-Scholes vol_divergence | `signal-combiner.mts` | 280–425 |
+| 2. Collinearity matrix | `edge-tracker/statistics.mts` | 510–620 |
+| 3. Bonferroni IC threshold | `edge-tracker/statistics.mts` | 332–470 |
+| API exposure | `edge-tracker.mts` | 22, 189, 224 |
+
+#### Hatás a `live-readiness` gate-re
+
+A 3 fix **együttesen szigorítja a paper → live átkapcsolást**:
+
+- (1) több signal aktív rövid piacokon → IR realisztikusabb (nincs degenerált zaj-signal)
+- (2) IR-haircut látható: ha nominálisan 8 signal IC × √8, de effektív 5 → ténylegesen IR × √5
+- (3) IC küszöb adaptív és Bonferroni-szigorúbb → false-positive átengedés blokkolva
+
+Eredmény: kevesebb fals "ready" jel, kevesebb live-mode kockázat. Ez **kevesebb trade is**, de a megmaradó trade-ek statisztikailag erősebbek.
+
 ### 2026-05-11 mély-audit round 2 — 8 új signal-layer + arithmetic hiba
 
 A 6-fix gate-layer audit után a user mély-elemzést kért minden rétegre.
@@ -838,7 +916,7 @@ invariánsát** vizsgálta. 8 új hiba, mind javítva.
 
 | ID | Réteg | Pre-fix bug | Fix |
 |----|-------|-------------|-----|
-| **A** | Signal: `vol_divergence` | `iv = 2 × \|yp − 0.5\| / √T × 100` rövid horizonton degenerált (T → 0). 15min BTC piacon iv ≈ 7,490%, mindig clamp 0.1 → konstans NO-bias. | `VOL_MIN_HORIZON_HOURS = 1` gate. `<1h` piacokon `prob: null`. |
+| **A** | Signal: `vol_divergence` | `iv = 2 × \|yp − 0.5\| / √T × 100` rövid horizonton degenerált (T → 0). 15min BTC piacon iv ≈ 7,490%, mindig clamp 0.1 → konstans NO-bias. | (initial) `VOL_MIN_HORIZON_HOURS = 1` gate, `<1h` piacokon `prob: null`. **(superseded 2026-05-11 Tier 1)**: a teljes képlet kicserélve Black-Scholes digital N(d₂)-re, az 1h gate eltörölve — lásd §9 Tier 1. |
 | **B** | Session arithmetic | `closePosition` `bankrollCurrent += shares × exitPrice` (gross proceeds, fee nélkül), `sessionPnL` viszont net pnl. Invariáns sértve, drift ~3.6%/trade. | `bankrollCurrent += trade.pnl + costBasis`. Lookup a `buyOrderId`-vel. |
 | **C** | Signal: `apex_consensus` | `walletMap.pnl` cash flow only (`SELL → +cash, BUY → -cash`). Settlement-bevétel nincs benne → "top 10" = top sellers. | Activity-score: `notional × √distinct markets`. |
 | **D** | Signal: `cond_prob` | `violationDir` csak complement-irányt vett. Monoton-violation magnitúdó vakon hozzáadva, ellentétes irányok nem oltották ki egymást. | `complementSigned + monotonSigned` signed SUM. |

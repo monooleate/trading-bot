@@ -277,51 +277,171 @@ async function fetchCloses(limit: number): Promise<number[]> {
   return [];
 }
 
-// ─── 1. VOL DIVERGENCE SIGNAL ─────────────────────────────────────────────────
-// Market-specific: az adott piac IV-jét hasonlítja a BTC RV-hez.
+// ─── 1. VOL DIVERGENCE SIGNAL — Black-Scholes digital option pricing ─────────
 //
-// Time-horizon gate (2026-05-11 audit fix #A): a Black-Scholes-szerű
-// `iv = 2 × |yp − 0.5| / √T × 100` képlet rövid horizonton (T → 0)
-// hatalmas IV-t számol — egy 15min BTC piacon yp=0.3 mellett iv ≈ 7,490%,
-// ami RV-vel (60%) szembe minden esetben clamp 0.1-re esik. Ez nem signal,
-// hanem konstans NO-bias minden 5m/15m BTC piacon. A vol-divergence
-// strukturálisan csak ≥ 1h horizonton értelmes, ezért az 1h alatti
-// piacokra null-t adunk vissza → a combiner kihagyja a súlyozott
-// átlagból, `activeSignals` csökken.
-const VOL_MIN_HORIZON_HOURS = 1;
+// 2026-05-11 (Tier 1) redesign: a korábbi képlet (`iv = 2|yp−0.5|/√T × 100`)
+// nem volt érvényes Black-Scholes implied vol — egy önkényes mapping ami a
+// YES árat kvázi-újraskálázta IV-be. Short horizonton degenerált
+// (1h-os gate kellett, 30. session A-fix), és az output [0.1, 0.9]
+// clamp-elt normalizált zaj volt, nem fair value.
+//
+// Új megközelítés: a Polymarket BTC up/down piacok matematikailag
+// **digitális call opciók** — payoff $1 ha S(T) > K, $0 ha S(T) ≤ K. A
+// Black-Scholes digital pricing zárt formában létezik:
+//
+//     fair YES = N(d₂),   d₂ = [ln(S/K) − σ²/2 · T] / (σ · √T)
+//
+// ahol:
+//   • S = current BTC spot price
+//   • K = reference / strike price (a piac kezdetekor érvényes BTC ár)
+//   • T = idő a resolution-ig (years)
+//   • σ = realized vol annualizált
+//
+// Output: a `prob` MOST a fair YES price közvetlenül (nem önkényes score) —
+// a signal-combiner ezt 0–1 között súlyozza a többi 7 signal-lal, és a
+// `signal-aggregator` ezt veti össze a market YES árához mint edge.
+//
+// A short-horizon gate eltűnik: a d₂ képlet T → 0 limit-en jól viselkedik,
+// és a 1h gate csak az előző (helytelen) formula degenerációja miatt
+// kellett. Az új signal a 5m/15m BTC piacokon is érvényes jelet ad.
+
+// Standard normal CDF (Abramowitz & Stegun 26.2.17 approximation, max
+// error ≈ 7.5e-8). Minden bemeneten finite output, két oldali szimmetria.
+function normalCdf(z: number): number {
+  if (!Number.isFinite(z)) return 0.5;
+  const absZ = Math.abs(z);
+  const t = 1 / (1 + 0.2316419 * absZ);
+  const pdf = Math.exp(-0.5 * absZ * absZ) / Math.sqrt(2 * Math.PI);
+  const poly =
+    0.319381530 * t -
+    0.356563782 * t * t +
+    1.781477937 * t * t * t -
+    1.821255978 * t * t * t * t +
+    1.330274429 * t * t * t * t * t;
+  const cdf = 1 - pdf * poly;
+  return z >= 0 ? cdf : 1 - cdf;
+}
+
+// Strike-price estimate: a BTC up/down piacok jellemzően a `openedAt`-kori
+// BTC árhoz képest mérnek. Ha a piac kezdete kiszámítható (durationMs-ből),
+// a referencia árat egy 1m Binance kline lekérdezéssel kapjuk meg arra a
+// timestamp-re. Ha nincs durationMs (legacy / daily piacok), fallback a
+// jelenlegi spot árra → d₂ ≈ −σ·√T/2 → fair YES ≈ 0.5 (semleges signal).
+async function fetchBtcPriceAt(timestampMs: number): Promise<number | null> {
+  try {
+    const r = await fetch(
+      `https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=1m&startTime=${timestampMs}&endTime=${
+        timestampMs + 60_000
+      }&limit=1`,
+      { signal: AbortSignal.timeout(5000) },
+    );
+    if (!r.ok) return null;
+    const k = (await r.json()) as any[][];
+    if (!Array.isArray(k) || k.length === 0) return null;
+    const close = parseFloat(k[0][4]);
+    return Number.isFinite(close) ? close : null;
+  } catch {
+    return null;
+  }
+}
 
 async function getVolSignal(market: MarketInfo): Promise<{ prob: number | null; detail: any }> {
   try {
-    // Time horizon hours-ban
-    let timeH = 0.25; // default 15min
+    // Time horizon (years) a resolution-ig. Negatív/nulla horizonton skip.
+    let timeHours = 0.25; // default 15min — overridden below
     if (market.endDate) {
       const rem = (new Date(market.endDate).getTime() - Date.now()) / 3600000;
-      if (rem > 0 && rem < 720) timeH = rem; // max 30 days
+      if (!Number.isFinite(rem) || rem <= 0) {
+        return { prob: null, detail: { skipped: "endDate in past or invalid", rem } };
+      }
+      if (rem > 720) {
+        return { prob: null, detail: { skipped: "horizon > 30 days, BS not applicable", rem } };
+      }
+      timeHours = rem;
     }
-    // Short-horizon gate: a képlet T → 0 limit-en degenerált, mindig clamp-re esik.
-    if (timeH < VOL_MIN_HORIZON_HOURS) {
-      return {
-        prob: null,
-        detail: { skipped: "horizon < 1h, vol-divergence formula degenerate", timeH: timeH.toFixed(3) },
-      };
-    }
+    const T = timeHours / (365 * 24);
 
-    const closes = await fetchCloses(15);
-    if (closes.length < 3) return { prob: null, detail: { error: "no price data" } };
-
+    // 1. Realized vol annualizált (jelenlegi RV15 logika érintetlen).
+    const closes = await fetchCloses(20);
+    if (closes.length < 5) return { prob: null, detail: { error: "no price data" } };
     const returns = closes.slice(1).map((c, i) => Math.log(c / closes[i]));
-    const mean    = returns.reduce((s, v) => s + v, 0) / returns.length;
-    const rv15    = Math.sqrt(returns.reduce((s, v) => s + (v - mean) ** 2, 0) / returns.length * 365 * 24 * 60) * 100;
+    const mean = returns.reduce((s, v) => s + v, 0) / returns.length;
+    const sigmaAnnual = Math.sqrt(
+      (returns.reduce((s, v) => s + (v - mean) ** 2, 0) / returns.length) * 365 * 24 * 60,
+    );
+    if (!Number.isFinite(sigmaAnnual) || sigmaAnnual <= 0) {
+      return { prob: null, detail: { error: "sigma invalid", sigmaAnnual } };
+    }
 
-    // IV from market price
-    const yp = market.yesPrice;
-    const T = timeH / (365 * 24);
-    const iv = T > 0 ? (2 * Math.abs(yp - 0.5) / Math.sqrt(T)) * 100 : rv15;
+    // 2. Spot ár (S) — a legfrissebb close.
+    const S = closes[closes.length - 1];
+    if (!Number.isFinite(S) || S <= 0) return { prob: null, detail: { error: "spot invalid" } };
 
-    const spread = iv - rv15;
-    const prob = Math.max(0.1, Math.min(0.9, 0.5 - (spread / 100) * 0.4));
-    return { prob, detail: { rv15: rv15.toFixed(1), iv: iv.toFixed(1), spread: spread.toFixed(1), timeH: timeH.toFixed(2) } };
-  } catch { return { prob: null, detail: null }; }
+    // 3. Strike ár (K) — a piac kezdetekor érvényes BTC ár, ha tudjuk.
+    //    `openedAtEstimate`-et a btc-market-finder számolja a durationMs-ből.
+    //    Külső input itt: a MarketInfo-ban a `endDate` + signal-combiner
+    //    saját parsing-jából csak az endDate van; az openedAt-et a
+    //    durationMs-ből származtatjuk a kérdésből.
+    let K = S; // fallback: ATM (signal ≈ 0.5)
+    let strikeSource: "fetched" | "spot-fallback" = "spot-fallback";
+    const durationMs = parseDurationFromQuestion(market.question);
+    if (durationMs && market.endDate) {
+      const endTs = new Date(market.endDate).getTime();
+      if (Number.isFinite(endTs)) {
+        const openTs = endTs - durationMs;
+        if (openTs < Date.now() && openTs > Date.now() - 24 * 60 * 60 * 1000) {
+          const fetched = await fetchBtcPriceAt(openTs);
+          if (fetched && fetched > 0) {
+            K = fetched;
+            strikeSource = "fetched";
+          }
+        }
+      }
+    }
+
+    // 4. Black-Scholes digital call: fair YES = N(d₂).
+    //    r = 0 short horizonton (5m–48h, intra-day kamatlábat elhanyagoljuk).
+    const sqrtT = Math.sqrt(T);
+    const d2 = (Math.log(S / K) - 0.5 * sigmaAnnual * sigmaAnnual * T) / (sigmaAnnual * sqrtT);
+    if (!Number.isFinite(d2)) {
+      return { prob: null, detail: { error: "d2 non-finite", S, K, sigmaAnnual, T } };
+    }
+    const fairYes = normalCdf(d2);
+
+    return {
+      prob: fairYes,
+      detail: {
+        S: S.toFixed(2),
+        K: K.toFixed(2),
+        strikeSource,
+        sigmaAnnual: (sigmaAnnual * 100).toFixed(1) + "%",
+        timeHours: timeHours.toFixed(3),
+        d2: d2.toFixed(3),
+        fairYes: fairYes.toFixed(3),
+        marketYes: market.yesPrice.toFixed(3),
+        edge: (fairYes - market.yesPrice).toFixed(3),
+      },
+    };
+  } catch (err: any) {
+    return { prob: null, detail: { error: err?.message ?? "unknown" } };
+  }
+}
+
+// Duration parser — egyezik a btc-market-finder.mts logikájával, de ott a
+// MarketInfo `question` mezőben van, itt is. Másolat hogy az import-cikkust
+// elkerüljük (signal-combiner.mts top-level, auto-trader almodul → körutas).
+function parseDurationFromQuestion(question: string): number | null {
+  if (!question) return null;
+  const q = question.toLowerCase();
+  const re = /(\d+)\s*(second|sec|s|minute|min|m|hour|hr|h)\b/;
+  const match = q.match(re);
+  if (!match) return null;
+  const n = parseInt(match[1], 10);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  const unit = match[2];
+  if (unit.startsWith("s")) return n * 1000;
+  if (unit.startsWith("h")) return n * 60 * 60 * 1000;
+  return n * 60 * 1000; // minutes
 }
 
 // ─── 2. ORDER FLOW SIGNAL ────────────────────────────────────────────────────

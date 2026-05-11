@@ -25,6 +25,52 @@ Mielőtt a sessiont lezárod (utolsó válasz a usernek), végezd el az alábbi 
 
 ---
 
+## 📋 Doksi SSOT-szabályok (2026-05-11 átszervezés után)
+
+**Minden téma egyetlen fájlban él** — a duplikációkat tudatosan kerüljük.
+Az [`internal-docs/roadmap/README.md`](./internal-docs/roadmap/README.md)
+az SSOT-mátrix forrása; a roadmap-doksik fejléceiben SSOT-scope-blokk jelöli,
+hogy az adott fájl mit fed le, mit NEM.
+
+### Új ötlet hova kerüljön?
+
+| Ötlet típusa | Hová kerüljön | Példa |
+|--------------|---------------|-------|
+| **Új signal / új trade-stratégia** | `internal-docs/roadmap/new-strategies.md` — új #N tétel a Top 11 / Mid / Long sorrend szerint, Score-számolással | "Reddit sentiment signal" → új #16 tétel |
+| **Új live-mode bug / TODO** | `internal-docs/roadmap/master-plan.md` "MI VAN MÉG HÁTRA" szekció (🔴/🟠/🟡/🟢 prioritás) | "Polymarket auto-redeem cron hiányzik" |
+| **Új VPS-process / Hetzner-feladat** | `internal-docs/roadmap/hetzner-migration.md` 7-fázisú action plan-be | "Új PM2 process Telegram bot-hoz" |
+| **Új fizikai-layout-döntés** (Postgres séma, port, monitoring) | `internal-docs/roadmap/hetzner-infrastructure.md` | "Új port allokáció a Bybit feed-nek" |
+| **Új env-vár / secret** | `internal-docs/current-state/env-vars.md` (NEM a roadmap-ban) | "Új `BYBIT_TESTNET_KEY`" |
+| **Új algoritmus-leírás** | `internal-docs/math/NN-name.md` (új fájl + index frissítés) | "Új Brier modul → math/17-brier.md" |
+| **Session-by-session változás** | `internal-docs/changelog/CHANGELOG-YYYY-MM-DD.md` | Mindig minden session-zárásnál |
+
+### Session-zárás dokumentáció-checklist
+
+| Mi változott a session-ben? | Frissíteni kell |
+|------------------------------|------------------|
+| Implementáltál egy P1.x / Cn. / plan-on kívüli feature-t | `master-plan.md` státusz-jelölő (✅ DONE + dátum) |
+| Megvalósítottál egy #N stratégiát a new-strategies.md-ből | `new-strategies.md` ✅/🟡 státusz **ÉS** `master-plan.md` szinkron |
+| Új ötlet identifikálva (nem implementálva) | `new-strategies.md` új #N tétel + Score |
+| VPS-fázis lépést megcsináltál | `hetzner-migration.md` checkbox-ok ✅-re |
+| Élő rendszer-állapot változott | CLAUDE.md `AKTUÁLIS ÁLLAPOT` + `current-state/*.md` |
+| Algoritmus változott | A megfelelő `math/NN-*.md` |
+| Új env-vár / secret | `current-state/env-vars.md` |
+| Bármi nem-triviális | `changelog/CHANGELOG-YYYY-MM-DD.md` |
+
+### Tilos (SSOT-sértés)
+
+- ❌ **Státuszt két helyen vezetni**: ha `master-plan.md` ✅, akkor a
+  `new-strategies.md` is ✅, de **a két jelölés mindig szinkronban**.
+  Ne tartsd külön nyilván.
+- ❌ **Új tervezési fájl minden session-ben**: a 6 roadmap-doksi elég.
+  Új fájl csak ha új téma-kategória nyílik (pl. új venue).
+- ❌ **Live-state-et roadmap-pel keverni**: `current-state/` snapshot ≠
+  `roadmap/` tervezet.
+- ❌ **Env-vár listát roadmap-ba írni**: csak `current-state/env-vars.md`
+  a katalógus.
+
+---
+
 ## Mi ez a projekt?
 
 **EdgeCalc** egy kvantitatív Polymarket trading dashboard.  
@@ -351,6 +397,157 @@ netlify deploy --prod --dir=dist
 ---
 
 ## AKTUÁLIS ÁLLAPOT (2026-05-11) – Claude Code folytatáshoz
+
+### Harminckettedik session (2026-05-11) – Tier 1: vol_divergence Black-Scholes redesign + collinearity matrix + Bonferroni IC threshold
+
+A user 8 cikket küldött Roan/Becker tollából (Neural Networks, Quant
+Roadmap × 2, Game Theory 5 Formulas, Mean-Reversion Strategy, Hedge
+Fund Dataset, Hermes Agent, Black-Scholes, Trillion Equation), majd
+összesítést kért: mit érdemes ténylegesen implementálni a botokba és
+miért. A szintézis eredménye: a 8 cikk nagy keretrendszereket ígér, de
+a valódi érték mindenhol pontos, kis hatókörű matematikai fix — ahol
+a rendszerben konkrét gyenge pont van. Az LSTM / Hermes / Greeks /
+"olvass Shreve-et" típusú refactorok nem javítanának.
+
+**Tier 1 = 3 független, struktúrális fix**, mindegyik ott javít ahol
+a kód jelenleg matematikailag hibás vagy gyenge:
+
+| Fix | Mit | File | Forrás |
+|-----|-----|------|--------|
+| **1.** | `vol_divergence` signal Black-Scholes digital N(d₂)-re cserélve. Az 1h gate (`VOL_MIN_HORIZON_HOURS = 1`) eltörölve — a d₂ képlet T → 0 limit-en stabil. A signal MOST aktív 5m/15m BTC piacokon is. Output: fair YES price közvetlenül (nem normalizált score). | `signal-combiner.mts:280-425` | Black-Scholes cikk |
+| **2.** | Signal collinearity matrix az Edge Tracker-be. Pearson-mátrix a 8 signal-vektorra a closed trade-eken, `highPairs[]` ahol `\|ρ\| > 0.7`, `effectiveSignalCount` haircut a Grinold-Kahn `IR=IC×√N` valós N-jét mutatja. Exposed: `/edge-tracker` válasz `collinearity` mező. | `edge-tracker/statistics.mts:510-620` | saját javaslat (Quant Roadmap után) |
+| **3.** | Bonferroni-korrigált IC threshold a `Calibration Health`-ben. Statikus `0.05/0.02` helyett adaptív Bonferroni (familywise α = 0.05 / signal_count). 8 signal-on n=143-ra `goodThreshold ≈ 0.46`, `weakThreshold ≈ 0.23` — lényegesen szigorúbb. `signalCount` adaptív: weather (1 signal) tágabb, crypto (8) szigorúbb. | `edge-tracker/statistics.mts:332-470` | Quant Roadmap "multiple comparisons" |
+
+**Új helperek**:
+- `normalCdf(z)` — Abramowitz & Stegun 26.2.17 approximation
+- `fetchBtcPriceAt(ts)` — Binance 1m kline egy adott timestamp-re (strike-ár visszanyerés)
+- `parseDurationFromQuestion(q)` — duration regex (másolat a btc-market-finder belső parsoljából, körutas import elkerülése miatt)
+- `bonferroniICThreshold(n, signalCount, α, multiplier)`
+- `inverseNormalCdf(p)` — Beasley-Springer-Moro approximation
+
+**Új API mezők**:
+- `CalibrationHealth.goodThreshold`, `weakThreshold`, `signalCount`
+- `edge-tracker` válasz `collinearity` mező (`signals[]`, `matrix[][]`, `highPairs[]`, `effectiveSignalCount`, `tradeCount`, `message`)
+
+`tsc --noEmit` exit 0 (project files), Astro build 10 page generated.
+Részletek: `internal-docs/changelog/CHANGELOG-2026-05-11.md` "(i)"
+szekció, math reference `internal-docs/math/13-crypto-bot.md` §9
+"2026-05-11 Tier 1" szekció.
+
+### Hatás deploy után (32. session)
+
+- A `vol_divergence` signal a következő cron tick-től aktív minden BTC
+  piacon (5m/15m/órás daily). Az `activeSignals` mező a UI-on **7 → 8**
+  lesz a leggyakoribb crypto piacokon.
+- A `Calibration Health` badge **szigorúbb küszöbökre kapcsol**: ami eddig
+  "good" volt 0.05 IC-vel, MOST valószínűleg `weak` vagy `noise` lesz
+  (Bonferroni n=143-on `weakThreshold ≈ 0.23`). Ez intent szerinti —
+  a live-readiness gate csak akkor enged át, ha statisztikailag bizonyítható
+  edge van.
+- Az Edge Tracker `collinearity` mezőjén látszódik az `effectiveSignalCount`
+  — ha pl. 6.4 / 8 effektív N van, a Kelly méret ~12%-kal overaggressive.
+  UI-on nincs még explicit render, de az API-n keresztül elérhető.
+
+### Mit NE várj el ezektől a fixektől (őszinte értékelés)
+
+A Tier 1 fix-ek **szigorúbbá teszik a rendszert, nem agresszívabbá**.
+Várhatóan:
+- Több profit/trade? **Bizonytalan** — empirikus validáció kell.
+- Magasabb Sharpe rövid távon? **Opportunity-cost van** a szigorúbb IC
+  threshold miatt.
+- Több trade? **Nem, kevesebb** — Bonferroni + collinearity-visibility
+  konzervatívabb.
+- Live-aktiválás gyorsabb? **Nem, lassabb** — szigorúbb gate-ek.
+
+A rendszer **statisztikailag védhetőbb lesz**, nem "profitabilisabb".
+A "profitabilisabb" csak empirikus validáció után mondható ki, ami
+**több paper trade adatot** igényel.
+
+### Hova nyúlj legközelebb (32. session után)
+
+1. **Várj 30+ új trade-et** az új vol_divergence outputtal. A `computeSignalIC`
+   mostantól mérni fogja az új signal IC-jét. Ha érdemi (>0.23 Bonferroni
+   `weak`-küszöb fölött), akkor a redesign bizonyítottan értékes.
+
+2. **Tier 2** — reliability diagram per-prediction bin (200+ closed
+   trade precondition, ~2-4 hét). A saját model overconfident-e a
+   tail-eken? "Longshot bias adjustment" alapkérdése — saját adatra
+   kalibrálva.
+
+3. **Tier 3** — MAE + time-based invalidation a HL Perp bot-on
+   (30+ HL trade precondition). Statikus TP/SL clamp helyett empirikus
+   "cut losers early" gate.
+
+### Harmincegyedik session (2026-05-11) – Roadmap SSOT-konszolidáció + new-strategies.md 37 ötlet státusz-audit
+
+A user 2 kérése: (1) frissítsd a `new-strategies.md`-t mi van megvalósulva
+és mi nem (jelöléssel), (2) elemezd a `roadmap/` mappa fájljait, szüntesd
+meg a duplikációkat, egy feladat = egy leírás = egy hely (SSOT), vezesd
+át a CLAUDE.md-be és a README-be hivatkozással, és foglald össze, hova
+kerüljön új ötlet és session mit mikor frissítsen.
+
+**Kód-szintű audit a `new-strategies.md`-hez:**
+
+Minden #1-#37 ötlet státusz-jelölőt kapott (✅/🟡/❌/🔵) konkrét fájl/sor
+hivatkozással. Eredmény:
+- **✅ MEGVALÓSULT (3)**: #1 apex bug fix (title/slug a /trades-ből),
+  #30 politics bot (`auto-trader/politics/`), #31 macro bot
+  (`auto-trader/macro/`)
+- **🟡 RÉSZBEN (6)**: #2 (csak LP subgroup, insider/wash/followed
+  hiányzik), #6 (IC-alapú calibration-health, Brier/reliability hiányzik),
+  #11 (mini |rcum|<5% regime, nem HMM), #12 (pairs_spread signal van,
+  dedikált pillér hiányzik), #28 (OB imbalance signal, L2/L3 queue
+  position hiányzik), #29 (sports bot van, Pinnacle cross-arb nincs)
+- **❌ NEM (28)**: #3, #4 (vwap REST 90s marad), #5, #7-#10, #13-#27,
+  #32-#37 (semmi a kódbázisban)
+- **🔵 NEM TERVEZETT, DE MEGVALÓSULT** új §8: 4 új bot
+  (weather/sports/politics/macro), 9 új signal-fix, simVersion
+  auto-archive, calibration-health badge, live-readiness gate,
+  entry-decision snapshot, backend-driven gate-list, per-bot bankroll
+  input, pending-diagnostic, Settings tab, TraderShell unify,
+  HomePage 2-szekciós, ToolInfoBox, Reset modal, JSON export.
+
+**SSOT-konszolidáció a roadmap/ mappára:**
+
+| Téma | SSOT fájl |
+|------|-----------|
+| Implementáció-státusz (P1.x → P4.x) | `master-plan.md` |
+| Stratégia-katalógus (#1-#37 spec) | `new-strategies.md` |
+| VPS action plan (EdgeCalc-specifikus 7-fázis) | `hetzner-migration.md` |
+| VPS fizikai layout | `hetzner-infrastructure.md` |
+| Netlify → VPS komponens-mapping | `migration-strangler-fig.md` §1 |
+| Risk koordinátor trade-off (no-build) | `risk-coordinator-considerations.md` |
+| Env-vár katalógus | `current-state/env-vars.md` |
+
+Minden roadmap-doksi tetején explicit SSOT-scope blokk: "mit találsz itt
+/ mit NEM". A `roadmap/README.md` teljes újraírás: SSOT-mátrix tábla +
+új-ötlet-routing flowchart + session-zárás checklist + tilos-szabályok.
+
+**Új CLAUDE.md főszekció** ("📋 Doksi SSOT-szabályok"): új-ötlet hova
+kerüljön táblázat (7 ötlet-típus), session-zárás dokumentáció-checklist
+(8 forgatókönyv), tilos SSOT-sértés szabályok.
+
+**Mit NEM csináltam:**
+- `migration-strangler-fig.md` archive-be költöztetés (a §1 komponens-
+  térkép unikális érték marad — csak SSOT-scope-pal jelezve, hogy
+  "absztrakt, NEM action plan")
+- Postgres séma-duplikáció (pillér-blob a `hetzner-infrastructure.md`-ben
+  vs per-bot normalizált a `hetzner-migration.md`-ben) erőltetett
+  mergelése — ez tervezési choice. Mindkettő fejléce most egyértelműen
+  jelzi az ellentmondást, a tényleges választás a következő migráló
+  session feladata.
+
+`tsc --noEmit` exit 0. Markdown-only változás, kód érintetlen.
+Részletek: `internal-docs/changelog/CHANGELOG-2026-05-11.md` "(h)" szekció.
+
+### Hova nyúlj legközelebb (új session)
+
+1. **Új signal-ötlet jön**: új #N tétel a `new-strategies.md`-be a megfelelő rang szerint, Score-számolással.
+2. **Új live-mode TODO jön**: új sor a `master-plan.md` "MI VAN MÉG HÁTRA" 🔴/🟠/🟡/🟢 szekcióba.
+3. **Új VPS-feladat**: új fázis-lépés a `hetzner-migration.md`-be.
+4. **Új env-vár**: a `current-state/env-vars.md`, NEM a roadmap.
+5. **Új algoritmus**: új `math/NN-name.md` + index-frissítés.
+6. **Session-zárásnál**: a CLAUDE.md új "📋 Doksi SSOT-szabályok" szekció checklist-je az iránymutató.
 
 ### Harmincadik session (2026-05-11) – Weather deep-audit round 2: NaN guards + reconciler tail boundary + live-readiness IC unblock
 

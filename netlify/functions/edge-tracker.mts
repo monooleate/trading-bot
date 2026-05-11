@@ -18,6 +18,7 @@ import {
   computeCalibration,
   computeSignalIC,
   computeCalibrationHealth,
+  computeSignalCollinearity,
   computeEdgeDecay,
   computeWinRateHeatmap,
   computePnlDistribution,
@@ -187,6 +188,7 @@ export default async function handler(req: Request, _ctx: Context) {
     const calibration = computeCalibration(trades);
     const signalIC = computeSignalIC(trades);
     const calibrationHealth = computeCalibrationHealth(trades, 30);
+    const collinearity = computeSignalCollinearity(trades);
     const edgeDecay = computeEdgeDecay(trades);
     const heatmap = computeWinRateHeatmap(trades);
     const distribution = computePnlDistribution(trades);
@@ -221,6 +223,7 @@ export default async function handler(req: Request, _ctx: Context) {
         calibration,
         signalIC,
         calibrationHealth,
+        collinearity,
         edgeDecay,
         heatmap,
         distribution,

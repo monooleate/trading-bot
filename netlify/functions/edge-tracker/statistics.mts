@@ -333,6 +333,22 @@ export function computeSignalIC(trades: ClosedTrade[]): SignalICResult[] {
 // fire a Telegram alert) and the Edge Tracker UI (to render a health
 // badge). All thresholds are deliberate and live here so paper-mode
 // evaluation matches what the alerting path uses.
+//
+// 2026-05-11 (Tier 1): Bonferroni-corrected thresholds. Eddig a
+// `|IC| ≥ 0.05` küszöb per-signal volt elfogadva mint "good", de 8 signal
+// egyszerre tesztelve (`signal_count`) familywise error rate ~33%
+// (Pearson SE n=143-on ~0.084 mellett), vagyis hamis bizalom-jel.
+//
+// A Bonferroni-korrekció: per-signal α = α_familywise / signal_count.
+// α_familywise = 0.05 mellett és 8 signal-on per-signal α = 0.00625.
+// Pearson SE ≈ (1 - r²) / √(n - 2). Kétoldali z-test:
+//   |IC| küszöb ≈ z_{α/2} × SE ≈ z_{0.003125} × 1/√n ≈ 2.73 / √n
+// n=143-on → küszöb ≈ 0.228 / √n ≈ 0.082 (good), n=300-on ≈ 0.057.
+//
+// A konzervatív fix: a `good`/`weak`/`noise` küszöböket adaptívan
+// számoljuk a trade-szám és a signal-szám alapján, nem statikus
+// 0.05/0.02 számokkal. A live-readiness gate ezáltal **nem fogad el
+// véletlen-erős signalt** mint érdemi edge-et.
 
 export interface CalibrationHealth {
   status: "good" | "weak" | "noise" | "insufficient";
@@ -341,6 +357,73 @@ export interface CalibrationHealth {
   tradeCount: number;
   shouldSuspendLive: boolean;
   message: string;
+  // Bonferroni-derived thresholds for transparency in UI / logs.
+  goodThreshold: number;
+  weakThreshold: number;
+  signalCount: number;
+}
+
+/**
+ * Bonferroni-corrected per-signal |IC| threshold.
+ *
+ * @param n            number of closed trades with signalBreakdown
+ * @param signalCount  number of signals tested simultaneously (default 8)
+ * @param familywiseAlpha overall false-positive rate to control (default 0.05)
+ * @param strengthMultiplier 1.0 = "weak" boundary, 2.0 = "good" boundary
+ */
+function bonferroniICThreshold(
+  n: number,
+  signalCount: number = 8,
+  familywiseAlpha: number = 0.05,
+  strengthMultiplier: number = 1.0,
+): number {
+  if (n < 4) return 1.0;
+  const perSignalAlpha = familywiseAlpha / signalCount;
+  // z_{α/2} approximation for two-sided test. Common values:
+  //   α=0.05 (no correction) → z ≈ 1.96
+  //   α=0.00625 (8-signal Bonferroni) → z ≈ 2.73
+  //   α=0.00125 (40-signal) → z ≈ 3.23
+  // Used Abramowitz-Stegun-style inverse CDF approximation.
+  const z = inverseNormalCdf(1 - perSignalAlpha / 2);
+  // Pearson SE under H0 (true r = 0): SE = 1 / sqrt(n - 2)
+  const SE = 1 / Math.sqrt(Math.max(1, n - 2));
+  return Math.min(1.0, z * SE * strengthMultiplier);
+}
+
+/**
+ * Inverse standard normal CDF (Beasley-Springer-Moro approximation).
+ * Returns z such that Φ(z) = p. Accurate to ~7 decimal places for
+ * p ∈ (0.0001, 0.9999), which covers all practical α values.
+ */
+function inverseNormalCdf(p: number): number {
+  if (p <= 0) return -8;
+  if (p >= 1) return 8;
+  // Beasley-Springer-Moro: rational approximation for tails + middle.
+  const a = [-39.69683028665376, 220.9460984245205, -275.9285104469687,
+              138.3577518672690, -30.66479806614716, 2.506628277459239];
+  const b = [-54.47609879822406, 161.5858368580409, -155.6989798598866,
+              66.80131188771972, -13.28068155288572];
+  const c = [-0.007784894002430293, -0.3223964580411365, -2.400758277161838,
+             -2.549732539343734, 4.374664141464968, 2.938163982698783];
+  const d = [0.007784695709041462, 0.3224671290700398, 2.445134137142996,
+             3.754408661907416];
+  const pLow = 0.02425;
+  const pHigh = 1 - pLow;
+  let q: number, r: number;
+  if (p < pLow) {
+    q = Math.sqrt(-2 * Math.log(p));
+    return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) /
+           ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1);
+  } else if (p <= pHigh) {
+    q = p - 0.5;
+    r = q * q;
+    return (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q /
+           (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1);
+  } else {
+    q = Math.sqrt(-2 * Math.log(1 - p));
+    return -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) /
+           ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1);
+  }
 }
 
 export function computeCalibrationHealth(
@@ -353,6 +436,17 @@ export function computeCalibrationHealth(
   const top = sortedByAbs[0];
   const maxAbs = top ? Math.abs(top.ic) : 0;
 
+  // Count signals that actually contributed (have non-zero tradeCount).
+  // For categories without all 8 signals (e.g. weather with only
+  // `forecast_edge`), use the actual non-empty signal count, not 8.
+  const signalCount = Math.max(1, ics.filter((s) => s.tradeCount > 0).length);
+
+  // Bonferroni-corrected thresholds (familywise α = 0.05).
+  // `weakThreshold` = 1× SE boundary (the "noise vs weak" line)
+  // `goodThreshold` = 2× SE boundary (the "weak vs good" line)
+  const weakThreshold = bonferroniICThreshold(tc, signalCount, 0.05, 1.0);
+  const goodThreshold = bonferroniICThreshold(tc, signalCount, 0.05, 2.0);
+
   if (tc < minTrades) {
     return {
       status: "insufficient",
@@ -361,12 +455,15 @@ export function computeCalibrationHealth(
       tradeCount: tc,
       shouldSuspendLive: false,
       message: `Need ${minTrades - tc} more trades before calibration is meaningful`,
+      goodThreshold: Math.round(goodThreshold * 1000) / 1000,
+      weakThreshold: Math.round(weakThreshold * 1000) / 1000,
+      signalCount,
     };
   }
 
   let status: CalibrationHealth["status"];
-  if (maxAbs >= 0.05) status = "good";
-  else if (maxAbs >= 0.02) status = "weak";
+  if (maxAbs >= goodThreshold) status = "good";
+  else if (maxAbs >= weakThreshold) status = "weak";
   else status = "noise";
 
   return {
@@ -377,10 +474,144 @@ export function computeCalibrationHealth(
     shouldSuspendLive: status === "noise",
     message:
       status === "noise"
-        ? `All signals are noise (max |IC|=${(maxAbs * 100).toFixed(1)}% over ${tc} trades). Live trading should be suspended.`
+        ? `All signals are noise (max |IC|=${(maxAbs * 100).toFixed(1)}% < weak threshold ${(weakThreshold * 100).toFixed(1)}% over ${tc} trades, ${signalCount} signals Bonferroni-corrected). Live trading should be suspended.`
         : status === "weak"
-        ? `Top signal ${top?.signalName} has weak IC=${(maxAbs * 100).toFixed(1)}%. Marginal predictive value.`
-        : `Top signal ${top?.signalName} has IC=${(maxAbs * 100).toFixed(1)}% — meaningful predictive value.`,
+        ? `Top signal ${top?.signalName} has weak IC=${(maxAbs * 100).toFixed(1)}% (Bonferroni weak=${(weakThreshold * 100).toFixed(1)}%, good=${(goodThreshold * 100).toFixed(1)}%). Marginal predictive value.`
+        : `Top signal ${top?.signalName} has IC=${(maxAbs * 100).toFixed(1)}% > Bonferroni good threshold (${(goodThreshold * 100).toFixed(1)}%) — meaningful predictive value.`,
+    goodThreshold: Math.round(goodThreshold * 1000) / 1000,
+    weakThreshold: Math.round(weakThreshold * 1000) / 1000,
+    signalCount,
+  };
+}
+
+// ─── Signal collinearity matrix ───────────────────────────
+// Grinold-Kahn IR = IC × √N feltételezi a signalok statisztikai
+// függetlenségét. Ha 2-3 signal valójában ugyanazt méri (pl. orderflow
+// és momentum nagyon korrelálnak), a √N hazudik: a tényleges effektív
+// signal-szám alacsonyabb mint a nominális, és a Kelly méret
+// mesterségesen overaggressive.
+//
+// A `computeSignalCollinearity` Pearson-mátrixot ad vissza a signal-
+// vektorokra (az adott zárt trade-eken). Output:
+//   • matrix[i][j] = corr(signal_i, signal_j) ∈ [-1, 1]
+//   • highPairs:    list of (a, b, ρ) where |ρ| > 0.7 (Grinold-Kahn
+//                   feltételezés sértve)
+//   • effectiveN:   pszeudo-rank a mátrixból (a rangok összege egy
+//                   egyszerű proxy az effektív független signalokra)
+
+export interface CollinearityCell {
+  signalA: string;
+  signalB: string;
+  correlation: number;
+  pairCount: number;
+}
+
+export interface CollinearityResult {
+  signals: string[];               // signal names with at least minPair pairs
+  matrix: number[][];              // square Pearson matrix, NaN-safe
+  highPairs: CollinearityCell[];   // |ρ| > highThreshold, sorted desc
+  effectiveSignalCount: number;    // nominal signal count haircut by collinearity
+  tradeCount: number;              // # trades that contributed
+  message: string;
+}
+
+export function computeSignalCollinearity(
+  trades: ClosedTrade[],
+  minPair: number = 20,           // need at least 20 jointly-observed trades per pair
+  highThreshold: number = 0.7,    // |ρ| above which Grinold-Kahn independence breaks
+): CollinearityResult {
+  const withSignals = trades.filter(
+    (t) => t.signalBreakdown !== null && t.signalBreakdown !== undefined,
+  );
+
+  // Collect per-signal value vectors aligned to the same trade indexes.
+  // Use null where a signal didn't fire on that trade — pearsonCorrelation
+  // already drops non-finite pairs jointly.
+  const vectors = new Map<string, (number | null)[]>();
+  for (const name of SIGNAL_NAMES) {
+    vectors.set(
+      name,
+      withSignals.map((t) => {
+        const v = t.signalBreakdown![name];
+        return v === null || v === undefined ? null : v;
+      }),
+    );
+  }
+
+  // Filter out signals that don't have at least minPair non-null observations.
+  const liveSignals = SIGNAL_NAMES.filter((name) => {
+    const vec = vectors.get(name) ?? [];
+    return vec.filter((v) => v !== null).length >= minPair;
+  });
+
+  // Pearson matrix.
+  const matrix: number[][] = [];
+  const highPairs: CollinearityCell[] = [];
+  for (let i = 0; i < liveSignals.length; i++) {
+    const row: number[] = [];
+    for (let j = 0; j < liveSignals.length; j++) {
+      if (i === j) {
+        row.push(1);
+        continue;
+      }
+      const va = vectors.get(liveSignals[i]) ?? [];
+      const vb = vectors.get(liveSignals[j]) ?? [];
+      // Joint-observation filter: keep only trades where BOTH signals fired.
+      const xs: number[] = [];
+      const ys: number[] = [];
+      for (let k = 0; k < va.length; k++) {
+        if (va[k] !== null && vb[k] !== null) {
+          xs.push(va[k] as number);
+          ys.push(vb[k] as number);
+        }
+      }
+      const rho = xs.length >= 4 ? pearsonCorrelation(xs, ys) : 0;
+      row.push(Math.round(rho * 1000) / 1000);
+      if (i < j && Math.abs(rho) > highThreshold && xs.length >= minPair) {
+        highPairs.push({
+          signalA: liveSignals[i],
+          signalB: liveSignals[j],
+          correlation: Math.round(rho * 1000) / 1000,
+          pairCount: xs.length,
+        });
+      }
+    }
+    matrix.push(row);
+  }
+
+  // Effective signal count proxy: rank of (I + |R|)/2 thresholded.
+  // A simple approximation: sum of (1 - max |corr| with previous signals)
+  // across signals in order. If a signal has ρ=1 with a prior, it adds 0;
+  // if independent, adds 1. Gives a continuous "effective N".
+  let effectiveN = 0;
+  for (let i = 0; i < liveSignals.length; i++) {
+    let maxAbsCorr = 0;
+    for (let j = 0; j < i; j++) {
+      maxAbsCorr = Math.max(maxAbsCorr, Math.abs(matrix[i][j]));
+    }
+    effectiveN += Math.max(0, 1 - maxAbsCorr);
+  }
+
+  highPairs.sort((a, b) => Math.abs(b.correlation) - Math.abs(a.correlation));
+
+  const message =
+    liveSignals.length === 0
+      ? "No signals have ≥20 paired observations; need more trades."
+      : highPairs.length === 0
+      ? `All ${liveSignals.length} signals independent (max |ρ| < ${highThreshold}). Grinold-Kahn IR=IC×√N valid.`
+      : `${highPairs.length} collinear pair${
+          highPairs.length === 1 ? "" : "s"
+        } found (|ρ| > ${highThreshold}). Effective signal count ≈ ${effectiveN.toFixed(
+          2,
+        )} vs nominal ${liveSignals.length}. Kelly sizing may be overaggressive.`;
+
+  return {
+    signals: liveSignals,
+    matrix,
+    highPairs,
+    effectiveSignalCount: Math.round(effectiveN * 100) / 100,
+    tradeCount: withSignals.length,
+    message,
   };
 }
 
