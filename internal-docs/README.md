@@ -53,17 +53,19 @@ A **CLAUDE.md** a repo gyökerében az **AKTUÁLIS ÁLLAPOT** szekcióval — mi
 
 ## roadmap/ — Hova tart a projekt
 
-Részletes olvasási sorrend a [`roadmap/README.md`](./roadmap/README.md)-ben.
+**SSOT-mátrix és új-ötlet-routing**: lásd [`roadmap/README.md`](./roadmap/README.md).
+A 6 fájl mindegyikéhez SSOT-fejléc tartozik, ami megmondja **mit találsz
+ott és mit NEM**, hogy duplikáció ne keletkezzen.
 
-| Fájl | Scope |
-|------|-------|
-| `roadmap/README.md` | Olvasási sorrend + a 6 doki kapcsolata |
-| `roadmap/master-plan.md` | Teljes rendszer architektúra + P1.x → P3.x prioritások |
-| `roadmap/hetzner-migration.md` | **A következő session action plan-je** — 7 fázisos EdgeCalc-specifikus |
-| `roadmap/hetzner-infrastructure.md` | VPS spec (Postgres, Redis, Caddy, Bun, PM2) |
-| `roadmap/migration-strangler-fig.md` | Strangler Fig 9 fázisos absztrakt terv |
-| `roadmap/new-strategies.md` | 37 stratégia rangsorolva, top 11 a Hetzner utánra |
-| `roadmap/risk-coordinator-considerations.md` | Per-venue watchdog + globális kill switch (no-build referencia) |
+| Fájl | SSOT scope (egy téma → egy hely) |
+|------|----------------------------------|
+| `roadmap/README.md` | SSOT-mátrix · új-ötlet-routing · session-zárás dokumentáció-checklist |
+| `roadmap/master-plan.md` | **Implementáció-státusz SSOT** (P1.x → P4.x + plan-on kívüli, ✅/⚠️/❌/📋 jelölőkkel) |
+| `roadmap/new-strategies.md` | **Stratégia-katalógus SSOT** (#1-#37 ötlet részletes spec + Score) |
+| `roadmap/hetzner-migration.md` | **VPS action plan SSOT** (EdgeCalc-specifikus 7-fázis) |
+| `roadmap/hetzner-infrastructure.md` | **VPS fizikai layout SSOT** (OS, port, deploy, monitoring) |
+| `roadmap/migration-strangler-fig.md` | **Komponens-mapping SSOT** (Netlify Function → VPS process táblázat, absztrakt 9-fázis) |
+| `roadmap/risk-coordinator-considerations.md` | **Pilléres-vs-koordinátor trade-off SSOT** (no-build referencia) |
 
 ---
 

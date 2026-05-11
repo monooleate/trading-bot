@@ -1,5 +1,20 @@
 # EdgeCalc — Migration Plan (Netlify → Hetzner VPS)
 
+> **SSOT scope:** Ez a fájl az **absztrakt 9-fázis strangler-fig
+> stratégia SSOT-je** + a **Netlify Function → VPS process komponens-
+> térkép SSOT-je** (§1, ahol minden 16 function + 1 scheduled function
+> párját megtalálod a VPS-en).
+>
+> **Mit NEM találsz itt:**
+> - Konkrét EdgeCalc-specifikus action plan a következő sessionhez
+>   → [`hetzner-migration.md`](./hetzner-migration.md)
+> - VPS fizikai layout (port, deploy, Postgres séma) → [`hetzner-infrastructure.md`](./hetzner-infrastructure.md)
+>
+> **Megjegyzés:** Ez a dokumentum 2026-04-24-i, **absztrakt** strangler-fig
+> stratégia. A frissebb, EdgeCalc-specifikus action plan-t a
+> `hetzner-migration.md` tartalmazza. Az itteni 9-fázis és a 7-fázis
+> NEM helyettesíti egymást — itt a *stratégia*, ott a *végrehajtás*.
+>
 > **Dátum:** 2026-04-24
 > **Cél:** Lépésről-lépésre átköltöztetés a jelenlegi Netlify Functions architektúráról saját VPS-re. Minden Netlify Function → VPS process / endpoint mapping, prioritás szerint sorba rendezve.
 > **Filozófia:** **Strangler Fig pattern** — nem big-bang refactor, hanem fokozatos kiváltás. A Netlify rendszer **végig fut paralel**, amíg az új rendszer minden funkcióját átveszi.

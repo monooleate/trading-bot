@@ -1,5 +1,15 @@
 # EdgeCalc Trading Rendszer – Megvalósítási Összefoglaló
 
+> **SSOT scope:** Ez a fájl az **implementáció-státusz SSOT-je**. P1.x →
+> P4.x prioritásrendszer + plan-on kívüli megvalósítások. Új implementáció
+> jelölés ✅/⚠️/❌/📋 ezen a fájlon belül marad, **máshol nem duplikálódik**.
+>
+> **Mit NEM találsz itt:**
+> - Új stratégia-ötletek részletes spec-je → [`new-strategies.md`](./new-strategies.md)
+> - VPS action plan → [`hetzner-migration.md`](./hetzner-migration.md)
+> - Fizikai VPS layout → [`hetzner-infrastructure.md`](./hetzner-infrastructure.md)
+> - Env-vár katalógus → [`../current-state/env-vars.md`](../current-state/env-vars.md)
+>
 > Ez a dokumentum az összes eddigi trading témájú megbeszélés
 > alapján készült. Claude Code-nak átadható, prioritásokkal ellátott
 > fejlesztési terv.

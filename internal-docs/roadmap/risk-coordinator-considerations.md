@@ -1,5 +1,14 @@
 # EdgeCalc — Risk Coordinator (NEM-implementáció dokumentum)
 
+> **SSOT scope:** Ez a fájl a **pilléres-vs-koordinátor trade-off
+> SSOT-je** — mit ad fel a pilléres modell, milyen veszélyekkel jár,
+> mikor érdemes később koordinátort bevezetni. **No-build referencia**:
+> nincs implementáció, csak elv.
+>
+> **Mit NEM találsz itt:**
+> - Konkrét pilléres bot-implementációk → `../math/13-crypto-bot.md`, `14-hl-directional.md`, `15-funding-arb.md`, `16-weather-bot.md`
+> - Live-mode bevezetési feltételek → [`master-plan.md`](./master-plan.md) "KRITIKUS" szekció
+>
 > **Dátum:** 2026-04-24
 > **Cél:** Te a pilléres modell mellett döntöttél (saját bankroll, saját kill switch pillérenként). Ez a dokumentum **NEM** a coordinator implementációja, hanem annak rögzítése, **mit adsz fel** ezzel a döntéssel, **milyen veszélyekkel** kell tisztában lenned, és **mikor érdemes** később koordinátort bevezetni.
 > **Status:** No-build, dokumentációs referencia.

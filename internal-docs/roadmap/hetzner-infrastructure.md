@@ -1,9 +1,24 @@
 # EdgeCalc — Infrastructure (Hetzner VPS layout)
 
+> **SSOT scope:** Ez a fájl a **VPS fizikai layout SSOT-je**: szerver-választás,
+> OS hardening, port allokáció, stack-telepítés, deploy script, monitoring,
+> DR. Itt található a teljes Postgres séma (pillér-state blob modell) is.
+>
+> **Mit NEM találsz itt:**
+> - Lépésről-lépésre action plan a következő sessionhez → [`hetzner-migration.md`](./hetzner-migration.md)
+> - Absztrakt 9-fázis strangler-fig stratégia → [`migration-strangler-fig.md`](./migration-strangler-fig.md)
+> - Élő env-vár katalógus → [`../current-state/env-vars.md`](../current-state/env-vars.md)
+>
+> **⚠️ Postgres séma-választás:** Ez a fájl a **pillér-state blob** modellt
+> javasolja (`pillar_state_*` táblák, generic state_key/state_value).
+> A `hetzner-migration.md` ehhez képest **per-bot normalizált séma**
+> alternatívát ad (`hl_sessions`, `hl_positions`, `hl_fills`, `fr_*`).
+> A tényleges választás a következő migráló session feladata — addig
+> mindkét opció dokumentumban él.
+>
 > **Dátum:** 2026-04-24
 > **Cél:** A Netlify-ról saját VPS-re költöztetett EdgeCalc rendszer infrastruktúra-specifikációja. Ez a dokumentum **a fizikai/logikai layer**: szerver, network, processzek, szolgáltatások, deploy pipeline.
 > **Modell:** Pilléres (saját bankroll, saját kill switch pillérenként). Cross-venue risk koordinátor NINCS — minden pillér izolált.
-> **Kapcsolódó docok:** `migration-strangler-fig.md`, `risk-coordinator-considerations.md` (csak referencia, nem implementáljuk), `new-strategies.md`
 
 ---
 

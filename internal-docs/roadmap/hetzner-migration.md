@@ -1,9 +1,20 @@
 # Hetzner VPS Migrációs Action Plan
 
+> **SSOT scope:** Ez a fájl a **konkrét, EdgeCalc-specifikus VPS action
+> plan SSOT-je** — 7-fázisos lépéssor egy következő implementáló
+> sessionhez. Postgres séma + Bun/PM2 parancsok + acceptance criteria
+> minden fázishoz.
+>
+> **Mit NEM találsz itt:**
+> - VPS fizikai layout (OS, hardening, deploy script, monitoring)
+>   → [`hetzner-infrastructure.md`](./hetzner-infrastructure.md)
+> - Absztrakt 9-fázis strangler-fig stratégia (Netlify Function → VPS
+>   process mapping) → [`migration-strangler-fig.md`](./migration-strangler-fig.md)
+> - Risk koordinátor trade-off → [`risk-coordinator-considerations.md`](./risk-coordinator-considerations.md)
+> - 37 stratégia-katalógus → [`new-strategies.md`](./new-strategies.md)
+>
 > **Olvasás sorrend:** ezt a fájlt egy következő session-nek készítettük el.
-> A meglévő `internal-docs/roadmap/` doksik (`hetzner-infrastructure.md`,
-> `migration-strangler-fig.md`, `risk-coordinator-considerations.md`) megtartják az érvényüket —
-> ez a plan a **konkrét, EdgeCalc-specifikus** lépéseket írja le, amiket
+> Ez a plan a **konkrét, EdgeCalc-specifikus** lépéseket írja le, amiket
 > egy implementáló sessionben sorrendben végre lehet hajtani.
 
 ---
