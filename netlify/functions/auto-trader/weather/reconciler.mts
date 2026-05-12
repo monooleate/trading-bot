@@ -56,6 +56,10 @@ export interface ReconcileDetail {
   date:          string;
   bucketLabel:   string;
   predictedMaxC: number;
+  /** Position direction (YES = bot bets the bucket WILL happen,
+   *  NO = bet that it WON'T). Needed by the UI to explain *why* a
+   *  tentative outcome shows leaning W/L when the bucket itself was met. */
+  direction?:    "YES" | "NO";
   source?:       "polymarket" | "metar-fallback";
   actualMaxC?:   number;          // METAR-only
   isWin?:        boolean;
@@ -164,6 +168,7 @@ export async function runWeatherReconciler(paperMode: boolean = true): Promise<R
         details.push({
           market: pos.market, city: meta.city, date: meta.date,
           bucketLabel: meta.bucketLabel, predictedMaxC: meta.predictedMaxC,
+          direction: pos.direction,
           status: "pending",
           reason: "Polymarket has not resolved yet, METAR fallback not eligible",
           tentative,
@@ -177,6 +182,7 @@ export async function runWeatherReconciler(paperMode: boolean = true): Promise<R
         details.push({
           market: pos.market, city: meta.city, date: meta.date,
           bucketLabel: meta.bucketLabel, predictedMaxC: meta.predictedMaxC,
+          direction: pos.direction,
           status: "no-meta",
           reason: `Unknown city: ${meta.city}`,
         });
@@ -189,6 +195,7 @@ export async function runWeatherReconciler(paperMode: boolean = true): Promise<R
         details.push({
           market: pos.market, city: meta.city, date: meta.date,
           bucketLabel: meta.bucketLabel, predictedMaxC: meta.predictedMaxC,
+          direction: pos.direction,
           status: "fetch-failed",
           reason: `Polymarket pending and METAR fetch failed for ${meta.stationIcao}`,
         });
@@ -304,6 +311,7 @@ export async function runWeatherReconciler(paperMode: boolean = true): Promise<R
     details.push({
       market: pos.market, city: meta.city, date: meta.date,
       bucketLabel: meta.bucketLabel, predictedMaxC: meta.predictedMaxC,
+      direction: pos.direction,
       source: source!,
       actualMaxC: actualMaxC ?? undefined,
       isWin,

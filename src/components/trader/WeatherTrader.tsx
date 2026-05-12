@@ -244,11 +244,48 @@ export default function WeatherTrader({ bankroll }: { bankroll?: number }) {
                   </span>
                 )}
               </h3>
-              {r.details.map((d: any, i: number) => (
+              {r.details.map((d: any, i: number) => {
+                // Bucket-condition explainer: was the bucket itself satisfied
+                // by the observed temperature? E.g. "22°C or higher" + 24°C =
+                // bucket met (YES wins, NO loses). Helps the operator see
+                // *why* a 24°C reading leads to a LOSS — direction inverts it.
+                const tentActual = d.tentative?.actualMaxC ?? null;
+                let bucketExplain = "";
+                if (tentActual !== null) {
+                  const tail = /\bor\s+below\b|\bor\s+lower\b/i.test(d.bucketLabel) ? "below"
+                             : /\bor\s+(higher|above|more)\b/i.test(d.bucketLabel) ? "above"
+                             : "exact";
+                  const m = /(\d+(?:\.\d+)?)/.exec(d.bucketLabel);
+                  const isF = /°\s*F/i.test(d.bucketLabel);
+                  const bucketC = m ? (isF ? (parseFloat(m[1]) - 32) * 5 / 9 : parseFloat(m[1])) : null;
+                  if (bucketC !== null) {
+                    const bucketMet = tail === "below"  ? tentActual <= bucketC + 0.5
+                                    : tail === "above"  ? tentActual >= bucketC - 0.5
+                                    : Math.abs(tentActual - bucketC) < 0.5;
+                    bucketExplain = bucketMet
+                      ? `bucket teljesült (YES nyer) → bot ${d.direction ?? "?"}-t fogadott → ${d.direction === "YES" ? "WIN" : "LOSS"}`
+                      : `bucket NEM teljesült (NO nyer) → bot ${d.direction ?? "?"}-t fogadott → ${d.direction === "NO" ? "WIN" : "LOSS"}`;
+                  }
+                }
+                return (
                 <div key={i} className={`ts-row ts-row-${d.status === "settled" ? "pass" : d.status === "pending" ? "skip" : "fail"}`}>
                   <div className="ts-row-main">
                     <div className="ts-row-title">
                       {d.city} · {d.date} · <span style={{ color: "var(--muted)" }}>{d.bucketLabel}</span>
+                      {d.direction && (
+                        <span style={{
+                          marginLeft: 8,
+                          padding: "0 5px",
+                          borderRadius: 2,
+                          fontSize: "0.62rem",
+                          fontWeight: 700,
+                          background: d.direction === "YES" ? "rgba(200,241,53,0.15)" : "rgba(241,53,53,0.15)",
+                          color: d.direction === "YES" ? "var(--accent)" : "var(--danger)",
+                          border: `1px solid ${d.direction === "YES" ? "var(--accent)" : "var(--danger)"}`,
+                        }}>
+                          bot bet: {d.direction}
+                        </span>
+                      )}
                     </div>
                     <div className="ts-row-reason">
                       {d.status === "settled" && (
@@ -266,7 +303,14 @@ export default function WeatherTrader({ bankroll }: { bankroll?: number }) {
                         {d.tentative.isWin ? "🟢 leaning WIN" : "🔴 leaning LOSS"}
                         {" · "}METAR-preview max <strong>{formatTempForBucket(d.tentative.actualMaxC, d.bucketLabel)}</strong>
                         {" · "}tentative PnL <strong>{d.tentative.pnl >= 0 ? "+" : ""}${d.tentative.pnl.toFixed(2)}</strong>
-                        <span style={{ color: "var(--muted)", marginLeft: 8 }}>(informational — final settle Polymarket/METAR-on)</span>
+                        {bucketExplain && (
+                          <div style={{ color: "var(--muted)", marginTop: 2, fontSize: "0.65rem" }}>
+                            {bucketExplain}
+                          </div>
+                        )}
+                        <span style={{ color: "var(--muted)", marginLeft: 0, fontSize: "0.62rem", display: "block", marginTop: 2 }}>
+                          (informational — final settle Polymarket/METAR-on)
+                        </span>
                       </div>
                     )}
                   </div>
@@ -274,7 +318,8 @@ export default function WeatherTrader({ bankroll }: { bankroll?: number }) {
                     {d.status}
                   </span>
                 </div>
-              ))}
+                );
+              })}
               {(r.ready ?? 0) === 0 && (r.scanned ?? 0) > 0 && (
                 <div className="ts-row-reason" style={{ padding: "0.6rem", color: "var(--muted)", fontSize: "0.7rem" }}>
                   Egyik pozíció se ért meg még a settle-ig. A weather bot a `reconcileAfter` időpont után
