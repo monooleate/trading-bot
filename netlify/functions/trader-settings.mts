@@ -423,7 +423,7 @@ export default async function handler(req: Request, _ctx: Context) {
   // GET: return defaults + (if authed) saved overrides
   if (req.method === "GET") {
     const auth = await checkAuth(req);
-    const overrides = auth.ok ? await loadRuntimeOverrides() : {};
+    const rawOverrides = auth.ok ? await loadRuntimeOverrides() : {};
     const env = getTraderConfig();
     const btc = getBtcExitConfig();
     // Build the effective view dynamically: every key in SCHEMA falls back to
@@ -441,9 +441,25 @@ export default async function handler(req: Request, _ctx: Context) {
       btcEntryWindowEndMs:   btc.entryWindowEndMs,
       btcHoldToEndCutoffMs:  btc.holdToEndCutoffMs,
     };
+    // Filter rawOverrides → only keys whose value actually DIFFERS from the
+    // effective default. The "Lazább/Normál/Szigorú" preset bundles save
+    // every field they touch into Blobs, even when the preset value equals
+    // the schema/env default. Those entries are technically overrides but
+    // semantically no-ops, and surfacing them as "override" on the UI
+    // misleads the operator. Float-tolerant equality so 0.40 vs 0.4000000001
+    // doesn't flag noise.
+    const eqNum = (a: number, b: number) => Math.abs(a - b) < 1e-9;
+    const overrides: Record<string, number> = {};
+    for (const [k, v] of Object.entries(rawOverrides)) {
+      if (typeof v !== "number") continue;
+      const def = envByKey[k] ?? (SCHEMA as any)[k]?.default;
+      if (typeof def !== "number" || !eqNum(v, def)) {
+        overrides[k] = v;
+      }
+    }
     const effective: Record<string, number> = {};
     for (const [k, spec] of Object.entries(SCHEMA)) {
-      effective[k] = (overrides as any)[k] ?? envByKey[k] ?? spec.default;
+      effective[k] = (rawOverrides as any)[k] ?? envByKey[k] ?? spec.default;
     }
     return new Response(
       JSON.stringify({ ok: true, schema: SCHEMA, effective, overrides, presets: PRESETS, authed: auth.ok }),
@@ -472,18 +488,44 @@ export default async function handler(req: Request, _ctx: Context) {
 
     const existing = await loadRuntimeOverrides();
     const merged = { ...existing, ...v.overrides };
+    // Prune entries that match the effective default — keeps the Blobs
+    // store free of no-op overrides (typical after a preset apply that
+    // happens to set some fields to their schema/env default). Mirrors
+    // the GET-time filter so the round-trip is idempotent.
+    const env = getTraderConfig();
+    const btc = getBtcExitConfig();
+    const envByKey: Record<string, number | undefined> = {
+      edgeThreshold:         env.edgeThreshold,
+      maxKellyFraction:      env.maxKellyFraction,
+      cooldownSeconds:       env.cooldownSeconds,
+      sessionLossLimit:      env.sessionLossLimit,
+      btcTpTarget:           btc.tpTarget,
+      btcSlTarget:           btc.slTarget,
+      btcEntryWindowStartMs: btc.entryWindowStartMs,
+      btcEntryWindowEndMs:   btc.entryWindowEndMs,
+      btcHoldToEndCutoffMs:  btc.holdToEndCutoffMs,
+    };
+    const eqNum = (a: number, b: number) => Math.abs(a - b) < 1e-9;
+    const pruned: Record<string, number> = {};
+    for (const [k, val] of Object.entries(merged)) {
+      if (typeof val !== "number") continue;
+      const def = envByKey[k] ?? (SCHEMA as any)[k]?.default;
+      if (typeof def !== "number" || !eqNum(val, def)) {
+        pruned[k] = val;
+      }
+    }
     try {
       const store = getStore(STORE_NAME);
       await store.set(
         KEY,
-        JSON.stringify({ overrides: merged, savedAt: new Date().toISOString() }),
+        JSON.stringify({ overrides: pruned, savedAt: new Date().toISOString() }),
       );
     } catch (err: any) {
       return new Response(JSON.stringify({ ok: false, reason: `blobs_error: ${err.message}` }), {
         status: 500, headers: CORS,
       });
     }
-    return new Response(JSON.stringify({ ok: true, overrides: merged }), { status: 200, headers: CORS });
+    return new Response(JSON.stringify({ ok: true, overrides: pruned }), { status: 200, headers: CORS });
   }
 
   return new Response(JSON.stringify({ ok: false, reason: "method_not_allowed" }), {
