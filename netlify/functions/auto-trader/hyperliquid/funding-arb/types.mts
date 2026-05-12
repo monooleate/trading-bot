@@ -99,4 +99,9 @@ export interface FrArbConfig {
   minSpreadToClose:   number;   // close when spread falls below this
   feeRoundtripHl:     number;   // HL taker+taker
   feeRoundtripBinance: number;  // Binance spot taker+taker
+  // Sanity ceiling on the observed spread. Real funding spreads ~max
+  // around 0.1%/h even in extreme regimes; anything above 0.5%/h is
+  // almost certainly a feed glitch (one side returned NaN, wrong tick,
+  // or stale cache). Default 0.005 = 0.5%/h ≈ 4380%/yr ann.
+  maxSpreadHourly?:   number;
 }

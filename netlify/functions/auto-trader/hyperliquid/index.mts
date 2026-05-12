@@ -210,6 +210,8 @@ async function runHyperliquidTraderInner(
     "Aktív signal források ≥ 3",
     "Resolution risk ≠ SKIP",
     "Net edge ≥ küszöb",
+    "Sanity cap (gross edge ≤ cap)",
+    "Combiner trust (WATCH + extrém edge)",
     "HL price elérhető",
     "Méret > 0",
   ] as const;
@@ -354,6 +356,57 @@ async function runHyperliquidTraderInner(
         hint: `Edge − roundtrip taker fees. ${config.paperMode ? "Paper" : "Live"} küszöb.`,
       });
 
+      // Gate 11 — Sanity cap on gross edge. The combiner inherits the
+      // same failure modes as crypto (signal source defaulting to 0.5,
+      // feed crash). For HL, signal.edge = |finalProb - 0.5| × 2, so
+      // edge > 0.40 means combiner conviction ≥ 70% — strong but ok at
+      // that bound; above 40% it's almost always hallucinated.
+      const maxEdgeCapHl = config.maxEdgeCap ?? 0.40;
+      const sanityOkHl = signal.edge <= maxEdgeCapHl;
+      coinGates.push({
+        label: HL_GATE_LABELS[10],
+        passed: sanityOkHl,
+        actual: `${(signal.edge * 100).toFixed(2)}%`,
+        required: `≤ ${(maxEdgeCapHl * 100).toFixed(0)}%`,
+        hint: "Túl nagy gross edge szinte mindig model-error (signal default, feed crash) — nem alpha.",
+      });
+
+      // Gate 12 — Combiner trust gate. WATCH + extreme edge = model bug.
+      // Same logic as crypto but reads signal.combinerRecommendation
+      // (added in 2026-05-12 to expose the combiner's own verdict).
+      const watchThreshHl = config.watchExtremeEdgeThreshold ?? 0.20;
+      const recHl = (signal.combinerRecommendation || "").toUpperCase();
+      const isWatchHl   = recHl === "WATCH";
+      const isExtremeHl = signal.edge > watchThreshHl;
+      const trustOkHl   = !(isWatchHl && isExtremeHl);
+      coinGates.push({
+        label: HL_GATE_LABELS[11],
+        passed: trustOkHl,
+        actual: `${recHl || "n/a"} @ ${(signal.edge * 100).toFixed(1)}% gross edge`,
+        required: isWatchHl
+          ? `gross edge ≤ ${(watchThreshHl * 100).toFixed(0)}% (WATCH miatt)`
+          : "n/a (csak WATCH-on alkalmazandó)",
+        hint: "WATCH = alacsony combiner IR. Ha mégis nagy edge-et jelez, az tipikusan model-error.",
+      });
+
+      // Net edge / sanity / trust gate failures all short-circuit before
+      // we hit makeHlDecision — surface the failing row with the full
+      // gate snapshot so the operator can see exactly which one tripped.
+      if (!netEdgeOk || !sanityOkHl || !trustOkHl) {
+        const reason = !netEdgeOk
+          ? `Net edge ${(netEdgePre * 100).toFixed(2)}% < ${(threshold * 100).toFixed(1)}%`
+          : !sanityOkHl
+          ? `Gross edge ${(signal.edge * 100).toFixed(1)}% > sanity cap ${(maxEdgeCapHl * 100).toFixed(0)}%`
+          : `Combiner trust: ${recHl} + ${(signal.edge * 100).toFixed(1)}% edge — likely model error`;
+        results.push({
+          coin, action: "skip", reason,
+          direction: signal.direction, edge: netEdgePre,
+          predictedProb: signal.finalProb, marketPrice: signal.marketPrice,
+          gates: snapGates(),
+        });
+        continue;
+      }
+
       // Now invoke makeHlDecision for the actual short-circuit verdict.
       // It uses the same logic as gates 4–10, so its `shouldTrade` and our
       // gate list agree. We re-use its `reason` string for the row footer.
@@ -368,10 +421,10 @@ async function runHyperliquidTraderInner(
         continue;
       }
 
-      // Gate 11 — HL price available
+      // Gate 13 — HL price available
       const hlPrice = await getCurrentPrice(coin, config.paperMode);
       coinGates.push({
-        label: HL_GATE_LABELS[10],
+        label: HL_GATE_LABELS[12],
         passed: !!hlPrice,
         actual: hlPrice ? `$${hlPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : "nincs adat",
         required: "elérhető",
@@ -387,7 +440,7 @@ async function runHyperliquidTraderInner(
         continue;
       }
 
-      // Gate 12 — Size > 0 after Kelly + tick-step rounding
+      // Gate 14 — Size > 0 after Kelly + tick-step rounding
       const sized = kellyToPerpSize({
         bankrollUSDC:   session.bankrollCurrent,
         kellyFraction:  signal.kellyFraction,
@@ -405,7 +458,7 @@ async function runHyperliquidTraderInner(
       });
       const sizeOk = sized.sizeCoins > 0;
       coinGates.push({
-        label: HL_GATE_LABELS[11],
+        label: HL_GATE_LABELS[13],
         passed: sizeOk,
         actual: sizeOk
           ? `${sized.sizeCoins.toFixed(4)} ${coin} ($${sized.sizeUSDC.toFixed(0)} · ${sized.leverageUsed}× lev)`

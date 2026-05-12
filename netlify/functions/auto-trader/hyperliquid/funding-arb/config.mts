@@ -13,6 +13,7 @@ export function getFrArbConfig(): FrArbConfig {
     minSpreadToClose:    parseFloat(process.env.FR_MIN_SPREAD_TO_CLOSE    || "0.00005"),
     feeRoundtripHl:      parseFloat(process.env.FR_FEE_ROUNDTRIP_HL       || "0.0009"),   // 0.045% × 2
     feeRoundtripBinance: parseFloat(process.env.FR_FEE_ROUNDTRIP_BINANCE  || "0.002"),    // 0.1%  × 2
+    maxSpreadHourly:     parseFloat(process.env.FR_MAX_SPREAD_HOURLY      || "0.005"),    // 0.5%/h sanity cap
   };
 }
 
@@ -34,6 +35,7 @@ export async function getEffectiveFrArbConfig(): Promise<FrArbConfig> {
       maxHoldDays:        ov.frMaxHoldDays        ?? env.maxHoldDays,
       maxCapitalPct:      ov.frMaxCapitalPct      ?? env.maxCapitalPct,
       maxArbPositions:    ov.frMaxOpenPositions   ?? env.maxArbPositions,
+      maxSpreadHourly:    ov.frMaxSpreadHourly    ?? env.maxSpreadHourly,
     };
   } catch {
     return env;

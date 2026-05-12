@@ -52,6 +52,8 @@ export function getHlConfig(): HlTraderConfig {
     tpPctMax:           parseFloat(process.env.HL_TP_PCT_MAX           || "0.02"),
     slPctMax:           parseFloat(process.env.HL_SL_PCT_MAX           || "0.01"),
     minActiveSignals:   parseInt  (process.env.HL_MIN_ACTIVE_SIGNALS   || "3", 10),
+    maxEdgeCap:               parseFloat(process.env.HL_MAX_EDGE_CAP                || "0.40"),
+    watchExtremeEdgeThreshold: parseFloat(process.env.HL_WATCH_EXTREME_EDGE_THRESHOLD || "0.20"),
     paperSimVersion:    HL_PAPER_SIM_VERSION,
   };
 }
@@ -77,6 +79,8 @@ export async function getEffectiveHlConfig(): Promise<HlTraderConfig> {
       consecutiveLossLimit:      ov.hlConsecutiveLossLimit    ?? env.consecutiveLossLimit,
       volGateRvPct:              ov.hlVolGateRvPct            ?? env.volGateRvPct,
       minActiveSignals:          ov.hlMinActiveSignals        ?? env.minActiveSignals,
+      maxEdgeCap:                ov.hlMaxEdgeCap                ?? env.maxEdgeCap,
+      watchExtremeEdgeThreshold: ov.hlWatchExtremeEdgeThreshold ?? env.watchExtremeEdgeThreshold,
     };
   } catch {
     return env;

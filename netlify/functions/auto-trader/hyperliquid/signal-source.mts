@@ -35,6 +35,10 @@ export interface HlSignalResult {
   marketSlug:    string;
   marketPrice:   number;
   resolutionCategory?: "LOW" | "MEDIUM" | "HIGH" | "SKIP";
+  // Combiner's own action verdict — "BUY YES" / "BUY NO" / "WAIT" / "WATCH"
+  // / "SKIP". Used by the HL trust-gate to filter trades the combiner
+  // itself flagged as low-conviction (WATCH) but where edge is extreme.
+  combinerRecommendation?: string;
   timestamp:     string;
 }
 
@@ -98,6 +102,9 @@ export async function getHlSignalForCoin(coin: HlCoin): Promise<HlSignalResult |
       marketSlug:     slug,
       marketPrice:    d.market?.yes_price ?? 0.5,
       resolutionCategory: d.resolution_risk?.category,
+      combinerRecommendation: typeof d.recommendation?.action === "string"
+        ? d.recommendation.action
+        : undefined,
       timestamp:      d.fetched_at || new Date().toISOString(),
     };
   } catch {

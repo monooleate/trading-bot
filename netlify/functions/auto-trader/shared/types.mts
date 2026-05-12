@@ -324,6 +324,18 @@ export interface TraderConfig {
   // be trusted. Was hardcoded 2 in the decision-engine; now Settings-tunable
   // via cryptoMinActiveSignals (default 2). Higher = stricter convergence.
   minActiveSignals?: number;
+  // Sanity cap for gross edge. Above this threshold the divergence between
+  // model prob and market price is almost always model error (e.g. price
+  // drifted deep-ITM, single signal source defaulted to 0.5 and drove the
+  // combiner output, or a feed crash). Matches the weather bot's same-named
+  // gate. Default 0.40 = 40% gross edge.
+  maxEdgeCap?: number;
+  // WATCH-recommendation + extreme-edge gate. When the combiner emits
+  // WATCH (low IR / low conviction) AND the gross edge exceeds this
+  // threshold, the entry is blocked. The intuition: a combiner that's
+  // unsure about its own output but reports a 30%+ edge is almost
+  // certainly hallucinating. Default 0.20 = 20% gross edge.
+  watchExtremeEdgeThreshold?: number;
 }
 
 export interface PolymarketConfig {

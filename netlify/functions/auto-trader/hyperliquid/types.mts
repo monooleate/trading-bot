@@ -111,6 +111,14 @@ export interface HlTraderConfig {
   // Min signals from the 8-signal combiner. Default 3 (HL has higher fees
   // than Polymarket, so requires more convergence than crypto's 2).
   minActiveSignals?: number;
+  // Sanity cap on the combiner's gross edge. HL uses the same Polymarket-
+  // driven combiner as crypto, so it inherits the same hallucination
+  // failure modes (signal source defaulting to 0.5, drift, feed crash).
+  // Default 0.40 = 40% gross edge.
+  maxEdgeCap?: number;
+  // WATCH-recommendation + extreme-edge gate, same semantics as crypto.
+  // Default 0.20 = 20% gross edge.
+  watchExtremeEdgeThreshold?: number;
   // Paper sim version: bumped when paper PnL semantics change so old
   // sessions auto-reset on load. v2 adds TP/SL clamps + paper funding
   // accrual + paper-side volatility gate.

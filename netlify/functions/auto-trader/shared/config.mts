@@ -35,6 +35,8 @@ export function getTraderConfig(): TraderConfig {
     combinerConfidenceMin: parseFloat(process.env.COMBINER_CONFIDENCE_MIN || "0.05"),
     maxOpenPositions:      parseInt(process.env.CRYPTO_MAX_OPEN_POSITIONS  || "5", 10),
     minActiveSignals:      parseInt(process.env.CRYPTO_MIN_ACTIVE_SIGNALS  || "2", 10),
+    maxEdgeCap:               parseFloat(process.env.CRYPTO_MAX_EDGE_CAP                || "0.40"),
+    watchExtremeEdgeThreshold: parseFloat(process.env.CRYPTO_WATCH_EXTREME_EDGE_THRESHOLD || "0.20"),
   };
 }
 
@@ -72,6 +74,8 @@ export async function getEffectiveTraderConfig(): Promise<TraderConfig> {
       combinerConfidenceMin: ov.combinerConfidenceMin ?? env.combinerConfidenceMin,
       maxOpenPositions:      ov.cryptoMaxOpenPositions ?? env.maxOpenPositions,
       minActiveSignals:      ov.cryptoMinActiveSignals ?? env.minActiveSignals,
+      maxEdgeCap:                ov.cryptoMaxEdgeCap                ?? env.maxEdgeCap,
+      watchExtremeEdgeThreshold: ov.cryptoWatchExtremeEdgeThreshold ?? env.watchExtremeEdgeThreshold,
     };
   } catch {
     return env;

@@ -103,12 +103,14 @@ export const CRYPTO_GATE_LABELS = [
   "Aktív signal források",
   "Combiner confidence (|p − 0.5|)",
   "Combiner recommendation",
+  "Combiner trust (WATCH + extrém edge)",
   "Resolution-risk gate",
   "Market cooldown",
   "Open interest ≥ küszöb",
   "Entry window (BTC short markets)",
   "OB imbalance konvergencia",
   "Net edge ≥ küszöb",
+  "Sanity cap (gross edge ≤ cap)",
   "Kelly méret ≥ minimum",
   "Kelly méret ≤ cap",
 ] as const;
@@ -244,6 +246,34 @@ export function makeDecision(
   });
   if (!recOk) reasons.push(`Combiner recommendation: ${recAction || "n/a"} (SKIP veto)`);
 
+  // 4b. Combiner trust gate — WATCH + extreme edge = model bug, not alpha.
+  //
+  // Rationale: WATCH is the combiner's own "low IR / low conviction" signal.
+  // Normally we let WATCH through because the combiner's kelly_q is
+  // structurally broken (Gate 4 hint above). BUT — when a low-conviction
+  // combiner reports a 20%+ gross edge, that combination is almost
+  // certainly the hallucinated kind: one signal source defaulted to 0.5
+  // and pulled the weighted average toward an extreme number, or the
+  // market drifted into a region where the combiner has no calibration.
+  // Distinct from the sanity cap (Gate 11) which is a hard ceiling on
+  // ANY recommendation — this one is conviction-conditional.
+  const watchExtremeThresh = config.watchExtremeEdgeThreshold ?? 0.20;
+  const isWatch     = recAction === "WATCH";
+  const isExtreme   = grossEdge > watchExtremeThresh;
+  const trustOk     = !(isWatch && isExtreme);
+  gates.push({
+    label: "Combiner trust (WATCH + extrém edge)",
+    passed: trustOk,
+    actual:   `${recAction || "n/a"} @ ${(grossEdge * 100).toFixed(1)}% gross edge`,
+    required: isWatch
+      ? `gross edge ≤ ${(watchExtremeThresh * 100).toFixed(0)}% (WATCH miatt)`
+      : "n/a (csak WATCH-on alkalmazandó)",
+    hint: "WATCH = alacsony combiner IR. Ha mégis nagy edge-et jelez, az tipikusan model-error (egy signal source 0.5-re defaultolt és magával húzta a kombinátort).",
+  });
+  if (!trustOk) reasons.push(
+    `Combiner trust gate: WATCH recommendation + ${(grossEdge * 100).toFixed(1)}% gross edge > ${(watchExtremeThresh * 100).toFixed(0)}% — likely model error`,
+  );
+
   // 5. Resolution-risk gate (audit fix #5, 2026-05-11). The combiner's
   // analyseResolutionRisk() helper flags markets with off-platform
   // resolution sources, ambiguous rules, or dispute history. Previously
@@ -351,6 +381,25 @@ export function makeDecision(
   if (!edgeOk) reasons.push(
     `Net edge ${(netEdge * 100).toFixed(1)}% < threshold ${(config.edgeThreshold * 100)}% ` +
     `(gross ${(grossEdge * 100).toFixed(1)}% - fees ${(config.roundtripFeePct * 100).toFixed(1)}%)`,
+  );
+
+  // 10b. Sanity cap on gross edge. Mirrors the weather bot's same-named
+  // gate: any divergence above ~40% is structurally model error, not real
+  // alpha. Common causes: a feed source crashed and defaulted to 0.5
+  // driving the combiner average; or the price drifted deep-OTM/deep-ITM
+  // after entry (the open-position carve-out in findBtcMarkets surfaces
+  // these markets even when out-of-band, so the gate fires loudly).
+  const maxEdgeCap = config.maxEdgeCap ?? 0.40;
+  const sanityOk   = grossEdge <= maxEdgeCap;
+  gates.push({
+    label: "Sanity cap (gross edge ≤ cap)",
+    passed: sanityOk,
+    actual:   `${(grossEdge * 100).toFixed(2)}%`,
+    required: `≤ ${(maxEdgeCap * 100).toFixed(0)}%`,
+    hint: "Túl nagy gross edge szinte mindig model-error (signal default, drift, feed crash) — nem alpha.",
+  });
+  if (!sanityOk) reasons.push(
+    `Gross edge ${(grossEdge * 100).toFixed(1)}% > sanity cap ${(maxEdgeCap * 100).toFixed(0)}% — likely model error, not opportunity`,
   );
 
   // 11. Kelly méret ≥ minimum (audit fix #1, 2026-05-11). Replaces the

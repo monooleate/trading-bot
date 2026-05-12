@@ -340,3 +340,99 @@ a piac mozgott az entry óta).
   (mert mostantól a scan-ben vannak, nem dropped). Az op-pos market-ek
   scan-eredménye a normál `results` listában jelenik meg, `action: "skip"`,
   `reason: "Already has open position"`.
+
+## (k) Sanity-cap + Combiner-trust gates — model-error védelem 3 bot-nál
+
+**Motiváció:** A live Why? Live-Gates panel egy nyitott crypto pozíción
+12/12 ✓-t mutatott, miközben a Net edge **+44.68%** volt. Egy 48% gross
+edge szinte mindig **model-error** (egy signal source 0.5-re defaultolt
+és magával húzta a kombinátor súlyozott átlagát, vagy a price drift-elt
+deep-ITM-re), nem reális alfa. A weather bot-nál már volt `Sanity cap
+(gross edge ≤ 40%)` gate, de a crypto / HL Perp védtelen volt. A
+combiner saját WATCH-recommendation jelzése sem blokkolt — a 2026-05-12
+(d) Gate 4 fix után csak SKIP-en akadunk fenn.
+
+### Crypto (`crypto/decision-engine.mts`)
+
+12 → **14 gate**. Két új gate:
+
+1. **`Sanity cap (gross edge ≤ cap)`** — bárhol a gross edge meghaladja
+   a `config.maxEdgeCap`-et (default 40%), a trade vétójele. Pontosan
+   ugyanaz a logika mint a weather bot azonos nevű gate-jénél.
+2. **`Combiner trust (WATCH + extrém edge)`** — ha a combiner WATCH-ot
+   ajánl ÉS a gross edge > `config.watchExtremeEdgeThreshold` (default
+   20%), a trade vétójele. Intuíció: a kombinátor saját bizonytalansága
+   (low IR) + nagy edge ~mindig hallucináció.
+
+Új config-knobok:
+- `maxEdgeCap` (env: `CRYPTO_MAX_EDGE_CAP`, default 0.40)
+- `watchExtremeEdgeThreshold` (env: `CRYPTO_WATCH_EXTREME_EDGE_THRESHOLD`, default 0.20)
+
+Settings-override: `cryptoMaxEdgeCap`, `cryptoWatchExtremeEdgeThreshold`.
+
+### HL Perp (`hyperliquid/index.mts`)
+
+10 → **12 gate** + 2 új gate ugyanazzal a szemantikával:
+
+- HL `signal.edge = |finalProb − 0.5| × 2` (directional conviction).
+  Edge 0.40 = combiner 70% biztos. Felette gyanús.
+- `signal-source.mts`-ben felvettem a `combinerRecommendation` mezőt,
+  ezt a trust-gate olvassa.
+
+Új config-knobok:
+- `maxEdgeCap` (env: `HL_MAX_EDGE_CAP`, default 0.40)
+- `watchExtremeEdgeThreshold` (env: `HL_WATCH_EXTREME_EDGE_THRESHOLD`, default 0.20)
+
+Settings-override: `hlMaxEdgeCap`, `hlWatchExtremeEdgeThreshold`.
+
+### Funding-arb (`hyperliquid/funding-arb/index.mts`)
+
+6 → **7 gate**. Új gate:
+
+- **`Spread ≤ sanity cap`** — ha a funding spread meghaladja a
+  `maxSpreadHourly`-t (default 0.5%/h ≈ 4380%/yr), feed-glitch
+  védelem. A funding rate-ek a valóságban max ~0.1%/h-ra mennek fel.
+  WATCH+extreme NEM applicable — itt nincs combiner.
+
+Új config: `maxSpreadHourly` (env: `FR_MAX_SPREAD_HOURLY`, default 0.005),
+override: `frMaxSpreadHourly`.
+
+### Weather: NEM kellett változtatás ✓
+
+A weather bot már tartalmazta a `Sanity cap (gross edge ≤ 40%)` gate-et
+(8-fix audit, 2026-05-11). A bot nem combiner-driven (forecast σ
+confidence ad biztonsági réteget), ezért WATCH+extreme nem applicable.
+
+### Trade-count hatás
+
+- **Crypto:** új entry-k szinte nem érintettek — a normál top-3 in-band
+  scan ritkán produkál 40%+ gross edge-et (most pl. -0.4% volt mind a 3).
+  A két új gate főleg az **open-position display-en** fog tüzelni (a
+  drift-elt out-of-band pozíciókon), ami a valós viselkedést tükrözi
+  (a bot most sem nyitná meg újra). Becsült új trade csökkenés: <5%.
+- **HL Perp:** ugyanaz — a normál edge tartomány 0.15-0.35 körül, a 40%
+  ritkán éri el a sanity cap-et.
+- **F-Arb:** a 0.5%/h spread sanity cap **gyakorlatilag soha** nem fog
+  tüzelni normál market feed-en. Tisztán defenzív guard.
+
+### IC validáció hatás (Crypto Loose preset → 30+ paper trade)
+
+- A 48% edge "trades" zaj-szerűek az IC számoláshoz — kiszűrésük
+  **tisztább IC-t** ad. A Loose preset célja a 30 trade gyűjtése, nem
+  a zaj felgyűjtése, így ez pozitív hatás.
+
+### Files changed
+
+- `shared/types.mts`: TraderConfig új mezők (`maxEdgeCap`,
+  `watchExtremeEdgeThreshold`)
+- `shared/config.mts`: env defaultok + Blobs override-ok
+- `crypto/decision-engine.mts`: 2 új gate + CRYPTO_GATE_LABELS 14 elem
+- `hyperliquid/types.mts`: HlTraderConfig új mezők
+- `hyperliquid/config.mts`: env defaultok + Blobs override-ok
+- `hyperliquid/signal-source.mts`: `combinerRecommendation` field
+- `hyperliquid/index.mts`: 2 új gate + HL_GATE_LABELS 14 elem +
+  shifted index referenciák ([10] → [12] HL-price, [11] → [13] Size)
+- `hyperliquid/funding-arb/types.mts`: FrArbConfig új mező
+- `hyperliquid/funding-arb/config.mts`: env default + Blobs override
+- `hyperliquid/funding-arb/index.mts`: 1 új gate + ARB_GATE_LABELS 7 elem
+  + shifted index referenciák

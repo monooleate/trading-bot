@@ -379,6 +379,8 @@ netlify deploy --prod --dir=dist
 - **Settings preset rendszer**: Loose/Normal/Strict per-bot kapcsoló a Settings tabon, leiratokkal. 16 új knob (HL + F-Arb + Sports — eddig env-only)
 - **Live-gate snapshot open pozíciókon**: a "Why?" panel mostantól nemcsak a frozen entry-decision-t mutatja, hanem a current gate-állapotot is (narancs strip, `evaluatedAt`)
 - **Live-gate fix (mind a 4 bot)**: a Why? Live-Gates panel most a VALÓS jelenlegi gate-állapotot mutatja (crypto + weather loop megszűnt korai-skip-pelni "already open" stub-bal). UI filter dobja a "not evaluated" placeholdereket + open-position-uniqueness gate-eket — csak releváns gate-ek látszanak. Verdict frázis: *"MOST megnyitná"* / *"MOST NEM nyitná (N gate ✗)"*. (changelog §i)
+- **Open-position market scan (crypto + weather)**: `findBtcMarkets` új `includeSlugs` param a deep-OTM/ITM drift-elt nyitott pozíciók visszahozására. `scanList = [...topN, ...openPositionsBelowTopN]` mind a 2 bot-on. Max-open cap bypass already-open piacokon. (changelog §j)
+- **Sanity-cap + Combiner-trust gates (crypto + HL Perp + F-Arb)**: új védelem a 48% edge típusú model-error trade-ek ellen. Crypto: 12 → 14 gate (`Sanity cap ≤ 40%` + `Combiner trust WATCH + extrém edge`). HL: 10 → 12 gate (ugyanezek). F-Arb: 6 → 7 gate (`Spread ≤ 0.5%/h sanity cap`, feed-glitch védelem). Weather már tartalmazta — érintetlen. Becsült új-trade-impact: <5% mindenhol. (changelog §k)
 - **Weather audit**: 2 closed trade verified, mindkettő real Polymarket resolution-on zárt, PnL helyes
 - **Crypto bot diagnosztika**: a Combiner confidence gate (5%) blokkolt mindent — `Loose` preset 2%-ra állítja
 
