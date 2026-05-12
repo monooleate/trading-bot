@@ -22,6 +22,22 @@ import {
 import { useTradeExport } from "../shared/useTradeExport";
 import type { LiveReadinessReport } from "../shared/LiveReadinessBadge";
 
+// Bucket-aware unit helpers. Polymarket weather markets ship bucket labels
+// either in °F (US cities like Austin/NYC) or °C (most international). The
+// bot internally always works in °C; the UI must surface both prediction
+// AND tentative outcomes in the SAME unit as the bucket label so the
+// operator can compare apples-to-apples without mental conversion.
+function bucketUsesFahrenheit(bucketLabel: string): boolean {
+  return /°\s*F/i.test(bucketLabel);
+}
+function formatTempForBucket(celsius: number | null | undefined, bucketLabel: string): string {
+  if (typeof celsius !== "number" || !Number.isFinite(celsius)) return "—";
+  if (bucketUsesFahrenheit(bucketLabel)) {
+    return `${(celsius * 9 / 5 + 32).toFixed(1)}°F`;
+  }
+  return `${celsius.toFixed(1)}°C`;
+}
+
 // Weather Auto-Trader (Polymarket high-temp markets, paper-only on Netlify).
 // Same shell as the other 3 bots; the per-bot extras are the pending paper
 // positions card (awaiting Polymarket / METAR settlement) and the dropped
@@ -185,7 +201,8 @@ export default function WeatherTrader({ bankroll }: { bankroll?: number }) {
               direction: p.direction,
               entryText: `@${(p.avgEntry * 100).toFixed(0)}¢`,
               sizeText:  `$${p.size.toFixed(2)}`,
-              spreadText: `pred ${p.predictedMaxC}°C · ${p.date}`,
+              // Match prediction unit to the bucket's unit (°F city → °F pred).
+              spreadText: `pred ${formatTempForBucket(p.predictedMaxC, p.bucket)} · ${p.date}`,
               ageText:   inText,
               // Frozen-at-entry decision snapshot — toggles "Why?" panel.
               // null (older paper position pre-snapshot) renders the
@@ -247,7 +264,7 @@ export default function WeatherTrader({ bankroll }: { bankroll?: number }) {
                         marginTop: 2,
                       }}>
                         {d.tentative.isWin ? "🟢 leaning WIN" : "🔴 leaning LOSS"}
-                        {" · "}METAR-preview max <strong>{d.tentative.actualMaxC.toFixed(1)}°C</strong>
+                        {" · "}METAR-preview max <strong>{formatTempForBucket(d.tentative.actualMaxC, d.bucketLabel)}</strong>
                         {" · "}tentative PnL <strong>{d.tentative.pnl >= 0 ? "+" : ""}${d.tentative.pnl.toFixed(2)}</strong>
                         <span style={{ color: "var(--muted)", marginLeft: 8 }}>(informational — final settle Polymarket/METAR-on)</span>
                       </div>
@@ -280,7 +297,7 @@ export default function WeatherTrader({ bankroll }: { bankroll?: number }) {
               secondary: p.date,
               bucket: p.bucket,
               direction: p.direction,
-              predictionText: `pred ${p.predictedMaxC}°C`,
+              predictionText: `pred ${formatTempForBucket(p.predictedMaxC, p.bucket)}`,
               sizeText: `$${p.size.toFixed(2)}`,
               whenText: p.isReady ? "✓ ready to settle" : formatDuration(msUntil),
               isReady: p.isReady,
@@ -313,7 +330,11 @@ export default function WeatherTrader({ bankroll }: { bankroll?: number }) {
           {display.results?.map((r: any, i: number) => {
             const chips: ResultChip[] = [];
             if (r.predictedTemp !== undefined) {
-              chips.push({ label: `pred ${r.predictedTemp}°C`, tone: "info", title: "Forecast max temperature for the bucket" });
+              // Match the bucket's unit if known (°F city → °F pred).
+              const predLabel = r.bucket
+                ? `pred ${formatTempForBucket(r.predictedTemp, String(r.bucket))}`
+                : `pred ${r.predictedTemp}°C`;
+              chips.push({ label: predLabel, tone: "info", title: "Forecast max temperature for the bucket" });
             }
             if (r.bucket) {
               chips.push({ label: r.bucket, title: "Polymarket temperature bucket" });
