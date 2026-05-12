@@ -78,6 +78,7 @@ export default function HyperliquidTrader({ bankroll }: { bankroll?: number }) {
     edgeAtEntry: number | null;
     predictedProb: number | null;
     entryDecision: OpenPositionRationale | null;
+    liveGates: any;
   }>;
 
   function ageString(iso: string): string {
@@ -182,6 +183,7 @@ export default function HyperliquidTrader({ bankroll }: { bankroll?: number }) {
             // Frozen-at-entry rationale popover ("Why?"). Same shape as
             // crypto and weather; null = pre-snapshot legacy position.
             rationale:  p.entryDecision ?? null,
+            liveGates:  p.liveGates ?? null,
           }))}
         />
       )}

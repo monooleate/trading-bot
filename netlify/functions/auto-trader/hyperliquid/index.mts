@@ -13,7 +13,7 @@
 import { log } from "../shared/logger.mts";
 import { alertError, alertLiveBlocked } from "../shared/telegram.mts";
 import { computeLiveReadiness, shouldForcePaper, type LiveReadinessReport } from "../shared/live-readiness.mts";
-import { getHlConfig } from "./config.mts";
+import { getHlConfig, getEffectiveHlConfig } from "./config.mts";
 import { getHlSignalForCoin } from "./signal-source.mts";
 import { getCurrentPrice } from "./hl-client.mts";
 import { volatilityGate } from "./volatility-gate.mts";
@@ -73,7 +73,10 @@ async function runHyperliquidTraderInner(
   configOverride: HlTraderConfig | undefined,
   _source: "manual" | "cron",
 ): Promise<any> {
-  const baseConfig = configOverride ?? getHlConfig();
+  // Pull runtime Settings overrides every tick so the operator's
+   // Loose/Normal/Strict preset takes effect on the next cron run without
+   // a redeploy. Env-only fallback inside getEffectiveHlConfig.
+  const baseConfig = configOverride ?? await getEffectiveHlConfig();
   // Mutable clone so the live-readiness gate can flip paperMode back to
   // true when the paper track record hasn't met validation thresholds.
   const config: HlTraderConfig = { ...baseConfig };
@@ -582,6 +585,25 @@ export async function getHlStatus(): Promise<any> {
     });
   } catch {}
 
+  // Surface the "current gate state" per open position so the UI can show
+  // what the bot's decision-engine would say RIGHT NOW (as of the last cron
+  // tick) about that coin. Combined with the frozen entry-decision snapshot
+  // the operator can compare "why we entered" vs "would we enter again".
+  const lastScanResults: any[] | null = runStatus?.lastResult?.results ?? null;
+  const pickLiveScanForCoin = (coin: string) => {
+    if (!Array.isArray(lastScanResults)) return null;
+    const r = lastScanResults.find((x: any) => x?.coin === coin);
+    if (!r) return null;
+    return {
+      evaluatedAt: r.evaluatedAt ?? null,
+      action:      r.action      ?? null,
+      reason:      r.reason      ?? null,
+      direction:   r.direction   ?? null,
+      edge:        r.edge        ?? null,
+      gates:       Array.isArray(r.gates) ? r.gates : [],
+    };
+  };
+
   const openDetails = session.openPositions.map((p) => ({
     coin:         p.coin,
     direction:    p.direction,
@@ -595,6 +617,7 @@ export async function getHlStatus(): Promise<any> {
     edgeAtEntry:  p.edgeAtEntry ?? null,
     predictedProb: p.predictedProb ?? null,
     entryDecision: p.entryDecision ?? null,
+    liveGates:    pickLiveScanForCoin(p.coin),
   }));
 
   return {

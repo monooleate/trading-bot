@@ -15,3 +15,26 @@ export function getFrArbConfig(): FrArbConfig {
     feeRoundtripBinance: parseFloat(process.env.FR_FEE_ROUNDTRIP_BINANCE  || "0.002"),    // 0.1%  × 2
   };
 }
+
+/**
+ * Effective config = env defaults merged with runtime Blobs overrides.
+ * Mirrors getEffectiveHlConfig — Settings-tab tunable knobs override the
+ * env defaults so the operator can adjust the spread/OI/hold-days floors
+ * without redeploys.
+ */
+export async function getEffectiveFrArbConfig(): Promise<FrArbConfig> {
+  const env = getFrArbConfig();
+  try {
+    const mod: any = await import("../../../trader-settings.mts");
+    const ov = await mod.loadRuntimeOverrides();
+    return {
+      ...env,
+      minSpreadHourly:    ov.frMinSpreadHourly    ?? env.minSpreadHourly,
+      minOpenInterestUSD: ov.frMinOpenInterestUSD ?? env.minOpenInterestUSD,
+      maxHoldDays:        ov.frMaxHoldDays        ?? env.maxHoldDays,
+      maxCapitalPct:      ov.frMaxCapitalPct      ?? env.maxCapitalPct,
+    };
+  } catch {
+    return env;
+  }
+}

@@ -23,11 +23,24 @@ interface FieldSpec {
   help?: string;
 }
 
+interface PresetDefinition {
+  label: string;
+  description: string;
+  values: Record<string, number>;
+}
+
+interface CategoryPresets {
+  loose:  PresetDefinition;
+  normal: PresetDefinition;
+  strict: PresetDefinition;
+}
+
 interface ServerResponse {
   ok: boolean;
   schema: Record<string, FieldSpec>;
   effective: Record<string, number>;
   overrides: Record<string, number>;
+  presets?: Record<string, CategoryPresets>;
   authed: boolean;
 }
 
@@ -178,12 +191,37 @@ export default function SettingsPanel({ category, title, subtitle }: SettingsPan
   // live-trade lockout from any per-venue settings tab. Manual venues
   // (bybit / binance / polymarket-manual) don't have an auto-trader,
   // so the common gates wouldn't apply — those tabs stay focused.
-  const isAutoTraderCategory = category === "crypto" || category === "weather" || category === "hyperliquid";
+  const isAutoTraderCategory =
+    category === "crypto" || category === "weather" || category === "hyperliquid" ||
+    category === "funding-arb" || category === "sports";
   const visibleEntries = Object.entries(data.schema).filter(([, spec]) =>
     category
       ? spec.category === category || (isAutoTraderCategory && spec.category === "common")
       : true,
   );
+
+  // Pick the preset bundle for this category (if any). The Loose/Normal/Strict
+  // selector renders only when at least one of the three bundles exists.
+  const presets = category && data.presets ? data.presets[category] : undefined;
+  const applyPreset = (kind: "loose" | "normal" | "strict") => {
+    if (!presets) return;
+    const p = presets[kind];
+    if (!p) return;
+    // Only apply to fields actually in the visible schema — defensive against
+    // future preset keys that don't match the current schema (e.g. legacy
+    // presets after a field was removed).
+    const visibleKeys = new Set(visibleEntries.map(([k]) => k));
+    const next = { ...draft };
+    let applied = 0;
+    for (const [k, v] of Object.entries(p.values)) {
+      if (visibleKeys.has(k)) { next[k] = v; applied++; }
+    }
+    setDraft(next);
+    setMsg({
+      kind: "info",
+      text: `${p.label} preset betöltve (${applied} paraméter) — kattints a Mentés gombra a perzisztáláshoz.`,
+    });
+  };
 
   if (visibleEntries.length === 0) {
     return (
@@ -230,6 +268,37 @@ export default function SettingsPanel({ category, title, subtitle }: SettingsPan
         </div>
 
         {msg && <div className={`set-msg set-msg-${msg.kind}`}>{msg.text}</div>}
+
+        {presets && (
+          <div className="set-presets">
+            <div className="set-presets-head">
+              <div className="set-presets-title">Preset profilok</div>
+              <div className="set-presets-sub">
+                Egy kattintással alkalmazz egy paraméter-bundle-t. A Mentés gomb persisztálja, addig csak draft-ban van.
+              </div>
+            </div>
+            <div className="set-presets-grid">
+              {(["loose", "normal", "strict"] as const).map(kind => {
+                const p = presets[kind];
+                if (!p) return null;
+                const tone = kind === "loose" ? "loose" : kind === "strict" ? "strict" : "normal";
+                return (
+                  <button
+                    key={kind}
+                    type="button"
+                    className={`set-preset-card set-preset-${tone}`}
+                    onClick={() => applyPreset(kind)}
+                    disabled={busy}
+                  >
+                    <div className="set-preset-label">{p.label}</div>
+                    <div className="set-preset-desc">{p.description}</div>
+                    <div className="set-preset-cta">→ Alkalmaz</div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {groupOrder.map(g => (
           <div key={g} className="set-group">
@@ -299,7 +368,9 @@ export default function SettingsPanel({ category, title, subtitle }: SettingsPan
 }
 
 function ReadOnlyView({ data, category }: { data: ServerResponse; category?: string }) {
-  const isAutoTraderCategory = category === "crypto" || category === "weather" || category === "hyperliquid";
+  const isAutoTraderCategory =
+    category === "crypto" || category === "weather" || category === "hyperliquid" ||
+    category === "funding-arb" || category === "sports";
   const visible = Object.entries(data.schema).filter(([, spec]) =>
     category
       ? spec.category === category || (isAutoTraderCategory && spec.category === "common")
@@ -384,4 +455,24 @@ const css = `
 .set-toggle.on { background:var(--accent); border-color:var(--accent); }
 .set-toggle-dot { position:absolute; top:2px; left:2px; width:18px; height:18px; border-radius:50%; background:var(--text); transition:left .15s ease, background .12s; }
 .set-toggle.on .set-toggle-dot { left:24px; background:#000; }
+.set-presets { background:var(--surface); border:1px solid var(--border); border-radius:4px; padding:16px; margin-bottom:14px; }
+.set-presets-head { margin-bottom:12px; }
+.set-presets-title { font-family:var(--mono); font-size:11px; color:var(--accent); text-transform:uppercase; letter-spacing:.08em; }
+.set-presets-sub { font-family:var(--sans); font-size:12px; color:var(--muted); margin-top:4px; line-height:1.45; }
+.set-presets-grid { display:grid; grid-template-columns: repeat(3, 1fr); gap:10px; }
+@media (max-width: 760px) { .set-presets-grid { grid-template-columns: 1fr; } }
+.set-preset-card { background:var(--surface2); border:1px solid var(--border); border-radius:3px; padding:12px; text-align:left; cursor:pointer; transition:border-color .12s ease, transform .12s ease; font-family:var(--sans); display:flex; flex-direction:column; gap:6px; color:var(--text); }
+.set-preset-card:hover:not(:disabled) { transform: translateY(-1px); }
+.set-preset-card:disabled { opacity:.4; cursor:not-allowed; }
+.set-preset-loose  { border-left:3px solid var(--accent2); }
+.set-preset-normal { border-left:3px solid var(--accent); }
+.set-preset-strict { border-left:3px solid var(--warn); }
+.set-preset-loose:hover:not(:disabled)  { border-color: var(--accent2); }
+.set-preset-normal:hover:not(:disabled) { border-color: var(--accent); }
+.set-preset-strict:hover:not(:disabled) { border-color: var(--warn); }
+.set-preset-label { font-size:14px; font-weight:700; color:var(--text); }
+.set-preset-desc  { font-size:11px; color:var(--muted); line-height:1.5; }
+.set-preset-cta   { font-family:var(--mono); font-size:10px; color:var(--accent); text-transform:uppercase; letter-spacing:.05em; margin-top:auto; }
+.set-preset-loose  .set-preset-cta { color: var(--accent2); }
+.set-preset-strict .set-preset-cta { color: var(--warn); }
 `;

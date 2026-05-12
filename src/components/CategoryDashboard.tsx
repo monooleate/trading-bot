@@ -84,7 +84,7 @@ function renderFundingArbTab(tab: string, bankroll: number) {
   switch (tab) {
     case "autotrader":   return <FundingArbPanel bankroll={bankroll} />;
     case "edge-tracker": return <EdgeTrackerPanel defaultCategory="funding-arb" />;
-    case "settings":     return <SettingsPanel category="hyperliquid" title="Funding Arb paraméterek" subtitle="Delta-neutral carry · SHORT HL perp + LONG Binance spot" />;
+    case "settings":     return <SettingsPanel category="funding-arb" title="Funding Arb paraméterek" subtitle="Delta-neutral carry · SHORT HL perp + LONG Binance spot" />;
     default:             return <FundingArbPanel bankroll={bankroll} />;
   }
 }

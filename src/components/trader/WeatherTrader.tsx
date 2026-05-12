@@ -95,6 +95,7 @@ export default function WeatherTrader({ bankroll }: { bankroll?: number }) {
     openedAt: string;
     reconcileAfter: string;
     entryDecision: OpenPositionRationale | null;
+    liveGates: any;
   }>;
 
   const doAction = useCallback(async (action: string) => {
@@ -190,6 +191,7 @@ export default function WeatherTrader({ bankroll }: { bankroll?: number }) {
               // null (older paper position pre-snapshot) renders the
               // "no data" placeholder, same as crypto.
               rationale: p.entryDecision ?? null,
+              liveGates: p.liveGates ?? null,
             };
           })}
         />

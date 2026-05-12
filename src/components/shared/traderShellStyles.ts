@@ -365,6 +365,11 @@ export const traderShellCSS = `
 }
 .ts-pos-why-empty { color: var(--muted); font-style: italic; line-height: 1.45; }
 
+/* Live-gate panel: warm accent strip distinguishes "as-of-now" from the
+   frozen entry-decision (which uses the cool blue accent2 strip). */
+.ts-pos-why-live { border-left: 3px solid var(--warn); }
+.ts-pos-why-live .ts-pos-why-thesis-text strong { color: var(--warn); }
+
 .ts-pos-why-label {
   display: block; font-size: 0.55rem;
   color: var(--muted); text-transform: uppercase;

@@ -30,7 +30,7 @@ import {
   resumeArbSession,
   resetArbSession,
 } from "./fr-session.mts";
-import { getFrArbConfig } from "./config.mts";
+import { getFrArbConfig, getEffectiveFrArbConfig } from "./config.mts";
 import { markArbRunStart, markArbRunFinish, getArbRunStatus } from "./arb-run-state.mts";
 import type { ArbSessionState, ArbPosition } from "./types.mts";
 
@@ -52,7 +52,9 @@ export async function runFundingArbLoop(
 }
 
 async function runFundingArbInner(): Promise<any> {
-  const baseConfig = getFrArbConfig();
+  // Pull runtime Settings overrides every tick — same pattern as HL perp,
+  // so the Loose/Normal/Strict preset propagates without a redeploy.
+  const baseConfig = await getEffectiveFrArbConfig();
   // Mutable clone so the live-readiness gate can flip paperMode back to
   // true if the paper track record hasn't yet met validation thresholds.
   const config: typeof baseConfig = { ...baseConfig };
@@ -494,7 +496,7 @@ export async function getArbStatus(): Promise<any> {
     ok: true,
     action:   "status",
     category: "hyperliquid-arb",
-    session:  summarize(session, hlBankroll),
+    session:  summarize(session, hlBankroll, runStatus?.lastResult?.results ?? null),
     runStatus,
     // Funding-arb is wired into auto-trader-multi-cron */3 * * * *,
     // always-on (same as the directional HL bot).
@@ -559,9 +561,24 @@ export async function arbResume(): Promise<any> {
 function summarize(
   s: ArbSessionState,
   hl?: { bankrollStart: number; bankrollCurrent: number } | null,
+  lastScanResults: any[] | null = null,
 ) {
   const open    = openArbPositions(s);
   const closed  = (s.positions ?? []).filter((p) => p.closedAt);
+  // Live-gate snapshot per open coin from the most recent scan tick.
+  const pickLive = (coin: string) => {
+    if (!Array.isArray(lastScanResults)) return null;
+    const r = lastScanResults.find((x: any) => x?.coin === coin);
+    if (!r) return null;
+    return {
+      evaluatedAt: r.evaluatedAt ?? null,
+      action:      r.action      ?? null,
+      reason:      r.reason      ?? null,
+      direction:   r.direction   ?? null,
+      edge:        r.edge        ?? null,
+      gates:       Array.isArray(r.gates) ? r.gates : [],
+    };
+  };
   return {
     paperMode:            s.paperMode,
     stopped:              s.stopped,
@@ -583,6 +600,7 @@ function summarize(
       accumulatedFunding: parseFloat(p.accumulatedFunding.toFixed(2)),
       openedAt:           p.openedAt,
       entryDecision:      p.entryDecision ?? null,
+      liveGates:          pickLive(p.coin),
     })),
   };
 }

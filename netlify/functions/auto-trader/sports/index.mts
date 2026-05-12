@@ -15,7 +15,7 @@
 import { log } from "../shared/logger.mts";
 import { alertSessionStop, alertError } from "../shared/telegram.mts";
 import { registerBot, type BotDefinition } from "../shared/bot-registry.mts";
-import { getSportsConfig, SPORTS_DEFAULT_BANKROLL, SPORTS_SIM_VERSION } from "./config.mts";
+import { getSportsConfig, getEffectiveSportsConfig, SPORTS_DEFAULT_BANKROLL, SPORTS_SIM_VERSION } from "./config.mts";
 import { findSportsMarkets } from "./market-finder.mts";
 import { makeSportsDecision } from "./decision-engine.mts";
 import {
@@ -41,7 +41,9 @@ async function runSportsTrader(
 ): Promise<any> {
   await markRunStart(source).catch(() => {});
 
-  const config = getSportsConfig();
+  // Pull runtime Settings overrides every tick — Loose/Normal/Strict
+  // preset propagates to the next scan without redeploy.
+  const config = await getEffectiveSportsConfig();
   // User's bankroll-input wins on first-load (session never existed or
   // just got auto-archived by a simVersion bump). Once the session is
   // alive, loadSportsSession ignores `initialBankroll` and reads the

@@ -10,75 +10,52 @@ Ez a fájl Claude Code számára készült. Minden fejlesztési session elején 
 
 Mielőtt a sessiont lezárod (utolsó válasz a usernek), végezd el az alábbi ellenőrző listát:
 
-1. **CLAUDE.md `AKTUÁLIS ÁLLAPOT` szekció** – ha bármi élő rendszerállapot változott (működő/hibás tabok, ismert bugok, deploy státusz), frissítsd a dátummal együtt (`AKTUÁLIS ÁLLAPOT (YYYY-MM-DD)`).
+1. **CLAUDE.md `AKTUÁLIS ÁLLAPOT` szekció** – ha bármi élő rendszerállapot változott (működő/hibás tabok, ismert bugok, deploy státusz), frissítsd a dátummal együtt (`AKTUÁLIS ÁLLAPOT (YYYY-MM-DD)`). **Csak az aktuális állapotot tartsd benne**, ne halmozz history-t — a részletes session-history a `changelog/`-ban él.
 2. **`internal-docs/` érintett fájlok** – ha egy tab/function/algoritmus logikája változott, frissítsd a hozzá tartozó markdown fájlt:
    - **`current-state/`** – ha élő rendszer-állapot változott (architecture, deploy, settings, env, trading-status, auto-claim).
    - **`math/`** – ha egy signal vagy bot algoritmusa változott (pl. `math/06-orderflow.md`, `math/13-crypto-bot.md`).
    - **`roadmap/`** – ha a jövőbeli tervek / Hetzner-migráció / új stratégiák állapota változott.
-3. **`internal-docs/changelog/`** – minden nem-triviális változásnál hozz létre vagy egészíts ki egy `CHANGELOG-YYYY-MM-DD.md` fájlt: mit változtattál, miért, melyik fájl(ok)ban.
+3. **`internal-docs/changelog/`** – minden nem-triviális változásnál hozz létre vagy egészíts ki egy `CHANGELOG-YYYY-MM-DD.md` fájlt: mit változtattál, miért, melyik fájl(ok)ban. **A részletes session-leírások IDE kerülnek, NEM a CLAUDE.md-be.**
 4. **Új tab vagy function** – kötelezően új `internal-docs/math/NN-name.md` fájl + bejegyzés az `internal-docs/README.md`-ben + a CLAUDE.md tab-táblázat bővítése.
 5. **TODO / Hiányos implementációk** – ha új technikai debt keletkezett vagy egy meglévő megoldódott, frissítsd az `Ismert limitációk és TODO-k` szekciót.
 
 **Ha nem volt érdemi változás** (csak kérdés/olvasás történt), akkor sem kell üres commit – de mondd ki explicit a session végén: *"Nincs dokumentáció-frissítés szükséges, mert csak X történt."*
 
-**Ha a felhasználó megszakít** (pl. új feladatra vált) a session zárása előtt: a következő érdemi commit előtt mindenképpen pótolni kell az elmaradt doc-frissítést.
-
 ---
 
-## 📋 Doksi SSOT-szabályok (2026-05-11 átszervezés után)
+## 📋 Doksi SSOT-szabályok
 
 **Minden téma egyetlen fájlban él** — a duplikációkat tudatosan kerüljük.
-Az [`internal-docs/roadmap/README.md`](./internal-docs/roadmap/README.md)
-az SSOT-mátrix forrása; a roadmap-doksik fejléceiben SSOT-scope-blokk jelöli,
-hogy az adott fájl mit fed le, mit NEM.
+Az [`internal-docs/roadmap/README.md`](./internal-docs/roadmap/README.md) az SSOT-mátrix forrása.
 
 ### Új ötlet hova kerüljön?
 
-| Ötlet típusa | Hová kerüljön | Példa |
-|--------------|---------------|-------|
-| **Új signal / új trade-stratégia** | `internal-docs/roadmap/new-strategies.md` — új #N tétel a Top 11 / Mid / Long sorrend szerint, Score-számolással | "Reddit sentiment signal" → új #16 tétel |
-| **Új live-mode bug / TODO** | `internal-docs/roadmap/master-plan.md` "MI VAN MÉG HÁTRA" szekció (🔴/🟠/🟡/🟢 prioritás) | "Polymarket auto-redeem cron hiányzik" |
-| **Új VPS-process / Hetzner-feladat** | `internal-docs/roadmap/hetzner-migration.md` 7-fázisú action plan-be | "Új PM2 process Telegram bot-hoz" |
-| **Új fizikai-layout-döntés** (Postgres séma, port, monitoring) | `internal-docs/roadmap/hetzner-infrastructure.md` | "Új port allokáció a Bybit feed-nek" |
-| **Új env-vár / secret** | `internal-docs/current-state/env-vars.md` (NEM a roadmap-ban) | "Új `BYBIT_TESTNET_KEY`" |
-| **Új algoritmus-leírás** | `internal-docs/math/NN-name.md` (új fájl + index frissítés) | "Új Brier modul → math/17-brier.md" |
-| **Session-by-session változás** | `internal-docs/changelog/CHANGELOG-YYYY-MM-DD.md` | Mindig minden session-zárásnál |
-
-### Session-zárás dokumentáció-checklist
-
-| Mi változott a session-ben? | Frissíteni kell |
-|------------------------------|------------------|
-| Implementáltál egy P1.x / Cn. / plan-on kívüli feature-t | `master-plan.md` státusz-jelölő (✅ DONE + dátum) |
-| Megvalósítottál egy #N stratégiát a new-strategies.md-ből | `new-strategies.md` ✅/🟡 státusz **ÉS** `master-plan.md` szinkron |
-| Új ötlet identifikálva (nem implementálva) | `new-strategies.md` új #N tétel + Score |
-| VPS-fázis lépést megcsináltál | `hetzner-migration.md` checkbox-ok ✅-re |
-| Élő rendszer-állapot változott | CLAUDE.md `AKTUÁLIS ÁLLAPOT` + `current-state/*.md` |
-| Algoritmus változott | A megfelelő `math/NN-*.md` |
-| Új env-vár / secret | `current-state/env-vars.md` |
-| Bármi nem-triviális | `changelog/CHANGELOG-YYYY-MM-DD.md` |
+| Ötlet típusa | Hová kerüljön |
+|--------------|---------------|
+| **Új signal / új trade-stratégia** | `internal-docs/roadmap/new-strategies.md` — új #N tétel a Top 11 / Mid / Long sorrend szerint, Score-számolással |
+| **Új live-mode bug / TODO** | `internal-docs/roadmap/master-plan.md` "MI VAN MÉG HÁTRA" szekció (🔴/🟠/🟡/🟢 prioritás) |
+| **Új VPS-process / Hetzner-feladat** | `internal-docs/roadmap/hetzner-migration.md` 7-fázisú action plan-be |
+| **Új fizikai-layout-döntés** (Postgres séma, port, monitoring) | `internal-docs/roadmap/hetzner-infrastructure.md` |
+| **Új env-vár / secret** | `internal-docs/current-state/env-vars.md` (NEM a roadmap-ban) |
+| **Új algoritmus-leírás** | `internal-docs/math/NN-name.md` (új fájl + index frissítés) |
+| **Session-by-session változás** | `internal-docs/changelog/CHANGELOG-YYYY-MM-DD.md` |
 
 ### Tilos (SSOT-sértés)
 
-- ❌ **Státuszt két helyen vezetni**: ha `master-plan.md` ✅, akkor a
-  `new-strategies.md` is ✅, de **a két jelölés mindig szinkronban**.
-  Ne tartsd külön nyilván.
+- ❌ **Státuszt két helyen vezetni**: ha `master-plan.md` ✅, akkor a `new-strategies.md` is ✅ — a két jelölés mindig szinkronban.
+- ❌ **Session-by-session részleteket CLAUDE.md-be írni**: csak a `changelog/` és az aktuális állapot tömör hivatkozása maradjon a CLAUDE.md-ben.
 - ❌ **Új tervezési fájl minden session-ben**: a 6 roadmap-doksi elég.
-  Új fájl csak ha új téma-kategória nyílik (pl. új venue).
-- ❌ **Live-state-et roadmap-pel keverni**: `current-state/` snapshot ≠
-  `roadmap/` tervezet.
-- ❌ **Env-vár listát roadmap-ba írni**: csak `current-state/env-vars.md`
-  a katalógus.
+- ❌ **Live-state-et roadmap-pel keverni**: `current-state/` snapshot ≠ `roadmap/` tervezet.
+- ❌ **Env-vár listát roadmap-ba írni**: csak `current-state/env-vars.md` a katalógus.
 
 ---
 
 ## Mi ez a projekt?
 
-**EdgeCalc** egy kvantitatív Polymarket trading dashboard.  
-**Nem** copy-trade bot, **nem** affiliate platform.  
-Matematikai alapú saját implementáció akadémiai irodalom alapján.
+**EdgeCalc** egy kvantitatív Polymarket trading dashboard. **Nem** copy-trade bot, **nem** affiliate platform. Matematikai alapú saját implementáció akadémiai irodalom alapján.
 
-**Stack:** Astro 5 + React 18 + TypeScript + Netlify Functions + Tailwind CSS  
-**Python:** 4 standalone CLI script lokális elemzéshez  
+**Stack:** Astro 5 + React 18 + TypeScript + Netlify Functions + Tailwind CSS
+**Python:** 4 standalone CLI script lokális elemzéshez
 **Verzió:** v8
 
 ---
@@ -88,39 +65,37 @@ Matematikai alapú saját implementáció akadémiai irodalom alapján.
 ```
 edge-calc/
 ├── src/
-│   ├── components/          ← 8 React komponens (egy tab = egy fájl)
-│   │   ├── Dashboard.tsx    ← Tab router, bankroll state, auth
-│   │   ├── OrderFlowPanel.tsx
-│   │   ├── VolDivergencePanel.tsx
-│   │   ├── ApexWalletsPanel.tsx
-│   │   ├── CondProbPanel.tsx
-│   │   ├── SignalCombinerPanel.tsx
-│   │   ├── ArbMatrixPanel.tsx
-│   │   └── TradingPanel.tsx
+│   ├── components/          ← React komponensek (egy tab = egy fájl)
+│   │   ├── Dashboard.tsx    ← Tools tab router, bankroll state, auth
+│   │   ├── HomePage.tsx     ← Főoldali mission control
+│   │   ├── CategoryDashboard.tsx  ← Per-bot trader page wrapper
+│   │   ├── SettingsPanel.tsx
+│   │   ├── EdgeTrackerPanel.tsx
+│   │   ├── shared/          ← Trader shell + 5 reusable card + AuthGate + ConfirmDialog + Badges
+│   │   ├── trader/          ← Per-bot panel (Crypto/Weather/HL/F-Arb/Sports + manual venues)
+│   │   └── *Panel.tsx       ← /tools/ analytical tabs (OrderFlow, VolDiv, Apex, CondProb, Signals, ArbMatrix)
 │   ├── styles/global.css    ← CSS variables, dark theme
 │   ├── layouts/Base.astro
 │   └── pages/index.astro
-├── netlify/
-│   └── functions/           ← 16 Netlify Function (.mts)
-├── internal-docs/           ← Részletes technikai dokumentáció
+├── netlify/functions/       ← Netlify Functions (.mts)
+│   ├── auto-trader-api.mts  ← Top-level dispatcher (action=status/run/reset/stop/resume/reconcile)
+│   ├── auto-trader/         ← Per-bot modules (crypto/weather/hyperliquid/sports/politics/macro)
+│   ├── *-cron.mts           ← Scheduled wrappers
+│   └── ...                  ← Signal/tool endpoints (signal-combiner, vol-divergence, apex-wallets...)
+├── internal-docs/
 │   ├── README.md            ← Index — itt kezdj
 │   ├── current-state/       ← Élő rendszer (architecture, env-vars, deploy, settings, trading-status, auto-claim)
-│   ├── math/                ← Signal math + bot implementation reference (02-ev-kelly … 16-weather-bot + 151-Trading-Strategies.pdf)
+│   ├── math/                ← Signal math + bot implementation reference (02-ev-kelly … 16-weather-bot)
 │   ├── roadmap/             ← Hetzner migráció, master-plan, új stratégiák, infrastructure
-│   ├── changelog/           ← Session-by-session history
-│   └── archive/             ← Elkészült promptok + historikus tanulságok (paper-pnl-v2-bug, prompts/)
-├── apex_wallet_profiler.py
-├── vol_divergence.py
-├── orderflow_analyzer.py
-├── conditional_prob_matrix.py
-├── astro.config.mjs
-├── netlify.toml
-└── package.json
+│   ├── changelog/           ← Session-by-session history (a részletes leírások IDE jönnek)
+│   └── archive/             ← Elkészült promptok + historikus tanulságok
+├── apex_wallet_profiler.py / vol_divergence.py / orderflow_analyzer.py / conditional_prob_matrix.py
+├── astro.config.mjs / netlify.toml / package.json
 ```
 
 ---
 
-## A 11 Tab és funkcióik
+## A 11 /tools/ Tab és funkcióik
 
 | Tab ID | Komponens | Netlify Function(s) | Fő technika |
 |--------|-----------|---------------------|-------------|
@@ -136,6 +111,17 @@ edge-calc/
 | `signals` | SignalCombinerPanel | `signal-combiner` | Grinold-Kahn IR=IC×√N |
 | `arbmatrix` | ArbMatrixPanel | `vwap-arb`, `llm-dependency` | VWAP arb, Claude API |
 
+## A 6 Auto-Trader Bot
+
+| Kategória | Indexfájl | Cron | Strategy |
+|-----------|-----------|------|----------|
+| `crypto` | `auto-trader/index.mts` | */3 min (multi-cron) | 8-signal combiner BTC short-markets |
+| `weather` | `auto-trader/weather/index.mts` | */5 min (own cron) | GFS ensemble → Polymarket city temp |
+| `hyperliquid` | `auto-trader/hyperliquid/index.mts` | */3 min (multi-cron) | HL directional perp (signal-driven) |
+| `funding-arb` | `auto-trader/hyperliquid/funding-arb/index.mts` | */3 min (multi-cron) | HL/Binance funding rate spread |
+| `sports` | `auto-trader/sports/index.mts` | manual | Pinnacle vs Polymarket |
+| `politics` + `macro` | `auto-trader/politics`, `/macro` | manual | Event-driven |
+
 ---
 
 ## CSS Design System
@@ -143,22 +129,14 @@ edge-calc/
 **SOHA ne használj inline Tailwind utility class-okat** – a projekt saját CSS variable rendszert használ.
 
 ```css
-/* Használandó változók (src/styles/global.css) */
-var(--bg)        /* #0a0a0c – háttér */
-var(--surface)   /* #101014 – kártya háttér */
-var(--surface2)  /* #16161c – secondary surface */
-var(--border)    /* #1e1e28 – border */
-var(--text)      /* #e8e8f0 – fő szöveg */
-var(--muted)     /* #6b6b80 – másodlagos szöveg */
-var(--accent)    /* #c8f135 – zöld (pozitív, YES) */
-var(--danger)    /* #f13535 – piros (negatív, NO) */
-var(--accent2)   /* #35c8f1 – kék (neutral info) */
-var(--warn)      /* #f1a035 – narancs (figyelmeztetés) */
-var(--mono)      /* 'JetBrains Mono', monospace */
-var(--sans)      /* 'Inter', sans-serif */
+var(--bg) #0a0a0c · var(--surface) #101014 · var(--surface2) #16161c
+var(--border) #1e1e28 · var(--text) #e8e8f0 · var(--muted) #6b6b80
+var(--accent) #c8f135 (zöld YES) · var(--danger) #f13535 (piros NO)
+var(--accent2) #35c8f1 (kék info) · var(--warn) #f1a035 (narancs)
+var(--mono) 'JetBrains Mono' · var(--sans) 'Inter'
 ```
 
-**Komponens CSS pattern:** minden komponens a saját `<style>` blokkjában definiálja az osztályokat, prefix-szel (pl. `aw-`, `cp-`, `sc-`). Nem globális CSS.
+**Komponens CSS pattern:** minden komponens a saját `<style>` blokkjában definiálja az osztályokat, prefix-szel (pl. `aw-`, `cp-`, `sc-`, `ts-` a shared trader shell-nél). Nem globális CSS.
 
 ---
 
@@ -188,7 +166,7 @@ export default async function handler(req: Request, _ctx: Context) {
 ```typescript
 const store  = getStore("cache-name");
 const cKey   = "unique-key";
-const TTL_MS = 5 * 60 * 1000; // 5 perc
+const TTL_MS = 5 * 60 * 1000;
 
 const cached = await store.getWithMetadata(cKey);
 if (cached?.metadata && Date.now() - ((cached.metadata as any).ts || 0) < TTL_MS) {
@@ -219,18 +197,16 @@ await store.set(cKey, payload, { metadata: { ts: Date.now() } });
 ## API végpontok
 
 ```
-# Polymarket
 GAMMA_API  = "https://gamma-api.polymarket.com"
 CLOB_API   = "https://clob.polymarket.com"
 DATA_API   = "https://data-api.polymarket.com"
-
-# Binance
 BINANCE    = "https://api.binance.com"
 BN_FUTURES = "https://fapi.binance.com"
-
-# Bybit
 BYBIT      = "https://api.bybit.com"
+HL_INFO    = "https://api.hyperliquid.xyz/info"
 ```
+
+**FONTOS Gamma kvirk:** csak `&closed=true` query-vel találja a lezárult market-eket. Ennek hiánya volt a 2026-05-10 simV3 paper-resolver bug oka.
 
 ---
 
@@ -241,62 +217,43 @@ BYBIT      = "https://api.bybit.com"
 - `_auth-guard.ts` helper minden védett function-ben
 - Hash generálás: `node -e "console.log(require('crypto').createHash('sha256').update('jelszo').digest('hex'))"`
 
-**Env vars:**
+**Env vars (teljes katalógus:** `internal-docs/current-state/env-vars.md` — 61 változó 13 csoportba)
+
 ```
 JWT_SECRET=<32+ karakter random>
 AUTH_PASSWORD_HASH=<sha256 hash>
-ANTHROPIC_API_KEY=<sk-ant-...>   # llm-dependency function-höz
-BYBIT_API_KEY=...
-BYBIT_API_SECRET=...
-BYBIT_TESTNET=true               # éles előtt mindig true!
-BINANCE_API_KEY=...
-BINANCE_API_SECRET=...
-BINANCE_TESTNET=true
+ANTHROPIC_API_KEY=<sk-ant-...>
+BYBIT_API_KEY / BYBIT_API_SECRET / BYBIT_TESTNET=true
+BINANCE_API_KEY / BINANCE_API_SECRET / BINANCE_TESTNET=true
+HL_PRIVATE_KEY=<0x + 64 hex>
+PAPER_MODE=true  ← élesedés előtt mindig
 ```
 
 ---
 
 ## Matematikai kontextus (rövid)
 
-A részletes leírás az `internal-docs/` mappában van. Rövid összefoglaló:
+A részletes leírás az `internal-docs/math/`-ben van. Rövid összefoglaló:
 
-**Kyle λ** – adverse selection: $\Delta p = \lambda \cdot Q$, ahol Q = net order flow  
-**VPIN** – toxikus flow: $\frac{\sum |V^B - V^S|}{\sum V}$, ha > 0.7 → informált kereskedők  
-**Hawkes** – trade clustering: $\lambda^*(t) = \mu + \sum \alpha e^{-\beta(t-t_i)}$  
-**Grinold-Kahn** – $IR = IC \times \sqrt{N}$, 5 jelzés IC≈0.07 → IR≈0.157  
-**Kelly** – $f^* = \frac{pb - q}{b}$, ¼-Kelly az intézményi standard  
-**Payout ratio** – $\frac{\overline{W}}{\overline{L}}$, break-even WR = $\frac{1}{1+PR}$  
-**Bot detector** – focus ratio + sleep gap + inter-trade CV + 24h coverage  
-**Bregman projekció** – $\mu^* = \arg\min_{\mu \in M} D_{KL}(\mu \| \theta)$  
+**Kyle λ** – adverse selection: $\Delta p = \lambda \cdot Q$
+**VPIN** – toxikus flow: $\frac{\sum |V^B - V^S|}{\sum V}$, > 0.7 → informált kereskedők
+**Hawkes** – trade clustering: $\lambda^*(t) = \mu + \sum \alpha e^{-\beta(t-t_i)}$
+**Grinold-Kahn** – $IR = IC \times \sqrt{N}$
+**Kelly** – $f^* = \frac{pb - q}{b}$, ¼-Kelly + 8% binary cap (intézményi standard)
+**Payout ratio** – $\frac{\overline{W}}{\overline{L}}$, break-even WR = $\frac{1}{1+PR}$
+**Bregman projekció** – $\mu^* = \arg\min_{\mu \in M} D_{KL}(\mu \| \theta)$
+**Bonferroni IC threshold** – familywise α / signal_count (multiple comparisons fix)
+**Black-Scholes digital** – fairYes = N(d₂), vol_divergence T → 0 stable
 
 ---
 
 ## Python scriptek
 
 ```bash
-# apex_wallet_profiler.py
-python apex_wallet_profiler.py --demo
-python apex_wallet_profiler.py --consensus --window 7d
-python apex_wallet_profiler.py --consensus --claude   # Claude API elemzéssel
-python apex_wallet_profiler.py --profile 0x...
-python apex_wallet_profiler.py --leaderboard --json
-
-# vol_divergence.py
-python vol_divergence.py --demo
-python vol_divergence.py --watch      # 2 perces loop
-python vol_divergence.py --json
-
-# orderflow_analyzer.py
-python orderflow_analyzer.py --demo
-python orderflow_analyzer.py --token-id <TOKEN_ID>
-python orderflow_analyzer.py --list-markets
-
-# conditional_prob_matrix.py
-python conditional_prob_matrix.py --demo
-python conditional_prob_matrix.py --scan-btc
-python conditional_prob_matrix.py --scan-fed
-python conditional_prob_matrix.py --cli --scan-btc   # Polymarket CLI-vel
-python conditional_prob_matrix.py --custom slug-a slug-b
+python apex_wallet_profiler.py --demo / --consensus / --profile 0x... / --leaderboard --json
+python vol_divergence.py        --demo / --watch / --json
+python orderflow_analyzer.py    --demo / --token-id <id> / --list-markets
+python conditional_prob_matrix.py --demo / --scan-btc / --scan-fed / --custom slug-a slug-b
 ```
 
 ---
@@ -311,6 +268,15 @@ python conditional_prob_matrix.py --custom slug-a slug-b
 4. Dashboard: `Dashboard.tsx`-ben import + tab array + render bővítése
 5. Function: `netlify/functions/new-panel.mts`
 6. Dokumentáció: `internal-docs/math/NN-new-panel.md`
+
+### Új auto-trader bot
+
+1. Új mappa `netlify/functions/auto-trader/<bot>/`: `index.mts`, `decision-engine.mts`, `session-manager.mts`, stb.
+2. `auto-trader/index.mts` (top dispatcher) routing kibővítése
+3. UI: új trader file `src/components/trader/<Bot>Trader.tsx` (~150 LOC) a `TraderShell` + `useAutoTraderStatus(category)` + `useTraderAction(category)` hookok köré
+4. `multi-status.mts`-be új ág
+5. `HomePage.tsx` CARDS array bővítése
+6. `internal-docs/math/NN-<bot>.md` doksi
 
 ### Új Netlify Function
 
@@ -338,20 +304,41 @@ export default function NewPanel({ bankroll }: { bankroll: number }) {
   }, []);
 
   useEffect(() => { load(); }, []);
-  // ...
 }
 ```
 
-### ¼-Kelly számítás (egységes pattern)
+### ¼-Kelly számítás (egységes pattern — `src/lib/math.ts`)
 
 ```typescript
-function kellySize(p: number, price: number, bankroll: number): number {
+function kellyBinary(p: number, price: number, bankroll: number): number {
   const b = (1 / Math.max(price, 0.01)) - 1;
   const q = 1 - p;
   const f = Math.max(0, (p * b - q) / b);
-  return (f * 0.25 * bankroll);
+  return (f * 0.25 * bankroll);  // ¼-Kelly + 8% hard cap kívül
 }
 ```
+
+### Gate-list pattern (mind a 4 bot decision-engine-jén)
+
+Minden bot non-short-circuit gate-eket épít:
+- `gates: DecisionGate[]` array, minden gate `{label, passed, actual, required, hint}`
+- `shouldTrade = gates.every(g => g.passed)`
+- Az early-exit ágak is padded gate-listával jönnek (`pad*Gates(evaluated)` helper)
+- A frontend `criteria` builder ha `r.gates` non-empty → backend payload, egyébként legacy mapper fallback
+
+---
+
+## Build és deploy
+
+```bash
+npm install
+npm run dev          # localhost:4321 (csak frontend)
+netlify dev          # localhost:8888 (full stack)
+npm run build        # dist/
+netlify deploy --prod --dir=dist
+```
+
+**Fontos:** `netlify dev` szükséges a functions teszteléséhez lokálisan.
 
 ---
 
@@ -359,7 +346,7 @@ function kellySize(p: number, price: number, bankroll: number): number {
 
 ### Technikai debt
 
-- `Dashboard.tsx` tab array és render szekció manuálisan szinkronizálandó új tabok esetén (nem generált)
+- `Dashboard.tsx` tab array manuálisan szinkronizálandó új tabok esetén (nem generált)
 - `{src/` és `{src/{components,pages,layouts},public}/` mappák artifact-ok a build folyamatból – ignorálandók
 - A `package-lock.json` 277K – ne szerkeszd manuálisan
 
@@ -369,1660 +356,62 @@ function kellySize(p: number, price: number, bankroll: number): number {
 - **CV_edge:** nem valódi Monte Carlo, IR-ből becsült proxy.
 - **VWAP scanner:** 90 mp cache – real-time WebSocket kellene production-ban.
 - **Frank-Wolfe / Gurobi:** nincs implementálva (IP solver licenc szükséges).
-- **Trade logging:** nincs Supabase integráció – minden session stateless.
-
-### Következő prioritások (roadmap.md alapján)
-
-1. Deploy + Polymarket fiók + első éles tesztek ($50-100 USDC)
-2. Trade logging Supabase-be
-3. IC kalibráció 50+ trade után
-4. mac-code integráció lokális LLM-hez (ha Apple Silicon van)
-5. Real-time WebSocket VWAP scanner
+- **Trade logging:** nincs Supabase integráció – minden session stateless (Netlify Blobs).
 
 ---
 
-## Build és deploy
+## AKTUÁLIS ÁLLAPOT (2026-05-12)
 
-```bash
-npm install
-npm run dev          # localhost:4321 (csak frontend, functions nélkül)
-netlify dev          # localhost:8888 (full stack, functions-szel)
-npm run build        # dist/ mappa
-netlify deploy --prod --dir=dist
-```
+**Élő deploy:** `mj-trading.netlify.app`. Paper mode, simVersion 3 (crypto), v2 (HL).
 
-**Fontos:** `netlify dev` szükséges a functions teszteléséhez lokálisan.  
-`npm run dev` csak a frontend-et indítja, a `/.netlify/functions/` hívások 404-et adnak.
+### 4 fő bot státusz
 
----
+| Bot | Bankroll | PnL | Trades | Open | Megjegyzés |
+|-----|---------|-----|--------|------|-------|
+| **Crypto** | $250 → $250 | $0 | 0 closed | 0 open | Nem nyitott a v3 paper-resolver óta (combiner confidence gate túl szigorú — lásd 2026-05-12 session) |
+| **Weather** | $250 → $216.48 | -$5.10 | 2 closed (1W/1L) | 3 open | Mindkét closed trade real Polymarket resolution-on zárt — validált |
+| **HL Perp** | $200 → $200 | $0 | 0 closed | 0 open | Idle (paper) |
+| **F-Arb** | $200 → $200 (shared HL) | $0 | 0 closed | 0 open | Idle (paper) |
 
-## AKTUÁLIS ÁLLAPOT (2026-05-11) – Claude Code folytatáshoz
+### Mit fix utoljára (33. session, 2026-05-12)
 
-### Harminckettedik session (2026-05-11) – Tier 1: vol_divergence Black-Scholes redesign + collinearity matrix + Bonferroni IC threshold
+- **CLAUDE.md karcsúsítva** (2028 → 410 sor, session history kivéve → `changelog/`)
+- **Settings preset rendszer**: Loose/Normal/Strict per-bot kapcsoló a Settings tabon, leiratokkal. 16 új knob (HL + F-Arb + Sports — eddig env-only)
+- **Live-gate snapshot open pozíciókon**: a "Why?" panel mostantól nemcsak a frozen entry-decision-t mutatja, hanem a current gate-állapotot is (narancs strip, `evaluatedAt`)
+- **Weather audit**: 2 closed trade verified, mindkettő real Polymarket resolution-on zárt, PnL helyes
+- **Crypto bot diagnosztika**: a Combiner confidence gate (5%) blokkolt mindent — `Loose` preset 2%-ra állítja
 
-A user 8 cikket küldött Roan/Becker tollából (Neural Networks, Quant
-Roadmap × 2, Game Theory 5 Formulas, Mean-Reversion Strategy, Hedge
-Fund Dataset, Hermes Agent, Black-Scholes, Trillion Equation), majd
-összesítést kért: mit érdemes ténylegesen implementálni a botokba és
-miért. A szintézis eredménye: a 8 cikk nagy keretrendszereket ígér, de
-a valódi érték mindenhol pontos, kis hatókörű matematikai fix — ahol
-a rendszerben konkrét gyenge pont van. Az LSTM / Hermes / Greeks /
-"olvass Shreve-et" típusú refactorok nem javítanának.
+### Mit fix korábban (32. session, 2026-05-11)
 
-**Tier 1 = 3 független, struktúrális fix**, mindegyik ott javít ahol
-a kód jelenleg matematikailag hibás vagy gyenge:
+- Tier 1 math fix: vol_divergence Black-Scholes N(d₂), collinearity matrix, Bonferroni IC threshold (`internal-docs/math/13-crypto-bot.md` §9)
+- Signal Combiner UI "Edge" javítva (50% deviation → valódi trade edge)
+- Tier 1 belső konstansok exposed Settings tabon (5 új field, defaults = bit-azonos viselkedés)
+- Roadmap SSOT-konszolidáció (6 fájl, scope-headers)
+- Sports bot mutex + bankroll fix
 
-| Fix | Mit | File | Forrás |
-|-----|-----|------|--------|
-| **1.** | `vol_divergence` signal Black-Scholes digital N(d₂)-re cserélve. Az 1h gate (`VOL_MIN_HORIZON_HOURS = 1`) eltörölve — a d₂ képlet T → 0 limit-en stabil. A signal MOST aktív 5m/15m BTC piacokon is. Output: fair YES price közvetlenül (nem normalizált score). | `signal-combiner.mts:280-425` | Black-Scholes cikk |
-| **2.** | Signal collinearity matrix az Edge Tracker-be. Pearson-mátrix a 8 signal-vektorra a closed trade-eken, `highPairs[]` ahol `\|ρ\| > 0.7`, `effectiveSignalCount` haircut a Grinold-Kahn `IR=IC×√N` valós N-jét mutatja. Exposed: `/edge-tracker` válasz `collinearity` mező. | `edge-tracker/statistics.mts:510-620` | saját javaslat (Quant Roadmap után) |
-| **3.** | Bonferroni-korrigált IC threshold a `Calibration Health`-ben. Statikus `0.05/0.02` helyett adaptív Bonferroni (familywise α = 0.05 / signal_count). 8 signal-on n=143-ra `goodThreshold ≈ 0.46`, `weakThreshold ≈ 0.23` — lényegesen szigorúbb. `signalCount` adaptív: weather (1 signal) tágabb, crypto (8) szigorúbb. | `edge-tracker/statistics.mts:332-470` | Quant Roadmap "multiple comparisons" |
+### Legközelebbi prioritások
 
-**Új helperek**:
-- `normalCdf(z)` — Abramowitz & Stegun 26.2.17 approximation
-- `fetchBtcPriceAt(ts)` — Binance 1m kline egy adott timestamp-re (strike-ár visszanyerés)
-- `parseDurationFromQuestion(q)` — duration regex (másolat a btc-market-finder belső parsoljából, körutas import elkerülése miatt)
-- `bonferroniICThreshold(n, signalCount, α, multiplier)`
-- `inverseNormalCdf(p)` — Beasley-Springer-Moro approximation
-
-**Új API mezők**:
-- `CalibrationHealth.goodThreshold`, `weakThreshold`, `signalCount`
-- `edge-tracker` válasz `collinearity` mező (`signals[]`, `matrix[][]`, `highPairs[]`, `effectiveSignalCount`, `tradeCount`, `message`)
-
-`tsc --noEmit` exit 0 (project files), Astro build 10 page generated.
-Részletek: `internal-docs/changelog/CHANGELOG-2026-05-11.md` "(i)"
-szekció, math reference `internal-docs/math/13-crypto-bot.md` §9
-"2026-05-11 Tier 1" szekció.
-
-### Hatás deploy után (32. session)
-
-- A `vol_divergence` signal a következő cron tick-től aktív minden BTC
-  piacon (5m/15m/órás daily). Az `activeSignals` mező a UI-on **7 → 8**
-  lesz a leggyakoribb crypto piacokon.
-- A `Calibration Health` badge **szigorúbb küszöbökre kapcsol**: ami eddig
-  "good" volt 0.05 IC-vel, MOST valószínűleg `weak` vagy `noise` lesz
-  (Bonferroni n=143-on `weakThreshold ≈ 0.23`). Ez intent szerinti —
-  a live-readiness gate csak akkor enged át, ha statisztikailag bizonyítható
-  edge van.
-- Az Edge Tracker `collinearity` mezőjén látszódik az `effectiveSignalCount`
-  — ha pl. 6.4 / 8 effektív N van, a Kelly méret ~12%-kal overaggressive.
-  UI-on nincs még explicit render, de az API-n keresztül elérhető.
-
-### Mit NE várj el ezektől a fixektől (őszinte értékelés — session során korrigált)
-
-A Tier 1 fix-ek **két szinten hatnak különbözően**, ezt a session
-során pontosítottuk a korábbi túlzó megfogalmazáshoz képest:
-
-| Szint | Hatás | Magyarázat |
-|-------|-------|-----------|
-| **Paper trade-ek száma** | **≈ változatlan, esetleg +5-10%** | A Bonferroni-korrigált `shouldSuspendLive` flag csak Telegram alertet ad paper módban (`auto-trader/index.mts:394`); a bot **folytatja a paper trade-eket**. Az új `vol_divergence` MOST aktív 5m/15m piacokon → enyhén MAGASABB `activeSignals` count → potenciálisan TÖBB trade. |
-| **Paper trade minősége** | tisztább | Nincs degenerált zaj-signal a `vol_divergence`-en, kollinearitás láthatóvá vált. |
-| **Live aktiválás** | lényegesen lassabb | A Bonferroni weak küszöb ~0.23 (n=143, 8 signal) — a `live-readiness` gate csak akkor enged át live módra, ha statisztikailag bizonyítható edge van. |
-
-A korábbi "kevesebb trade" megfogalmazás **félrevezető volt**:
-csak a **live aktiválás** lett szigorúbb, **a paper aktivitás
-gyakorlatilag azonos**. A rendszer **statisztikailag védhetőbb** a
-live-readiness gate-nél, de a "profitabilisabb" csak empirikus
-validáció után mondható ki.
-
-### B opció (Tier 1 belső konstansok → Settings tab)
-
-A 32. session során a user feltette a kérdést: "lehet állítani a
-beállítások tabon?" — válasz: a Tier 1 belső konstansok eredetileg
-hardcoded-ak voltak. A B opció során **5 új field** került a
-`trader-settings.mts` SCHEMA-ba, default értékkel = az eredeti Tier 1
-hardcoded értékkel:
-
-| Field | Default | Range | Kategória | Hatás |
-|-------|---------|-------|-----------|-------|
-| `bonferroniAlpha` | 0.05 | 0.01–0.20 | common | Familywise α a Calibration Health-ben. Magasabb = enyhébb live-gate. |
-| `bonferroniGoodMultiplier` | 2.0 | 1.0–4.0 | common | A `good` küszöb = z × SE × multiplier. Magasabb = szigorúbb 'good'. |
-| `collinearityHighThreshold` | 0.7 | 0.5–0.95 | common | A `highPairs[]` listába azok a párok kerülnek, ahol \|ρ\| > ez. Csak observability. |
-| `volSignalEnabled` | 1 (ON) | 0/1 bool | crypto | Kill-switch: 0 → `vol_divergence` mindig null. |
-| `volStrikeFetchEnabled` | 1 (ON) | 0/1 bool | crypto | Strike Binance-kline fetch toggle. 0 → K=S fallback (ATM, semleges). |
-
-**Wire-up**:
-- `computeCalibrationHealth(trades, minTrades, options?)` — új 3.
-  paraméter, `CalibrationHealthOptions { bonferroniAlpha?, bonferroniGoodMultiplier? }`
-- `computeSignalCollinearity(trades, minPair?, highThreshold?)` — már
-  paraméteres, csak a callsite-ot bővítettük
-- `getVolSignal(market, options?)` — új 2. paraméter,
-  `VolSignalOptions { enabled?, strikeFetchEnabled? }`
-- `auto-trader/index.mts`: a calibration-noise alarm hívás most
-  átadja a Settings override-okat
-- `edge-tracker.mts`: új `loadTier1Overrides()` helper, a 3 Tier 1
-  konstans közvetlenül a `computeCalibrationHealth` + `computeSignalCollinearity`
-  hívásokba megy
-- `signal-combiner.mts`: új `loadVolSignalOptions()` helper, dinamikus
-  trader-settings import + fallback default
-
-Default értékek mellett a viselkedés **bit-azonos** az implementáció
-előttihez — vagyis ha a felhasználó nem nyúl a Settings-hez, a Tier 1
-hardcoded értékek pontosan ugyanúgy működnek.
-
-### Hova nyúlj legközelebb (32. session után)
-
-1. **Várj 30+ új trade-et** az új vol_divergence outputtal. A `computeSignalIC`
-   mostantól mérni fogja az új signal IC-jét. Ha érdemi (>0.23 Bonferroni
-   `weak`-küszöb fölött a default alpha-val), akkor a redesign bizonyítottan
-   értékes. Ha noise, a `volSignalEnabled = 0` toggle-lel kikapcsolható.
-
-2. **Tier 2** — reliability diagram per-prediction bin (200+ closed
-   trade precondition, ~2-4 hét). A saját model overconfident-e a
-   tail-eken? "Longshot bias adjustment" alapkérdése — saját adatra
-   kalibrálva.
-
-3. **Tier 3** — MAE + time-based invalidation a HL Perp bot-on
-   (30+ HL trade precondition). Statikus TP/SL clamp helyett empirikus
-   "cut losers early" gate.
-
-### Harminckettedik session (2026-05-11) – Signal Combiner UI "Edge" javítás (50% deviation → valódi trade edge)
-
-A `/tools/#signals` tab élesen validáláskor (Spain WC YES @ 16¢, model
-adj prob 49%) látszott, hogy a UI 0.55% edge-et mutat (= deviation from
-50%), miközben a valódi trade edge 32.88% lenne (= adj_prob − market).
-A backend mindig is szállítja az `adjusted_edge_pct`-t, csak a UI a
-legacy `edge_pct` mezőt használta.
-
-**Fix `SignalCombinerPanel.tsx`** (4 régió):
-1. Prop-mapping: új `tradeEdge` (elsődleges: `adjusted_edge_pct`, fallback:
-   `adj_prob − yes_price`)
-2. 3-cellás Combined Probability card: primary "Trade edge: +X% vs Y¢
-   market" (accent ≥ 5%, danger ≤ -5%), secondary "Δ from 50%: ±X%"
-3. Multi-Market Scanner: oszlop "Edge vs mkt" + rendezés trade edge szerint
-   (moonshot piacok felülre kerülnek)
-4. ToolInfoBox: "Edge < 5%" → "Trade edge < 3%" (a backend
-   `applyResolutionAdjustment` defaultjának megfelelően)
-
-`tsc --noEmit` exit 0, Astro build 10 page.
-Részletek: `internal-docs/changelog/CHANGELOG-2026-05-11.md` "(i)" szekció.
-
-### Harmincegyedik session (2026-05-11) – Roadmap SSOT-konszolidáció + new-strategies.md 37 ötlet státusz-audit
-
-A user 2 kérése: (1) frissítsd a `new-strategies.md`-t mi van megvalósulva
-és mi nem (jelöléssel), (2) elemezd a `roadmap/` mappa fájljait, szüntesd
-meg a duplikációkat, egy feladat = egy leírás = egy hely (SSOT), vezesd
-át a CLAUDE.md-be és a README-be hivatkozással, és foglald össze, hova
-kerüljön új ötlet és session mit mikor frissítsen.
-
-**Kód-szintű audit a `new-strategies.md`-hez:**
-
-Minden #1-#37 ötlet státusz-jelölőt kapott (✅/🟡/❌/🔵) konkrét fájl/sor
-hivatkozással. Eredmény:
-- **✅ MEGVALÓSULT (3)**: #1 apex bug fix (title/slug a /trades-ből),
-  #30 politics bot (`auto-trader/politics/`), #31 macro bot
-  (`auto-trader/macro/`)
-- **🟡 RÉSZBEN (6)**: #2 (csak LP subgroup, insider/wash/followed
-  hiányzik), #6 (IC-alapú calibration-health, Brier/reliability hiányzik),
-  #11 (mini |rcum|<5% regime, nem HMM), #12 (pairs_spread signal van,
-  dedikált pillér hiányzik), #28 (OB imbalance signal, L2/L3 queue
-  position hiányzik), #29 (sports bot van, Pinnacle cross-arb nincs)
-- **❌ NEM (28)**: #3, #4 (vwap REST 90s marad), #5, #7-#10, #13-#27,
-  #32-#37 (semmi a kódbázisban)
-- **🔵 NEM TERVEZETT, DE MEGVALÓSULT** új §8: 4 új bot
-  (weather/sports/politics/macro), 9 új signal-fix, simVersion
-  auto-archive, calibration-health badge, live-readiness gate,
-  entry-decision snapshot, backend-driven gate-list, per-bot bankroll
-  input, pending-diagnostic, Settings tab, TraderShell unify,
-  HomePage 2-szekciós, ToolInfoBox, Reset modal, JSON export.
-
-**SSOT-konszolidáció a roadmap/ mappára:**
-
-| Téma | SSOT fájl |
-|------|-----------|
-| Implementáció-státusz (P1.x → P4.x) | `master-plan.md` |
-| Stratégia-katalógus (#1-#37 spec) | `new-strategies.md` |
-| VPS action plan (EdgeCalc-specifikus 7-fázis) | `hetzner-migration.md` |
-| VPS fizikai layout | `hetzner-infrastructure.md` |
-| Netlify → VPS komponens-mapping | `migration-strangler-fig.md` §1 |
-| Risk koordinátor trade-off (no-build) | `risk-coordinator-considerations.md` |
-| Env-vár katalógus | `current-state/env-vars.md` |
-
-Minden roadmap-doksi tetején explicit SSOT-scope blokk: "mit találsz itt
-/ mit NEM". A `roadmap/README.md` teljes újraírás: SSOT-mátrix tábla +
-új-ötlet-routing flowchart + session-zárás checklist + tilos-szabályok.
-
-**Új CLAUDE.md főszekció** ("📋 Doksi SSOT-szabályok"): új-ötlet hova
-kerüljön táblázat (7 ötlet-típus), session-zárás dokumentáció-checklist
-(8 forgatókönyv), tilos SSOT-sértés szabályok.
-
-**Mit NEM csináltam:**
-- `migration-strangler-fig.md` archive-be költöztetés (a §1 komponens-
-  térkép unikális érték marad — csak SSOT-scope-pal jelezve, hogy
-  "absztrakt, NEM action plan")
-- Postgres séma-duplikáció (pillér-blob a `hetzner-infrastructure.md`-ben
-  vs per-bot normalizált a `hetzner-migration.md`-ben) erőltetett
-  mergelése — ez tervezési choice. Mindkettő fejléce most egyértelműen
-  jelzi az ellentmondást, a tényleges választás a következő migráló
-  session feladata.
-
-`tsc --noEmit` exit 0. Markdown-only változás, kód érintetlen.
-Részletek: `internal-docs/changelog/CHANGELOG-2026-05-11.md` "(h)" szekció.
-
-### Hova nyúlj legközelebb (új session)
-
-1. **Új signal-ötlet jön**: új #N tétel a `new-strategies.md`-be a megfelelő rang szerint, Score-számolással.
-2. **Új live-mode TODO jön**: új sor a `master-plan.md` "MI VAN MÉG HÁTRA" 🔴/🟠/🟡/🟢 szekcióba.
-3. **Új VPS-feladat**: új fázis-lépés a `hetzner-migration.md`-be.
-4. **Új env-vár**: a `current-state/env-vars.md`, NEM a roadmap.
-5. **Új algoritmus**: új `math/NN-name.md` + index-frissítés.
-6. **Session-zárásnál**: a CLAUDE.md új "📋 Doksi SSOT-szabályok" szekció checklist-je az iránymutató.
-
-### Harmincadik session (2026-05-11) – Weather deep-audit round 2: NaN guards + reconciler tail boundary + live-readiness IC unblock
-
-A 29. session után a user kért egy harmadik audit kört. **4 további
-strukturális hibát** találtam:
-
-| ID | Severity | Fix |
-|----|----------|-----|
-| 1 | HIGH | NaN `predictedTempC` szűrés a `matchBucket` elején; NaN tempC buckete-k kizárása (eddig NaN valószínűségek szivárogtak át a gate-eken false-ra értékelve, ami helyes viselkedést mutatott de rossz reason-t a UI-on) |
-| 2 | MEDIUM | NaN ár guard a Gamma `parseFloat` után — eddig nullish-coalescing nem fogta el a NaN-t |
-| 3 | HIGH | Reconciler tail-bucket boundary szimmetrizálva `tempC ± 0.5`-re — a v2 matcher `(-∞, mid-to-next]` intervallumot használ, a reconciler `settlementC <= tempC`-vel ellenőrzött, ami egy settlement gap-et eredményezett pl. METAR=70°F-en "21°C or below" buckette |
-| 4 | HIGH | Weather **soha nem teljesítette a live-readiness Signal IC gate-et** — `signalBreakdown: null` mindenhol, IC strukturálisan 0. Új `forecast_edge: predictedProb − marketPrice` mező a SignalBreakdown-ben, weather populálja, crypto/HL/F-Arb mind `null`. A `computeSignalIC` mostantól Pearson(forecast_edge, win)-t mér weather-en, ami a forecast skill valódi proxyja |
-
-`tsc --noEmit` exit 0 (9 file érintett a type-bővítés miatt),
-bucket-matcher.test 4/4 passed, station-config.test 8/8 passed, Astro
-build 10 page.
-
-Részletek: `internal-docs/changelog/CHANGELOG-2026-05-11.md` "(e)" szekció.
-
-### Még nem javított (low priority)
-
-- **Bucket-matcher °F-rounding bias**: integer °C buckete-k szűkebbek (~0.55°C) mint a matcher CDF intervalluma (1.0°C), 2°F buckete-k szélesebbek (1.11°C) — alternáló ~10% bias. TODO: explicit °F-integer modellezés.
-- **σ kalibráció**: hardcoded 1.0/1.5 a matcherben, az ensemble σ csak a `confidence` mezőbe folyik. TODO: ensemble σ-t a matchernek is átadni.
-
-### Harmincadik session (2026-05-11) – Crypto bot mély-audit: 8 signal-layer + aritmetika fix (vol_divergence degenerate, apex cash-flow, cond_prob direction, momentum regime, bankroll drift, EV baseline, frontend cosmetics)
-
-A user a 6-fix (28. session, gate-layer) után **mély-elemzést** kért minden
-rétegre: frontend, backend, és a 8 signal matematikai validitására. Az audit
-**8 új hibát** tárt fel a signal layer + session arithmetic + UI rétegekben.
-Mind javítva.
-
-**8 fix dióhéjban:**
-
-| # | Réteg | Bug | Fix |
-|---|-------|-----|-----|
-| **A** | Signal | `vol_divergence` képlet rövid horizonton degenerált (T → 0 → IV ≈ 7,490%, mindig clamp 0.1). | `getVolSignal`: `VOL_MIN_HORIZON_HOURS = 1` gate. <1h piacokon `prob: null`. |
-| **B** | Session | `closePosition` `bankrollCurrent` képletet `shares × exitPrice` (gross proceeds) használta — bankroll drift `sessionPnL`-től. | `bankrollCurrent += trade.pnl + costBasis`. Invariáns: `bankrollStart + sessionPnL === bankrollCurrent`. |
-| **C** | Signal | `apex_consensus` "wallet PnL" csak cash flow (`/trades` feed, settlement nincs benne) → "top 10" valójában top sellers. | Activity score: `notional × √distinct markets`. Részletes per-wallet PnL a Tab 8 dolga. |
-| **D** | Signal | `cond_prob` `violationDir` csak complement-irányt vett, monoton-violation iránya elveszett. | Direction-aware: `complementSigned + monotonSigned` SUM-ja adja az irányt. |
-| **E** | Signal | `momentum` reflexív (Polymarket-ár saját mozgása), de minden mozgásra trend-folytatást jelzett. | Regime-aware: `\|rcum\| < 5%` → trend, `≥ 5%` → mean-revert (kisebb multiplier). |
-| **F** | Statistics | `computeCumulativePnl` EV baseline NEM kezelte `direction = NO` esetet (winProb `1 - predictedProb` kellett). | Direction-aware `winProb`. |
-| **G** | Frontend | `${activeSignals}/5 signals` chip, subtitle 5 signalt sorol — most 8 van. | Frissítve "X/8 signals", subtitle 8 signalra. |
-| **H** | Frontend | `RunResult.config` interface hiányolta `minPositionSizeUSDC + combinerConfidenceMin` mezőket. | Opcionálisként hozzáadva. |
-
-**A leghatásosabb fix az A**: a `vol_divergence` minden BTC 5m/15m piacon
-konstans 0.1 volt — szisztematikus NO-bias ami torzította a combiner-t.
-Most a `activeSignals` 8 → 7 a rövid piacokon, de a maradék 7 jel
-tisztább. A `Calibration Health` mostantól érdemi IC-t mérhet a
-`vol_divergence` zaj nélkül.
-
-**A B fix az invariánsra**: a `bankrollCurrent` mostantól pontosan
-követi a `bankrollStart + sessionPnL`-t. A meglévő 3 open pozíción
-close-kor lép életbe.
-
-`tsc --noEmit` exit 0 (project files), Astro build 10 page.
-Részletek: `internal-docs/changelog/CHANGELOG-2026-05-11.md` "(f)" szekció.
-
-### Hova nyúlj legközelebb (signal layer iteráció)
-
-1. **Paper validation 30+ trade**: a fixek után az IC ki kell jöjjön a
-   gyengébb signal-okra is. `Calibration Health` badge zöldnek kellene
-   lennie 30-50 trade után.
-2. **A meglévő 3 open pozíció settle-el endDate-en** (16:00Z) a fee +
-   helyes bankroll-update-tel. Új scan-tickek a fixek után indulnak.
-3. **Top wallet ranking finomítása** (C-fix follow-up): a `√markets`
-   diminishing returns multiplier empirikus — esetleg `markets^0.6`
-   pontosabb lehet. 100+ trade után érdemes Re-validate-elni a wallet
-   compositiont.
-
-### Huszonkilencedik session (2026-05-11) – Weather bot audit + 5 strukturális fix (tail-bucket CDF v2, market-disagreement gate, ensemble default, cloud avg, per-category log filter)
-
-A user a `/trade/weather/` 2 nyitott pozíciójára (Shanghai 25°C YES,
-Austin 82-83°F YES) teljes trade pipeline audit-ot kért. 4 strukturális
-hiba (HIGH × 2, MEDIUM × 2) + 1 cosmetic (LOW) javítva.
-
-**Audit verdict a 2 nyitott pozícióra:**
-- Shanghai 25°C YES @ 0.022 — matematikailag konzisztens (új gate-eken is átmegy: edge 16.9% > 12%, market-disagreement 0.9°C < 2.0°C), "lottery-ticket karakterű" (80% bukás, 20% 45x payout, modal-ellenes fogadás).
-- Austin 82-83°F YES @ 0.175 — **a régi PDF-bug artefaktja volt**. Új CDF math `P(82-83°F) = 25.8%` (régi 38.8%), gross edge 8.8% (régi 22.3%) → **edge gate-en megbukik 7.8% < 12%**. Új scan-en nem nyílna.
-
-**5 fix:**
-
-| ID | Severity | Fix lényege | Fájlok |
-|----|----------|-------------|--------|
-| (a) | HIGH | Bucket-matcher v2 CDF: tail-bucketek `(−∞, T]`/`[T, +∞)` integrállal, belső bucketek interval-CDF-fel | `bucket-matcher.mts` (rewrite), `bucket-matcher.test.mts` (NEW), `market-finder.mts` (`parseTempFromLabel` + `tail` field) |
-| (b) | HIGH | `useEnsemble` default true — 31-tagú GFS-ensemble σ kalibrálva | `decision-engine.mts`, `trader-settings.mts` |
-| (c) | MEDIUM | Cloud-cover GFS+ECMWF átlag (eddig csak GFS) | `forecast-engine.mts` |
-| (d) | MEDIUM | 7. gate: Market disagreement ≤ 2.0°C. Új helper `marketConsensusModalTempC`. Soft-fail ha nincs market modal | `decision-engine.mts`, `index.mts`, `trader-settings.mts` |
-| (e) | LOW | Per-category recentLogs filter — eddig cross-kategória crypto logok jelentek meg weather status response-ban | `shared/logger.mts`, `index.mts` |
-
-**A 2 jelenleg nyitott pozíció érintetlen marad** — re-evaluation
-check (`if (session.openPositions.some(...))`) megakadályozza. Az új
-gate-logika csak FUTURE scan-ekre érvényes. Shanghai 2026-05-11 12:00Z-én,
-Austin 2026-05-12 12:00Z-én settlel METAR-on.
-
-`tsc --noEmit` exit 0, bucket-matcher.test 4/4 passed, station-config.test
-8/8 passed, Astro build 9 page.
-Részletek: `internal-docs/changelog/CHANGELOG-2026-05-11.md` "(d)" szekció.
-Math reference frissítve: `internal-docs/math/16-weather-bot.md` §5 + §7.
-
-### Hova nyúlj legközelebb (weather)
-
-- **Validáció**: várni a Shanghai (May 11 12:00Z) és Austin (May 12 12:00Z) settlement-jét. Mindkét METAR-eredmény után az IC értelmes lesz, calibration alarm bekapcsolható.
-- **DEB σ-tanulás**: per-város / per-évszak residual-eloszlás mérése a closed-trade-ekből (math/16-weather-bot.md §5 TODO).
-- **Top-5 limit**: `markets.slice(0, 5)` a `runWeatherTraderInner`-ben (tudatos latency-cap, marad).
-
-### Huszonnyolcadik session (2026-05-11) – Crypto decision-engine audit + 6 fix (9 → 12 gate, $1 floor kivétel, combiner recommendation gate, paper fee parity)
-
-Live `mj-trading.netlify.app/trade/crypto/` 3 nyitott paper pozíciójának
-audit-ja 6 strukturális hibát fedett fel a decision-engine + signal-
-aggregator réteg-ben. Mindhárom pozíció **predProb 0.505, market
-0.255-0.305, kelly 0.03%, méret $1** mintázattal nyílt — pedig a combiner
-saját ajánlása ugyanazokra a slug-okra `WAIT`/`WATCH`/`trade_recommended
-=false`. A trader nem olvasta sem a `recommendation`, sem a
-`trade_recommended` mezőt, és a `Math.max(1, bankroll * kellyCapped)` $1
-floor 13× over-sized minden trade-et.
-
-**6 fix implementálva:**
-
-| # | Probléma | Fix |
-|---|----------|-----|
-| **#1** | `$1` hard floor felülbírálja a Kelly-t (0.03% × $250 = $0.075 → $1) | `decision-engine.mts:230` floor kiszedve. Új gate #11 "Kelly méret ≥ minimum" ($0.50 default). |
-| **#2** | `signal-aggregator` csak `combined_probability + kelly.quarter`-t olvas. | `AggregatedSignal` 3 új mező: `combinerRecommendation`, `tradeRecommendedByRisk`, `adjustedProbability`. |
-| **#3** | Combiner `recommendation` (WAIT/WATCH/SKIP/BUY) ignorálva. | Új gate #4 "Combiner recommendation" — pass csak ha `recAction.startsWith("BUY")`. |
-| **#4** | `finalProb ≈ 0.5` zaj (8 signal default 0.5-höz konvergál input nélkül), de a trader 25% edge-et lát a 0.255 marketPrice ellenében. | Új gate #3 "Combiner confidence (\|p − 0.5\|)" — 5% küszöb. |
-| **#5** | `trade_recommended = false` (resolution-risk veto) UI-on látszott, trader nem nézte. | Új gate #5 "Resolution-risk gate" — `tradeRecommendedByRisk !== false`. |
-| **#6** | `paper-resolver.mts` `pnl = proceeds − costBasis` képletet használt, fee nélkül. Decision-engine `netEdge = grossEdge − 0.036` küszöböléssel gate-elt, így paper PnL szisztematikusan optimistábbnak látszott mint live. | `applySettlementFee(pnlGross, proceeds, costBasis, 0.036)` helper. |
-
-**Gate-szám: 9 → 12.** A régi "Kelly conviction (combiner > 0)" gate
-kikerült (a "Kelly méret ≥ minimum" funkcionálisan ekvivalens), és 3 új
-konvergencia-gate + 1 új size-min gate került be. UI `gates.length`-ből
-automatikusan rendererel.
-
-**Trader-settings új knob-ok**: `minPositionSizeUSDC` (default $0.50,
-**live módra $5-re emelni — Polymarket CLOB minimum order size**),
-`combinerConfidenceMin` (default 0.05).
-
-**Mit NEM csináltam**: simVersion **NEM** bump-olva. A 3 nyitott pozíció
-settle-el a saját endDate-én ($0.036 fee levonás per trade close-kor,
-negligible).
-
-`tsc --noEmit` exit 0, Astro build 9 page.
-Részletek: `internal-docs/changelog/CHANGELOG-2026-05-11.md` "(d)" szekció
-+ `internal-docs/math/13-crypto-bot.md` §4 (12 gate-es tábla) + §9.
-
-### Hova nyúlj legközelebb (audit fix utáni paper validáció)
-
-1. **Új cron tick (3 perc)**: a scanner most az új 3 konvergencia-gate-en
-   meg fog állni minden olyan trade-en, amit a combiner saját ajánlása
-   szerint nem kellene nyitni. Vártan **kevesebb új trade nyílik**, ez
-   szándékos.
-2. **A 3 meglévő open**: lejár 2026-05-11 16:00Z-kor. Settlement-en zárul,
-   fee levonással. A `closedTrades` array elsőként a fee-adjusted PnL-t
-   fogja mutatni.
-3. **Calibration Health badge**: most érdemi IC-t kellene mérnie a fee
-   parity miatt. Ha a badge `noise` marad 30+ trade után → a fixek nem
-   elegendők, a signal-szettet kell átnézni.
-4. **Live mode emlékeztető**: a Settings tabon `minPositionSizeUSDC = 5.00`
-   kötelező, mielőtt PAPER_MODE=false-ra váltasz.
-
-### Huszonhetedik session (2026-05-11) – `internal-docs/` átszervezés (current-state / math / roadmap / archive)
-
-A user kérése: az `internal-docs/` mappát logikus mappaszerkezetbe rendezni
-("current-state ; math ; future-state és roadmap-to-reach future state"),
-duplikációk törlésével. Az addigi flat-ish `app/`, `migration/`, `app/done/`,
-`math/weather/` keveréket egységes szemantikai mappákra bontottam.
-
-**Új struktúra:**
-
-```
-internal-docs/
-├── README.md                       ← újraírva, indexszel
-├── current-state/   (6 fájl)       ← élő rendszer snapshot
-│   ├── architecture.md             (← app/architecture.md)
-│   ├── trading-status.md           (← app/trading-status.md)
-│   ├── settings-reference.md       (← app/settings-help.md)
-│   ├── auto-claim.md               (← app/auto-claim.md)
-│   ├── env-vars.md                 (← env-vars.md root-ból)
-│   └── deploy.md                   (← app/DEPLOY.md)
-├── math/            (13 fájl)      ← signal math + bot impl reference
-│   ├── 02 … 15-funding-arb.md      (változatlan)
-│   ├── 16-weather-bot.md           (← math/weather/README.md, flatbe)
-│   └── 151-Trading-Strategies.pdf
-├── roadmap/         (7 fájl)       ← jövőbeli rendszer + action plan
-│   ├── README.md                   (új, olvasási sorrend)
-│   ├── master-plan.md              (← edgecalc-master-plan.md)
-│   ├── hetzner-migration.md        (← migration/hetzner-migration-plan.md)
-│   ├── hetzner-infrastructure.md   (← migration/infrastructure.md)
-│   ├── migration-strangler-fig.md  (← migration/migration-plan.md)
-│   ├── new-strategies.md           (← migration/new-strategies-roadmap_1.md)
-│   └── risk-coordinator-considerations.md (← migration/risk-coordinator.md)
-├── changelog/                      ← VÁLTOZATLAN
-└── archive/                        ← elkészült promptok + historikus tanulságok
-    ├── prompts/  (5 fájl)          (← app/done/edgecalc-*.md)
-    ├── paper-pnl-v2-bug.md         (← app/paper-pnl-analysis.md)
-    ├── grabit-vps-setup.md         (← migration/reference/VPS-SETUP_*.md)
-    └── matekmegoldasok-content-roadmap.md (← másik projekt)
-```
-
-**Törölve (4 dupli/elavult):**
-- `app/done/hyperliquid.md` (átfedi `math/14-hl-directional.md`)
-- `app/done/weather-patch.md` (átfedi CHANGELOG-2026-04-21)
-- `app/done/roadmap.md` (Sprint 1 status, elavult)
-- `migration/README_2.md` (csak meta-olvasási sorrend, beépítve `roadmap/README.md`-be)
-
-**Cross-ref-ek frissítve:**
-- CLAUDE.md: mappaszerkezet block + "Új tab" / "Új function" path-ok + 14-15-26. session env-vars/migration hivatkozások
-- internal-docs/README.md teljes újraírás
-- 7 belső roadmap-cross-ref + 1 math/13-crypto-bot.md hivatkozás
-- A CHANGELOG-* fájlokat **NEM** módosítottam (történelem)
-
-`tsc --noEmit` és Astro build NEM futott (csak markdown átszervezés, kód érintetlen).
-Részletek: `internal-docs/changelog/CHANGELOG-2026-05-11.md` "(c)" szekció.
-
-### Huszonhatodik session (2026-05-11) – Reconcile "Unknown error" — Netlify 10s timeout fix
-
-A user a "⟳ Reconcile pending" gombra "Unknown error"-t kapott. Root cause:
-a `handleCryptoReconcile` **kétszer fetch-elt Gamma-t** per pending pozíció
-(resolver pass + diagnose pass), így 1 pozíció ~10s körül futott, ami a
-**Netlify default 10s function budget** alatt megszakadt → üres response
-→ frontend fallback "Unknown error".
-
-**Fix:** `resolvePendingPositions` mostantól **single-pass** működik — egy
-Gamma fetch per pozíció, és visszaad egy `pendingDiagnostics:
-PendingDiagnostic[]` mezőt is a `resolutions` mellett. A standalone
-`diagnosePendingPositions` fv törölve. A `parseResolution` és
-`buildDiagnostic` segéd-fv-ek dolgozzák fel a raw Gamma adatot.
-
-Wall-clock: 1 pending pozíción ~2s, 5 pending-en ~10s — biztonságos a 10s
-budget alatt.
-
-**Védő fix:** a top-level dispatcher catch most graceful-en kezeli az üres
-`err.message`-t — `errMsg = err.message || err.toString?.() || String(err)
-|| "internal error"`. Eddig ha valami `throw undefined`-dal dobott, az
-error message üres volt, és a frontend "Unknown error"-ra esett vissza.
-
-`tsc --noEmit` exit 0 (project files), Astro build 9 page.
-Részletek: `internal-docs/changelog/CHANGELOG-2026-05-11.md` "(b)" szekció.
-
-### Huszonötödik session (2026-05-11) – Env-vars dokumentáció
-
-Új doksi: **`internal-docs/current-state/env-vars.md`** — 61 env-változó kategorizálva
-13 csoportba (auth / Polymarket / HL / Binance / Bybit / Anthropic /
-Telegram / Supabase / globális mode-flags + 4 bot tunable szett). Minden
-változónál: mire való, hol használt (fájl:sor), default érték, kockázati
-szint (🔴 kötelező / 🟠 live-only / 🟡 opcionális), generálási parancs
-ha secret.
-
-Plusz: minimum env-szettek 5 deployment szcenárióhoz (csak elemzés /
-paper / live Polymarket / live HL / Bybit-Binance manual), Settings tab
-vs env-var prioritás magyarázat, biztonsági szempontok (secret rotáció,
-paper-to-live váltás 2-fázisa, testnet-előbb policy).
-
-`internal-docs/README.md` "Environment Variables" szekciója kibővítve
-egy hivatkozással a teljes doksira (rövid példa megmaradt a quick-start
-miatt).
-
-### Hova nyúlj legközelebb (env)
-
-- Új tunable env hozzáadásakor: 1) config.mts default, 2) ha
-  runtime-állítható, trader-settings.mts SCHEMA, 3) `internal-docs/current-state/env-vars.md`
-  frissítés. A README.md csak summary, ott nem kell minden detail.
-- Új API integrációnál: minta-trió `*_API_KEY` / `*_API_SECRET` /
-  `*_TESTNET` — kategorizálva az `internal-docs/current-state/env-vars.md` "API" szekciójába.
-
-### Huszonnegyedik session (2026-05-11) – Crypto Reconcile + per-position Gamma diagnostic
-
-A user észlelte: /trade/crypto/ oldalon 1 pending paper position past
-endDate "awaiting Polymarket resolution", és nem látta miért nem zár.
-
-**A valódi viselkedés**: Polymarket BTC up/down piacai UMA-n keresztül
-rendeződnek (proposer → 2h dispute window → finalize). Tipikus close
-**5min–4h** az endDate után. A resolver minden 3 percben próbálkozik,
-automatikusan zár amint Gamma `closed=true` + `outcomePrices` ∈ {0,1} +
-`umaResolutionStatus="resolved"` (UMA finality gate az előző session-ben).
-
-**Új diagnosztika gomb:**
-- `crypto/paper-resolver.mts`: új `diagnosePendingPositions()` helper.
-  Per-position Gamma probe, visszaadja `closed/outcomePrices/umaResolutionStatus`
-  + emberbarát verdict-et.
-- `auto-trader/index.mts`: `handleCryptoReconcile()` + `case "reconcile"`
-  kibővítve crypto-ra (eddig weather-only).
-- `CryptoTrader.tsx`: új "⟳ Reconcile pending" gomb (csak ha pending > 0).
-  Új "Reconcile result" kártya: zárt pozíciók zöld sorral + PnL,
-  pending-ek Gamma chip-ekkel (closed/op/uma) + verdict.
-
-A felhasználó most kattintva a Reconcile gombra konkrét diagnosztikát kap:
-- `closed: true, uma: proposed` → 2h dispute window, várj
-- `closed: true, uma: resolved, op: [1,0]` → következő tick zárja
-- `closed: false` → market még nyitva (edge case)
-- `no conditionId` → legacy, reset kell
-
-`tsc --noEmit` exit 0 (project files), Astro build 9 page.
-Részletek: `internal-docs/changelog/CHANGELOG-2026-05-11.md` "(a)" szekció.
-
-### Huszonharmadik session (2026-05-10) – Bankroll: per-bot input + F-Arb homepage visibility + shared-pool flag
-
-A user 3 problémát észlelt:
-1. **F-Arb "nem kapcsol be"** — főleg mert bankroll $0 → minden coin "Capital cap reached".
-2. **A főoldalon nem látszott a F-Arb bankrollja** — `multi-status.readFundingArb` hardcoded 0-t adott (F-Arb session-nek nincs saját bankroll mezője).
-3. **Bankroll nem volt bot-onként állítható** — egyetlen `ec_bankroll` localStorage kulcs minden boton.
-
-**Backend fix:**
-- `multi-status.mts`: `readFundingArb` betölti a HL session blob-ot, és átemeli a `bankrollStart/Current`-et. Új `bankrollShared: true` flag jelzi a totals reducer-nek, hogy ne számolja duplán a HL bankrollt.
-
-**Frontend fix:**
-- `DashboardShell.tsx`: új `category?: string` prop. localStorage kulcs most per-kategoria (`ec_bankroll_crypto`, `_weather`, `_hyperliquid`). F-Arb és HL **ugyanazt a kulcsot** használja (`ec_bankroll_hyperliquid`), mert a F-Arb session a HL bankrollját húzza. One-time migration a legacy `ec_bankroll`-ból.
-- `HomePage.tsx`: F-Arb sor `bankrollShared` flag-gel `(shared)` suffix-szel + hover tooltip.
-- `CategoryDashboard.tsx`: category prop átadva.
-
-**F-Arb default bankroll**: $200 (HL session default-ja). Per-category defaults: crypto $150, weather $100, hyperliquid $200, funding-arb $200.
-
-**Vizuális változás**: a header `Bankroll:` label → `Bankroll · <category>:`. Funding-arb-nál: `Bankroll · hyperliquid (shared):`.
-
-**Miért "nem kapcsol be" F-Arb (diagnosztikai checklist)**: (1) session.stopped — Resume gomb; (2) HL bankroll = 0 — F-Arb Reset $X-szel beállítja; (3) Spread túl alacsony — normális, piaci alkalom kell.
-
-`tsc --noEmit` exit 0 (project files), Astro build 9 page.
-Részletek: `internal-docs/changelog/CHANGELOG-2026-05-10.md` "(l)" szekció.
-
-### Huszonkettedik session (2026-05-10) – Stop/Resume gombok unifikálva (Weather Resume hiányzott, Crypto/Weather backend resume case hiányzott)
-
-A user észlelte: a Weather botot megállította (Stopped: Manual stop), de
-**nem tudta visszaindítani** — nincs Resume gomb a Weather UI-on. Plusz a
-Crypto UI-on volt Resume gomb, de a backend **nem ismerte fel a "resume"
-action-t** crypto+weather kategóriára → 400 "Unknown action: resume".
-
-**Backend fix:**
-- `crypto/session-manager.mts`: új `resumeSession(session)` helper
-  (mirror a HL `resumeHlSession`-nek). Clears `stopped`, `stoppedReason`,
-  `calibrationAlertSentAt`.
-- `auto-trader/index.mts`: új `handleResume(config, cat)` + új dispatcher
-  case `case "resume": return await handleResume(config, cat);`. HL és
-  F-Arb saját resume case-ek (külön branch) változatlanok.
-
-**Frontend fix:**
-- `WeatherTrader.tsx`: symmetric Resume/Stop gomb a Crypto / HL / F-Arb
-  mintára. Resume `when: isStopped`, Stop `when: !isStopped`.
-
-**Egységesség checklist (mind a 4 bot):**
-
-| Bot | Run | Reconcile | Resume (stopped) | Stop (running) | Refresh |
-|-----|-----|-----------|------------------|----------------|---------|
-| Crypto | ✓ | — | ✓ | ✓ | ✓ |
-| Weather | ✓ | ✓ | ✓ (ÚJ) | ✓ | — |
-| HL Perp | ✓ | — | ✓ | ✓ | ✓ |
-| F-Arb | ✓ | — | ✓ | ✓ | ✓ |
-
-A Resume gomb minden boton csak akkor jelenik meg, ha session `stopped:
-true` (HL-en `pausedUntil` is). Stop gomb csak akkor látszik, ha NINCS
-stopped/paused.
-
-`tsc --noEmit` exit 0 (project files), Astro build 9 page.
-Részletek: `internal-docs/changelog/CHANGELOG-2026-05-10.md` "(k)" szekció.
-
-### Huszonegyedik session (2026-05-10) – Crypto + Weather: chip Y-uniformity + pending diagnostics
-
-A 20. session után a user 2 problémát észlelt:
-1. **A 9-gates / 6-gates chip nem jelent meg minden trade-lehetőségen** —
-   csak a teljesen kiértékelt sorokon (decision-skip / position_opened /
-   traded). Az early-exit ágakon (already-has-position, error, weather
-   unknown city / no matching bucket) hiányzott vagy 1/1-et mutatott.
-2. **"Miért vár resolutionra"** — a pending card nem mondta meg, hogy a
-   pozíció UMA window-ra vár-e vagy legacy conditionId hiányzik.
-
-**Y-uniform chip fix:**
-- `crypto/decision-engine.mts`: új `CRYPTO_GATE_LABELS` (9-elem) +
-  `padCryptoGates(evaluated)` helper. Tölti fel "not evaluated" rows-szal.
-- `weather/decision-engine.mts`: ugyanaz `WEATHER_GATE_LABELS` (6) +
-  `padWeatherGates`.
-- `auto-trader/index.mts` + `weather/index.mts`: minden early-exit ág
-  (already-open, no station, no bucket, error) padded gate-listával jön
-  → minden sor pontosan Y=9 / Y=6.
-
-**Pending-card diagnostic:**
-- `getCryptoPendingPositions` kiegészítve `hasConditionId` és `waitReason`
-  mezővel. Per-position szöveg: UMA window / extended window / long wait
-  / missing conditionId.
-- `CryptoTrader.tsx` `PendingPositionsCard` secondary lin most mutatja a
-  waitReason-t. Legacy positions ⚠ chip-pel.
-
-**Magyarázat a "vár resolutionra" UX-re:** simVersion 3 contract — paper
-PnL csak valós Gamma resolution után zár (`closed: true` + outcomePrices
-∈ {0,1}). Tipikus UMA window 5–60 min, vita esetén órák. **Nem bug, hanem
-a v3 invariáns**: paper PnL == live PnL.
-
-`tsc --noEmit` exit 0 (project files), Astro build 9 page.
-Részletek: `internal-docs/changelog/CHANGELOG-2026-05-10.md` "(j)" szekció.
-
-### Huszadik session (2026-05-10) – Crypto + Weather: backend-driven gate-list (uniform UI follow-up)
-
-A 18. session-ben HL + F-Arb backend-shippelt gate-eket kapott; Crypto és
-Weather változatlanul a frontend mapperből építette → élesben "1/1 ✓" vagy
-semmi jelent meg. A user észrevette ("nem jelennek meg a gate-k vagy 1/1
-ben jelenik meg ugyanez van a weather -ön is! mondtam hogy egységes
-legyen!"). Most mindkét bot is backend-driven gate-listát kap.
-
-**Crypto** (`crypto/decision-engine.mts` + `auto-trader/index.mts`):
-- `makeDecision` átírva non-short-circuit-ra: minden gate független
-  pass/fail-ként értékelődik ki, teljes lista visszatér.
-  `shouldTrade = gates.every(g => g.passed)`. A `reason` mező továbbra is
-  a *legelső* bukott gate üzenetét hozza (változatlan UX a row footer-en).
-- 9 base gate + 1 conditional (entry-window — daily piacokon "n/a").
-- `marketContext.gates` mező — minden push (skip/failed/position_opened)
-  automatikusan kapja.
-- "Already has open position" early-return: synthetic 1-gate.
-
-**Weather** (`weather/decision-engine.mts` + `weather/index.mts`):
-- `makeWeatherDecision` ugyanúgy non-short-circuit. 6 gate.
-- Per-row gates push-olva minden ágon. Pre-decision skip-ek (unknown city,
-  no matching bucket) synthetic 1-gate-tel.
-
-**Frontend** (`CryptoTrader.tsx` + `WeatherTrader.tsx`): `criteria` builder
-ha `r.gates` non-empty → backend payload, egyébként legacy mapper fallback.
-
-Hatás: minden 4 boton most teljes "X/Y gates" chip látszik a hover popover-rel.
-Crypto eddig 1/1 ✓ vagy semmi → most 7/9 (pl. 2 fail), pontos checklist-tel.
-
-`tsc --noEmit` exit 0 + Astro build 9 page.
-Részletek: `internal-docs/changelog/CHANGELOG-2026-05-10.md` "(i)" szekció.
-
-### Tizenkilencedik session (2026-05-10) – /tools/ dashboard: 9 tab kap egységes "How to use" info-doboz + vol-divergence 15m bug fix
-
-A `mj-trading.netlify.app/tools/` 9 elemző-tabja (Scanner, EV, Swarm,
-Order Flow, Vol Harvest, Apex Wallets, Cond Prob, Signals, Arb Matrix)
-audit + UX javítás. A felhasználó kérése: minden tabra egy "Mire való
-és hogyan kell használni" doboz, és jelölje, melyik Polymarket piacot
-hívja a tool. Plusz az API-hívások ellenőrzése (a botoknál volt korábban
-Gamma/CLOB hiba).
-
-**Audit eredmény:** a 9 tabot kiszolgáló netlify function-ök Gamma/CLOB
-hívásai mind helyesek (`closed=true` filter, `condition_ids` plural,
-`clobTokenIds` JSON-string parsing) — ezeket korábbi sessionökben
-javítottuk és stabilak. **Egy valódi bugot találtam:**
-
-- **`netlify/functions/vol-divergence.mts:117-119`** — a "BTC 15m
-  kontraktok" filter `hoursLeft < 1 → skip` ágat tartalmazta, ami
-  pontosan a 15-perces BTC UP/DOWN piacokat dobta el (a tool fő
-  célpontját). Plusz a per-market `if (remaining < 1) timeRemainingHours
-  = remaining` ág sosem futott le, így minden piac default 15-perces
-  IV-vel lett számolva, függetlenül a tényleges remaining time-tól.
-  **Fix**: filter `1/60h–48h` intervallumra, per-market határ 48h-ra
-  bővítve.
-
-**Új komponens:** `src/components/shared/ToolInfoBox.tsx` — egységes
-"info-doboz" 5 prop-pal (title / what / howToUse / marketScope /
-relatedBot / endpoint). A 9 tab közül 8 kap saját boxot (a 9. Arb
-Matrix közös box-ot kap A/B/C/D sub-tabokkal).
-
-**Bot-eszköz mapping** a `relatedBot` mező segítségével: Order Flow / Vol
-Harvest / Apex / Cond Prob / Signal Combiner / Arb Matrix(D) → mind a
-crypto bot megfelelő signal-ját hívja vissza, így a tool-és-bot kapcsolat
-vizuálisan is megjelenik a /trade/crypto/ oldalra mutató linkként.
-
-`tsc --noEmit` zöld a project files-on. Részletes leírás:
-`internal-docs/changelog/CHANGELOG-2026-05-10.md` "(h)" szekció.
-
-### Hova nyúlj legközelebb (/tools/)
-
-- Új tool-tab esetén csak importáld a ToolInfoBox-ot és add meg az 5
-  prop-ot — egységes UX automatikusan.
-- A vol-divergence fix-et érdemes 24h paper-megfigyeléssel validálni:
-  a Tab 5 BTC kontraktok táblázata most már 15 perces piacokat is kell
-  hozzon, nem csak daily-eket.
-- Ha más Gamma-szűrő is gyanús (pl. extra volume kritérium kihagy
-  actionable piacokat), ugyanaz az audit-mintázat alkalmazható.
-
-### Tizennyolcadik session (2026-05-10) – Auto-Trader UI: egységes "X/Y gates" chip + hover popover minden bot scan-rétegén
-
-A 4 bot scan-listájában (Crypto / Weather / HL Perp / Funding-Arb) eddig
-két különböző mintát használtunk a gate-vizibilitásra: Crypto+Weather a
-frontend `*EntryCriteria` mapperből építette, HL+F-Arb pedig
-`cfg=undefined`-del hívta → **a chip soha nem jelent meg ezen a két boton**.
-A user kérése: minden boton ugyanaz a "X/Y gates" chip + hover popover, mint
-amilyen a weather-ben már működik a nyitott pozíció "Why?" paneljén.
-
-**Backend változások (2 file):**
-
-| File | Változás |
-|------|----------|
-| `auto-trader/hyperliquid/index.mts` | Per-coin scan loop kibővítve **12-gates** (cooldown, signal, vol, session-loss, open-pos, consec-loss, coin-not-open, active-signals, resolution-risk, net-edge, hl-price, size). Minden gate független pass/fail evaluation, snap-helper padding "not evaluated"-del. Skip soron most jön `direction / edge / predictedProb / marketPrice` is. |
-| `auto-trader/hyperliquid/funding-arb/index.mts` | Loop átírva: minden 5 ARB_COIN egy sort kap (eddig csak viable+eligible coin). **6-gates** lista (spread, break-even, OI, uniqueness, pos-count, capital-cap). entryDecision snapshot most a coinGates listát reuse-olja az eddigi hardcoded `passed:true` helyett. |
-
-**Frontend változások (3 file):**
-
-| File | Változás |
-|------|----------|
-| `shared/TraderResults.tsx` | `CriteriaGate.actual` és `.required` opcionálisak (szinkron a backend `DecisionGate` shape-jével). `CriteriaSummary` chip új trail: nem all-pass-on "X/Y gates · N✗" expliciten mutatja a bukások számát. Popover header: "Belépési kritériumok • X / Y teljesült · N bukás". |
-| `trader/HyperliquidTrader.tsx` | `criteria` builder: ha `r.gates` non-empty → backend payload, egyébként `hlEntryCriteria(r, undefined)` legacy fallback. |
-| `trader/FundingArbPanel.tsx` | Ugyanaz, plus chip-set bővítve `OI $XXM` chippel + tone-os `spreadAnnualized` (≥30%/yr zöld, ≥5% narancs, alatta piros). |
-
-**Hatás a deploy után:**
-- HL Perp scan-row: minden 3 coin (BTC/ETH/SOL) "X/12 gates" chip + hover-en pontos checklist
-- Funding-Arb scan-row: minden 5 coin (BTC/ETH/SOL/XRP/AVAX) "X/6 gates" chip + hover, spread+OI értékkel
-- Crypto + Weather: változatlan viselkedés (frontend mapper marad)
-
-`tsc --noEmit` exit 0 + Astro build 9 page generated.
-Részletes leírás: `internal-docs/changelog/CHANGELOG-2026-05-10.md` "(h)" szekció.
-
-### Hova nyúlj legközelebb (gate UI)
-- Új scan-gate HL-en: `HL_GATE_LABELS` array + új `coinGates.push({...})` az index.mts-ben. Frontend automatikusan rendererel.
-- Új scan-gate F-Arb-en: `ARB_GATE_LABELS` + új gate evaluation a loop-ban.
-- Crypto + Weather migrálható backend-driven gate-hez a jövőben (a frontend mapper csak a row data subset-jét látja).
-
-### Tizenhetedik session (2026-05-10) – HL bots: 6 nyitott finding closeolva (live exit, lot precision, cooldown, slippage, …)
-
-A 16. session-ben dokumentált 6 nyitott finding **mind javítva**.
-`tsc --noEmit` exit 0. Részletes leírás: `internal-docs/changelog/CHANGELOG-2026-05-10.md` "(g)" szekció.
-
-| ID | Fix | Fájlok |
-|----|-----|--------|
-| §9.A | Live HL exit/reconcile: új `live-resolver.mts` (`clearinghouseState` + `userFillsByTime`, oid match → tp/sl/manual close reason) | `live-resolver.mts` (NEW), `hl-client.mts` (HlFill type, getUserFillsByTime, getAddress), `index.mts` (paper/live branch) |
-| F7 | Binance lot precision: `exchangeInfo` cache (6h TTL) + `roundToStep(qty, sym)` minden SELL-en. SOL/AVAX (0.01) / DOGE (1) most korrekt precíziójú | `hedge-manager.mts` |
-| H4 | Cooldown Blobs persistence: `hyperliquid-runtime / cooldowns-v1` key, 30s reload TTL. Async setCooldown/isOnCooldown | `decision-engine.mts`, `index.mts` |
-| F8 | `totalFundingToday: { date, amount }` typed shape + `migrateTodayShape` régi blob fallback | `funding-arb/types.mts`, `fr-session.mts`, `funding-arb/index.mts` |
-| H5 | Explicit warning log `HL_MAX_LEVERAGE > 3` clamp-on (egyszer sessiononként) + `HL_LEVERAGE_HARD_CAP` const dokumentált | `kelly-sizer.mts` |
-| F2/F3 | Paper slippage modellezve: HL SL 0.1%, timeout 0.05%, Binance entry/close 0.05%, HL paper entry 0.5%, HL close paper cost-line 1%. Total roundtrip ~1.6% notional | `paper-resolver.mts`, `hedge-manager.mts`, `fr-executor.mts` |
-
-### Maradék nyitott
-
-A 16. session 9 finding-je mind closeolva. **0 nyitott audit-finding.**
+1. **Apply Crypto Loose preset** → 30+ paper trade ~1-2 nap alatt → IC validáció → vissza Normál-ra.
+2. **Tier 2** — reliability diagram per-prediction bin (200+ closed trade precondition, ~2-4 hét).
+3. **Tier 3** — MAE + time-based invalidation HL Perp bot-on.
+4. **Hetzner migráció** — 7-fázisú action plan az `internal-docs/roadmap/hetzner-migration.md`-ben.
 
 ### Hova nyúlj legközelebb
 
-**Live deploy most már technikailag elérhető:**
-- A `live-readiness` gate továbbra is védi (>=30 paper trade IC>=5%, Sharpe>=0.5, drawdown<25%, simVersion=2).
-- A `live-resolver.mts` reconciliálja a TP/SL fillet a session blob-bal.
-- A `placeHlEntry` mostantól mindkét rollback ágat lefedi (TP fail → cancel entry; SL fail → cancel entry+TP).
-- A `hedge-manager` Binance lot precíziót automatikusan rounding.
-
-További hardening lehetőségek (nem audit-finding):
-- HL websocket subscription a fill-eventekre (a tick-driven `userFillsByTime` polling helyett).
-- Funding-arb: explicit price-leg PnL tracking a closeArbPosition-ben (most a paperSlippage cost-line proxy-zza).
-- F8 follow-up: timezone-aware day rollover (currently UTC midnight).
-
-### Tizenhatodik session (2026-05-10) – HL + Funding-Arb full audit + paper/live parity fixes (sim v2)
-
-A felhasználó kérésére end-to-end audit a két Hyperliquid bot-on (directional perp + funding-arb): scan → signal → decision → entry → resolve, paper/live szinkron-ellenőrzéssel, minden trade funkció validálásával. **9 finding** (5 fix elvégezve, 4 dokumentálva).
-
-**HL Directional bot — 5 fix (2 critical + 1 major + 2 minor doc):**
-
-- **🔴 H1 (kelly-sizer.mts + types/config/order-manager/index):** TP/SL clamp. A `signal.edge = |finalProb−0.5|×2` egy binary-prediction edge volt clamp nélkül szorozva `2×/1×`-szel a perp price-target-távolsághoz → edge=0.20 mellett TP=+40%, SL=−20% (BTC-en 4h horizonton soha nem érhető). Eredmény: minden trade `timeout` reason-nel zárult. Fix: `tpPct = min(edge × 2, tpPctMax)`, `slPct = min(edge × 1, slPctMax)` (default 0.02/0.01). Új env knob-ok: `HL_TP_PCT_MAX`, `HL_SL_PCT_MAX`.
-- **🟠 H2 (index.mts):** Vol gate paper parity. v1 a `volatilityGate` csak live módban futtatta — paper trade-elhetett 200% RV napokon át. Most paper + live ugyanazt a gate-et látja.
-- **🟠 H3 (paper-resolver.mts):** Hourly funding accrual paper PnL-be. v1 paper PnL `grossPnl − fees`-szel számolt, ignorálva a HL hourly funding-ot — long bias persistent positive funding tape-en. Most a `metaAndAssetCtxs.funding[i]` legfrissebb rate-jét × `(entryNotional + exitNotional) / 2` × holdHours-szal könyveli a `pnlOfClose`.
-- **simVersion v1 → v2 auto-archive (session-manager.mts + config.mts):** három paper-PnL semantic változás miatt új `HL_PAPER_SIM_VERSION = 2`. A `loadHlSession()` ha a persisted `simVersion < 2` → archive `archive_paper_v1_${ts}` key-be, fresh `session_paper`. Live session SOHA nem auto-resetel.
-- **run-state simVersion invalidation (run-state.mts):** ugyanaz a pattern, mint a crypto bot 10. sessionben — ha a `lastResult.session.simVersion < HL_PAPER_SIM_VERSION` → `lastResult = null`, hogy a UI ne mutasson stale snapshotot.
-
-**Funding-Arb bot — 2 fix (1 critical + 1 major):**
-
-- **🔴 F1 (fr-session.mts + index.mts):** Mark-to-market funding accrual. v1 `accrueFunding` `pos.sizeUSDC × hourlyRate × hours`-t használt — fixed entry-time notional. Real HL funding `position_size_in_coins × current_mark_price × rate`-en fizet → BTC 5-10% drift mellett 5-10% delta a real PnL-től. Új `AccrueSnapshot { rate, markPrice }` polymorphic Map signature (backwards compat). Most `notional = |sizeCoins| × markPrice`.
-- **🟠 F5 (fr-executor.mts):** HL close slippage band 0.5% → 1.0%. v1 `closeRefPrice * 1.005` IOC limit volatilis ticken (BTC drift > 0.5% a 3min cron-gap között) IOC miss-t adott — close újrapróbálkozott minden tickre, csak a `maxHoldDays` safety net mentett ki. Aszimmetrikus design: entry 0.5%, close 1.0%.
-
-**Open findings (dokumentálva):** H4 in-memory cooldown (low priority), H5 maxLeverage 3x clamp (konzervatív default), §9.A live HL exit/fill/settlement reconciliation hiányzik (**live-ra TILOS amíg nem épül meg**), F2/F3 cross-venue non-atomic slippage paper-ben nincs (~+1% paper upper bound), F7 Binance SELL `quantity.toFixed(5)` per-pair lot precision (élesedés előtt fix kell), F8 `totalFundingToday` string format.
-
-**Két új doksi:**
-
-- **`internal-docs/math/14-hl-directional.md`** — 12-szekciós implementation reference: §1 stratégia, §2 pipeline, §3 signal source, §4 8 gate, §5 ¼-Kelly + 3x lev cap + TP/SL clamp képlet, §6 order placement (paper sim / live SDK), §7 paper resolver markprice + funding, §8 session storage + simVersion archive, §9 paper/live parity matrix, §10 ismert limitációk, §11 validációs protokoll, §12 file → szerep map.
-- **`internal-docs/math/15-funding-arb.md`** — 12-szekciós implementation reference: §1 stratégia, §2 pipeline, §3 funding scanner (HL + Binance fundingInfo cache), §4 opportunity detection (3 gate), §5 entry decision (5 gate), §6 atomic 2-leg open + asymmetric close slippage, §7 mark-to-market accrual képlet, §8 session storage + bankroll cross-bot dependency, §9 paper/live parity matrix, §10 limitációk, §11 validációs protokoll, §12 file map.
-
-`internal-docs/README.md` math tábla bővítve 2 sorral.
-
-`tsc --noEmit` exit 0.
-
-Részletes leírás: `internal-docs/changelog/CHANGELOG-2026-05-10.md` "(f)" szekció.
-
-### Hova nyúlj legközelebb (HL bots)
-
-1. **§9.A live HL exit/reconcile** — legfontosabb. Live mode bekapcsolása előtt muszáj. Mintaként a crypto bot `paper-resolver.mts` + a HL `clearinghouseState` query kombója.
-2. **F7 Binance lot precision** — ha live funding-arb-ot tervezel, `GET /api/v3/exchangeInfo` → `symbols[X].filters[LOT_SIZE].stepSize` map-elés.
-3. **H4 cooldown persistence** — ha tartós session anti-revenge protection kell, a `cooldownMap` Blobs-ba kerülhet (mintát lásd a session-managerben).
-
-### Tizenötödik session (2026-05-10) – Audit findings 6/6 implementálva + detailed runtime walkthrough
-
-A 12. session-ben dokumentált 6 audit-finding (A-F) **mind javítva**.
-`tsc --noEmit` exit 0.
-
-**Fix-ek summary:**
-
-| ID | Fix lényege | Fájlok |
-|----|-------------|--------|
-| **A** | Live exit + reconciliation: új `runLiveEarlyExits` orchestrator (`runCryptoTrader`-en belül), `paper-resolver` általánosítva paper+live módra, új `live-price.mts:fetchYesMidpoint` helper, `Position.clobTokenIds` mező populálva entry-kor, `LIVE_EXIT_BUDGET_PER_TICK=3` Netlify-timeout védelem. Live close `requiresRedeem: true` flag-gel logol, on-chain CTF redemption továbbra is manuális `/polymarket-redeem`-en. | `index.mts`, `paper-resolver.mts`, `live-price.mts` (new), `types.mts` |
-| **B** | Cron source detection: `body.next_run` jelenléte triggereli a `isScheduledTick=true`-t a body parser-ben, source override "cron"-ra crypto/HL/weather útvonalakon is. UI status pill `(cron)` badge mostantól a közvetlen cron tick-eken is megjelenik. | `index.mts` |
-| **C** | `SignalBreakdown` 5 → 8 mezős. Momentum/contrarian/pairs_spread mostantól típus-szinten létezik, IC computation érinti, UI signal-arrow row + Telegram alert nyíl-kódolása mind 8 jelzéssel jön. HL signal-source már korábban populated 8 mezőt; most a típus is matchel. | `types.mts`, `signal-aggregator.mts`, `index.mts:formatSignalArrows`, `edge-tracker/statistics.mts`, `mock-trades.mts`, `TraderResults.tsx`, `CryptoTrader.tsx` |
-| **D** | `sessionSummary.simVersion` mező hozzáadva — `getCryptoRunStatus` stale-result invalidation elsődleges path mostantól működik (a `liveReadiness?.summary?.simVersion` fallback is megmaradt). | `index.mts:sessionSummary` |
-| **E** | Új `execution.mts:fetchOrderFillDetail(orderId)` defensive helper — `getOrder.size_matched + price` mezőkből számol fill price-t. `handleBuyLifecycle` live ágban mostantól partial fill / better-than-limit fill is pontosan tükröződik a session state-ben. | `execution.mts`, `order-lifecycle.mts` |
-| **F** | `getMomentumSignal` átírva — új `momentum-snapshots` Blobs store, per-slug `{ ts, yes }` snapshot. Ha snapshot age `[60s, 1h]` → real Rcum vs snapshot, egyébként neutral 0.5. Effektíven 3-15 perces look-back ablakot mér a 3min combiner cache + */3 cron mellett. | `signal-combiner.mts:getMomentumSignal` |
-
-**Új doksi szekció** (user request): `internal-docs/math/13-crypto-bot.md`
-új §2.1 — **Részletes runtime walkthrough (egy teljes cron tick)**.
-13-lépéses annotated trace végigmegy a `runCryptoTrader()` teljes
-életciklusán Lépés 0 (cron trigger) → Lépés 13 (HTTP response). Példa
-adatokkal, tényleges Blobs key-ekkel, log bejegyzésekkel, UI hatással
-minden lépésnél. Tipikus latency budget tickenként a végén (~3.3s paper,
-+33s/exit live).
-
-§9 átírva "Audit findings + fix history" táblára (mind a 6 ✅ FIXED), §11
-file → szerep map frissítve az új modulokkal (`live-price.mts`,
-`fetchOrderFillDetail`, `runLiveEarlyExits`, `resolvePendingPositions`).
-
-`internal-docs/changelog/CHANGELOG-2026-05-10.md` "(e)" szekció a 6 fix
-részletes leírásával.
-
-### Hatás a deploy után (15. session)
-
-- **Paper mode**: változatlan viselkedés. A v3 invariáns sértetlen — paper
-  PnL == live PnL lesz a settlement-en. A momentum signal mostantól érdemi
-  IC-t kap, ami a calibration-noise alarm gate-en (30+ trade után) végre
-  positive-discrimination jelet jelent.
-- **Live mode**: most már funkcionálisan teljes. A `live-readiness` gate
-  továbbra is szigorú default thresholds-szal véd (30+ trade, IC ≥ 5%,
-  Sharpe ≥ 0.5, DD < 25%, simVersion = v3, session active). Csak ezek
-  átengedése után érdemes `PAPER_MODE=false`-ra állítani.
-- **Live close path**: settlement-resolver mind a 3 percben fut és lezárja
-  a Polymarket-resolved live position-öket; TP/SL early exit ugyanezen
-  cron tickkor max 3 pozícióra. Az on-chain CTF redemption (USDC
-  visszaszerzés) marad manuális `/polymarket-redeem`-en — a Telegram
-  alert + log `requiresRedeem: true` jelzi.
-- **UI**: a "Why?" panel mostantól mind a 8 signal nyilát mutatja, a status
-  pill helyesen `(cron)`-t ír a cron-on triggered tickekre.
-
-### Hova nyúlj legközelebb (15. session után)
-
-1. **Paper validation 24-48h** — hagyjuk a botot futni a fixek után,
-   `closedTrades` exit-ek mind 0/1 maradnak (nincs fake artefakt). A
-   `Calibration Health` badge értéke érdemi IC-t kell mutasson legalább
-   az orderflow + apex jelzésre.
-2. **Live mode aktiválás (csak a paper validation után)** — a
-   `live-readiness` gate átengedi-e a sessiont, és van-e elég POLY_USDC
-   funder address-en a $5-10 méretű első live trade-ekhez.
-3. **Auto-redeem cron** (opcionális) — egy plusz `*/15 min` cron ami
-   pollolja a `closedTrades` `requiresRedeem` flag-jét és futtatja a
-   redemption-t. Jelenleg manuális.
-4. **Cooldown map persistálás** — minor improvement: Netlify Blobs-ba
-   menteni hogy cold-start után ne lehessen 5 percen belül 2× nyitni
-   ugyanarra a slug-ra.
-
-### Tizennegyedik session (2026-05-10) – Unified "Why?" panel: weather + HL + funding-arb is megkapja
-
-A Tizenegyedik sessionben a crypto bot kapott entry-decision snapshot-ot
-a nyitott pozíciókra ("Why?" expandable panel a tézis-mondattal, edge
-grid-del, gate-listával). A weather, HL perp és funding-arb botok ezt
-nem kapták meg — a felhasználó észrevette, és kérte a teljes egységesítést.
-
-**Megoldás 4 fronton:**
-
-1. **`EntryDecisionSnapshot` flavor diszkriminátor** (`shared/types.mts`):
-   új `flavor: "prob" | "spread"` mező + opcionális `entryPriceLabel` /
-   `marketPriceLabel` / `spreadAnnualizedPct` / `openInterestUSD`.
-   - "prob": crypto / weather / HL perp (model finalProb vs. market price)
-   - "spread": funding-arb (HL hourly funding vs. Binance hourly funding)
-
-2. **Weather**: `weather/decision-engine.mts` `WeatherTradeDecision`-re
-   `gates: DecisionGate[]` + `kellyRaw / kellyCapped / kellyCap /
-   grossEdge / netEdge` mezők. `weather/index.mts` felépíti a "prob"
-   flavor snapshot-ot a Position-höz. `getWeatherOpenActive` átemeli az
-   openDetails-be. `WeatherTrader.tsx` rationale-prop-pal wire-eli.
-   5 gate: confidence, exitBefore, model boundary, edge, sanity cap.
-
-3. **HL Perp**: `HlPosition.entryDecision` + `placeHlEntry` paraméter
-   bővítve. `hyperliquid/index.mts` 8 inline gate-et épít fel
-   (session loss, max positions, consecutive losses, coin cooldown,
-   active signals, resolution risk, net edge, size). USD
-   entryPriceLabel ("$108,432"), HL natív `direction: "LONG" | "SHORT"`.
-   `HyperliquidTrader.tsx` ugyanúgy wire-eli.
-
-4. **Funding-Arb**: `ArbPosition.entryDecision` + `openArbPosition`
-   paraméter bővítve. `funding-arb/index.mts` "spread"-flavor snapshot-ot
-   épít: `flavor: "spread"`, `direction: "SHORT"`, `finalProb:
-   hlFundingHourly`, `marketPrice: binanceFundingHourly`, `grossEdge:
-   spread`, `spreadAnnualizedPct: opp.spreadAnnualized`,
-   `openInterestUSD`. 5 gate: spread, OI, per-coin uniqueness, position
-   count, capital cap.
-
-5. **`RationaleBlock` flavor-aware** (`shared/TraderResults.tsx`):
-   - "prob" thesis: "A modell szerint a YES esélye X%, a piac Y%-ot
-     árazott → bot Z-t vett @W¢/@$X, $V-ért."
-   - "spread" thesis: "HL X%/h funding-ot fizet, a Binance Y%/h-t fogad
-     → spread Z%/h (N%/yr ann.) → bot SHORT HL + LONG Binance, $V-ért."
-   - "prob" grid: Gross/Net edge, Kelly raw→capped, aktív signal-ok
-   - "spread" grid: Spread (h), Net spread (− fees), Capital %
-     bankroll · cap, OI
-   - Signal-bontás szekció csak "prob" flavor-on (funding-arb-nak
-     nincsenek FR/VPIN/VOL signal-jai)
-   - Gate-list, meta sor mindkét flavor-on ugyanaz
-
-**A 4 bot Tab 1 most teljesen egységes**: ugyanaz az `OpenPositionsCard` +
-`RationaleBlock`, ugyanaz a "Why?" expand mintázat, ugyanaz a gate-list
-shape. Új pozíciókon teljes panel; a már nyitottakon (entryDecision
-nélkül) "Adat nem elérhető" placeholder.
-
-Részletes leírás: `internal-docs/changelog/CHANGELOG-2026-05-10.md`
-"2026-05-10 (e)" szekció.
-
-### Hova nyúlj legközelebb (rationale UI)
-
-- **Új gate hozzáadása bármelyik bot-on**: csak a megfelelő
-  decision-engine `gates[]` array-ébe (vagy HL/arb-ben az inline
-  build-be) egy új `DecisionGate` rekord — automatikusan megjelenik a
-  "Why?" panelen mind a 4 boton.
-- **Új flavor (pl. dispersion-trade)**: új `flavor: "dispersion"` érték
-  a typesetben + új ág a `RationaleBlock` thesis/grid switch-eken.
-- **ClosedTrade rationale**: a `ClosedTrade` típus szintén megérdemli
-  ezt — most csak `signalBreakdown` van rajta. Edge tracker per-trade
-  view-ban szintén látszódna a teljes belépési kontextus.
-
-### Tizenharmadik session (2026-05-10) – HomePage: aktív trade-ek láthatóvá téve
-
-A főoldali "Aggregated session" szekció eddig csak a lezárt trade
-számot mutatta nagy fontban; a nyitott pozíciók csak halvány sub-
-sorban szerepeltek, a per-category breakdown row-okon meg sehol.
-
-**1 fájl változott** (`src/components/HomePage.tsx`):
-
-- **Stat #3** átnevezve `"Closed trades"` → `"Trades (closed · open)"`.
-  A value mostantól split-layout: nagy zárt-szám · separator · nagy
-  open-szám (accent2 kék glow ha > 0).
-- **Per-category breakdown row**: `"9 trade"` → `"9 closed · 3 open"`.
-- **CapCard mini-stats**: `"9 trade"` → `"9c · 3o"` kompakt formában.
-- A `Stat` komponens value-paramétere `string | ReactNode`-ra kibővült.
-
-**Backend érintetlen.** A `multi-status.mts` payload már szállította az
-`openPositions` mezőt minden szinten (L74/93/112/126/171), csak a UI
-nem rendererelte láthatóan.
-
-Részletes leírás: `internal-docs/changelog/CHANGELOG-2026-05-10.md`
-"2026-05-10 (d)" szekció.
-
-### Tizenkettedik session (2026-05-10) – Crypto bot full audit + új `math/13-crypto-bot.md`
-
-Read-only audit + új implementáció-referencia doksi. **Kód nem változott.**
-
-A teljes crypto trader pipeline végigauditálva (scan → signals → decision →
-execute → resolve). 6 tényállás kód-szinten visszaigazolva:
-
-**Validated (zöld):**
-- A 8 signal mind real source-ból (Gamma, CLOB, Data API, Binance, Bybit,
-  Coingecko/CryptoCompare). Semmi synthetic / sim adat a signal layer-ben.
-- Paper-vs-live parity (simV3 garancia): paper PnL == live PnL lett volna,
-  mert mindkettő ugyanazon az `outcomePrices` ∈ {0,1} settlement-en zár.
-- A `paper-resolver.mts` a `&closed=true` Gamma query-vel csak resolved
-  market-eken zár; nincs simulator path.
-- A 11. session Kelly conviction gate-je (#7) működik, hard-skip kelly=0-ra.
-
-**Findings (technikai debt — `math/13-crypto-bot.md` §9 dokumentálva, kód nem fixelve):**
-
-| ID | Probléma | Hatás |
-|----|----------|-------|
-| A | `checkExitConditions` / `handleSellLifecycle` / `emergencySell` definiált, de NEM hívott egyetlen production code path-ból sem | TP/SL korai exit nincs sem paper, sem live módban; live mode-ban nincs settlement reconciliation. **Live-ra kapcsolni TILOS** amíg ez nem épül meg. |
-| B | `netlify.toml` `auto-trader` cron közvetlen schedule, nem fan-out — `?source=cron` query nem érkezik meg | UX: homepage status pill nem mutatja a "(cron)" badge-et a crypto-ra. Funkcionális hatás nincs. |
-| C | `signal-combiner` 8 jelzést számol, de `SignalBreakdown` típus csak 5 mezőt tárol | Momentum/contrarian/pairs_spread bemegy a Kelly-be, de UI "Why?" panelen nem látszik; IC se érinti őket. |
-| D | `sessionSummary()` helper nem tartalmazza `simVersion` mezőt | `getCryptoRunStatus` lastResult invalidation a `liveReadiness?.summary?.simVersion` fallback-on keresztül működik, de a primary path holt. |
-| E | Live `handleBuyLifecycle` `shares = size / placement_price`-t használ, nem a tényleges fill price-t | Live módban a session state alulbecsüli a shares-t ha CLOB jobb áron filled. |
-| F | `getMomentumSignal` ugyanazon slug `?slug=` lekéréssel veszi a "past price"-t → ugyanazt az aktuális ár-t kapja | A momentum signal effektíven a market polaritását méri (eltávolodás 0.5-től), nem momentum-ot. IC közel nulla. |
-
-**Új doksi: `internal-docs/math/13-crypto-bot.md`** — 12 szekciós teljes
-implementáció referencia. Ahol a többi `math/NN-*.md` az academic
-matematikát írja le, ez azt fogja össze, **mit használ valójában a bot**:
-8 gate sorrendben, paraméter-defaults, env vs Settings override hierarchia,
-upstream signal source-ok, paper-vs-live invariáns mátrix, ismert
-limitációk, paper validációs protokoll, és file → szerep map.
-
-A fő használat: új session ne kelljen a 8 forrásfájlt végigtúrni, hanem
-egy doksiból megkapja a teljes képet.
-
-`internal-docs/README.md` math/ tábla bővítve egy sorral.
-`internal-docs/changelog/CHANGELOG-2026-05-10.md` "(d)" szekció hozzáadva
-a teljes audit findings részletes leírásával.
-
-### Hova nyúlj legközelebb (audit findings sorrendben)
-
-1. **§9.A live exit code** — legfontosabb. Live mode bekapcsolása előtt
-   muszáj. Mintaként `paper-resolver.mts` + HL `position-monitor` kombója.
-2. **§9.C SignalBreakdown shape** — 8 mezőre kibővíteni hogy a UI active
-   signals helyesen mutassa.
-3. **§9.F Momentum signal** — vagy javítani historikus snapshot-tal, vagy
-   kivenni a kombinátorból.
-4. **§9.B Cron source label** — `netlify.toml`-ban `path = "/auto-trader?source=cron"`.
-5. **§9.D session simVersion** — 1 sor add-on a `sessionSummary`-be.
-6. **§9.E live fill price** — `client.getOrder(orderId)` hívás a
-   buy-lifecycle live ágban; csak akkor érdekes, ha §9.A megoldva.
-
-### Tizenegyedik session (2026-05-10) – Crypto: Kelly=0 hard-skip + entry-decision visibility ("Why?" panel)
-
-A live `mj-trading.netlify.app/trade/crypto/` 3 nyitott paper pozíció
-felülvizsgálata 2 hibát mutatott meg:
-1. A signal-combiner kelly.full=0 / recommendation=WAIT mellett is nyíltak
-   trade-ek, mert a `decision-engine.mts` `Math.max(1, bankrollUSDC * kellyCapped)`
-   $1-es minimum size-zal akkor is bevitt pozíciót, ha a Kelly 0 volt.
-2. UI-on nem volt utólag visszanézhető, mi alapján döntött a bot.
-
-**Backend** (`shared/types.mts` + `crypto/decision-engine.mts` +
-`auto-trader/index.mts`):
-- Új `EntryDecisionSnapshot` + `DecisionGate` típusok.
-- A `decision-engine` mostantól ordered `gates[]` listát ad vissza —
-  minden gate label/passed/actual/required/hint mezőkkel.
-- **Új gate (P2.1): "Kelly conviction (combiner)"** — `signal.kellyFraction > 0`.
-  Ha a combiner Kelly=0-t ad, a bot nem nyit minimum-size $1 pozíciót,
-  hanem skip-elteti "Signal-combiner Kelly=0 → no conviction" reasonnel.
-- Az entry-snapshot `paperPosition.entryDecision`-ként mentődik a
-  Blobs `auto-trader-state`-be. `getCryptoOpenActive()` kifelé adja
-  `openDetails[].entryDecision` mezőként.
-
-**Frontend** (`shared/TraderResults.tsx` + `traderShellStyles.ts` +
-`trader/CryptoTrader.tsx`):
-- `OpenPositionRow.rationale` mező → ha jelen (akár null), a sor
-  `<details>` expandable-ré alakul "Why?" toggle-lel.
-- Új `RationaleBlock`: tézis-mondat (modell vs piac → irány), 4-cellás
-  grid (gross/net edge, Kelly raw→capped, aktív signal-ok), signal-chip-
-  bontás (FR/VPIN/VOL/APEX/CP + OB imbalance), gate-lista pass/fail
-  vizualizációval, meta sor decidedAt + reason-nel.
-- Régebbi (snapshot nélküli) pozíciók muted "Adat nem elérhető" placeholderrel.
-
-A 3 már nyitott pozíción placeholder lesz; a következő cron-tick után
-nyitott trade-ek teljes "Why?" panelt kapnak.
-
-Részletes leírás: `internal-docs/changelog/CHANGELOG-2026-05-10.md`
-"Crypto bot entry decision visibility + Kelly=0 hard-skip" szekciója.
-
-### Hova nyúlj legközelebb (rationale UI)
-
-- **Weather + HL entry-decision**: a `OpenPositionRationale` típus generikus,
-  csak a megfelelő backend (`weather/index.mts`, `hyperliquid/index.mts`)
-  építse fel ugyanezt a snapshot shape-et a pozícióra → minden bot
-  ugyanazt a "Why?" panelt kapja kódváltoztatás nélkül a UI-ban.
-- **Closed trades**: a `ClosedTrade` típus szintén megérdemli ezt — most
-  csak `signalBreakdown` van rajta. Edge tracker per-trade view-ban szintén
-  látszódna a teljes belépési kontextus.
-- **Daily markets entry-window**: a `parseDurationMs` jelenleg csak
-  "X minute/hour" patternt fog. Daily piacokra (ahol az `openedAtEstimate`
-  null) az entry-window gate idle. Ráragasztható egy "morning-window" gate.
-
-### Tizedik session (2026-05-10) – Stale-UI bugfix: 3 fantom weather-trade + simVersion auto-reset persistence
-
-A live `mj-trading.netlify.app/trade/weather/` Tab 1-en 3 sor mutatott
-"traded" akciót (Shanghai/Paris/London), miközben a stats kártya és a
-LiveReadinessBadge "Trade count" gate egyaránt 0/30-at jelzett. A homepage
-dashboard pedig "1 trade + 3 open" weather-en. Két különálló bug együttese:
-
-**Bug #1 — `loadSession()` nem persistálja a v3 resetet**
-
-`auto-trader/crypto/session-manager.mts:76-89` — amikor a v2→v3 auto-archive
-triggerel, csak az archive key-be ír, a fő session key-t nem írja felül.
-Következmény: minden 5s-os UI status poll újra-archíválja ugyanazt a v2
-blob-ot (8 perc alatt 19 db `auto_reset_simversion` event). A
-`multi-status.mts` (homepage) közvetlenül a fő blob-ot olvassa, ezért az
-"1 closed trade + 3 open positions" 2026-05-08 óta jelen volt fantom
-adatként.
-
-**Bug #2 — `runStatus.lastResult` nem invalidálódik simVersion bump-on**
-
-A `weather-runtime` Blobs store független a session blob-tól. Az utolsó
-`runWeatherTrader()` 2026-05-10 07:29Z-kor futott v2-vel és 3 pozíciót
-nyitott; azóta nem futott újra. A `lastResult.results` továbbra is a 3
-fantomot tartalmazta, és a UI ezt rendererelte a `ScanResultsCard`-ban.
-
-**Két fix:**
-
-1. `crypto/session-manager.mts:76-95` — fresh default session most a
-   session key-be is kiíródik, nem csak az archive-ba. Egy `await
-   store.set(sessionKey(...), JSON.stringify(fresh))` hozzáadás.
-2. `weather/index.mts:51-93` (`getWeatherRunStatus`) + `crypto/run-state.
-   mts:47-83` (`getCryptoRunStatus`) — mindkettő ellenőrzi most a
-   `lastResult?.session?.simVersion ?? lastResult?.liveReadiness?.summary?.
-   simVersion`-t, és ha < `PAPER_SIM_VERSION`, lenullázza a lastResult-ot
-   + persistálja a cleanup-ot.
-
-**Hatás a deploy után:**
-
-- Első UI poll: a 3 "traded" sor eltűnik a `/trade/weather/` Tab 1-ről.
-- Az első `auto-trader-api?action=status&category=weather` hívás után a
-  v2 blob v3-ra íródik, és innen a homepage `multi-status` is "0 trade /
-  0 open"-t fog mutatni weather-en.
-- Az "1 trade" a homepage-ről nem "helyreáll" hanem **0-ra megy** — ez a
-  helyes érték a v3 paradigmában (lásd `2026-05-10 (a)` szekció: a v2
-  trade-ek mind eltört Brownian-sim artifaktok voltak, a CHANGELOG-2026-
-  05-10.md "(a)" részletezi a 88.9% WR fake adat empirikus bizonyítékát).
-- A spam-ciklus megszűnik: nincs több `auto_reset_simversion` event a
-  status pollok között.
-
-**Weather bot health audit (Explore sub-agent):**
-
-| Modul                       | Státusz     |
-|-----------------------------|-------------|
-| forecast-engine             | PASS        |
-| ensemble-forecast           | PASS        |
-| decision-engine             | PASS (9/9 config field) |
-| market-finder               | PASS (8 új város mapped) |
-| polymarket-resolver         | PASS (`&closed=true` query) |
-| reconciler + metar-fetcher  | PASS (°F rounding UMA quirk) |
-| weather cron                | PASS (toggle respected) |
-| reconciler cron             | PASS (always-on */15) |
-| live-readiness simVersion   | INTENTIONAL null (METAR-driven, nem sim-driven) |
-
-A weather bot **funkcionálisan helyesen fut** v3-ban. A bug pusztán
-prezentációs cache-probléma volt — a session és a settlement valós, csak
-a UI rajzolt elavult cache-ből.
-
-Részletes leírás: `internal-docs/changelog/CHANGELOG-2026-05-10.md`
-"2026-05-10 (c)" szekció.
-
-### Hova nyúlj legközelebb (session/runtime persistence)
-
-- A jövőbeni `simVersion` bump-oknál a fix mindkét oldalra kiterjed:
-  loadSession persistálja a fresh sessiont, és a runState getter-ek
-  törlik a stale lastResult-ot.
-- Ha HL vagy funding-arb is bevezet simVersion-t, a két `runState.mts`
-  mintáját kell követni (`hyperliquid/run-state.mts` és
-  `hyperliquid/funding-arb/run-state.mts` — most még nincs simVersion
-  gate, mert nem prediction-driven).
-
-### Kilencedik session (2026-05-10) – Bankroll input wired to backend reset
-
-**Bug:** A főoldali "Bankroll: $200" mező egyik bot oldalon (Crypto /
-Weather / Hyperliquid / Funding-Arb) sem volt funkcióban — pusztán
-`localStorage`-ba mentődött, a backend session bankrollját semmi nem
-frissítette. Minden reset a hardcoded szerveroldali konstansokat
-használta ($150/$100/$200/$200).
-
-**Két helyen szakadt el a wire:**
-1. `DashboardShell` átadta `(tab, bankroll)`-t, de `CategoryDashboard`
-   csak `(tab) => render(tab)`-ként hívta meg → a prop sosem érte el a
-   trader komponenst.
-2. A trader komponensek (CryptoTrader, …) nem fogadtak `bankroll` propot,
-   és a `doAction("reset")` sem küldte a body-ban.
-3. A backend reset endpointok (`handleReset` / `hlReset` / `arbReset`)
-   nem fogadtak `bankroll` paramétert.
-
-**Fix (3 réteg):**
-
-- **Backend** `auto-trader/index.mts`: POST body parser most már olvassa
-  a `bankroll` mezőt (finite + `[10, 1_000_000]` clamp), átadja
-  `handleReset(config, cat, bankroll?)`, `hlReset(bankroll?)`,
-  `arbReset(bankroll?)` hívásoknak.
-- **`hlReset`**: a meglévő `resetHlSession(paperMode, bankroll = DEFAULT)`
-  default param felé továbbítja.
-- **`arbReset`**: F-Arb sessionnek nincs saját bankrollja, a HL
-  sessionből húz. Ha az override jött ÉS nincs nyitott HL perp pozíció
-  → frissíti a HL session `bankrollStart` + `bankrollCurrent` mezőit
-  (HL trade history sértetlen marad). Ha vannak nyitott HL pozíciók →
-  silently skip + `bankrollSkippedReason` válaszmező.
-- **Frontend**: `CategoryDashboard.render*(tab, bankroll)`, 4 trader
-  komponens `bankroll?: number` prop, `doAction("reset")` mostantól
-  `extras = { bankroll }`-t küld. ConfirmDialog `sessionSummary` utolsó
-  sora előre mutatja az új starting bankrollt.
-- **`useTraderAction.run(action, extras?)`** kibővítve generikus
-  `Record<string, unknown>` extras paraméterrel — minden további
-  per-action body field ide kerülhet jövőben.
-
-Részletes leírás: `internal-docs/changelog/CHANGELOG-2026-05-10.md`
-"Bankroll input wired through to backend reset" szekciója.
-
-### Hova nyúlj legközelebb (bankroll)
-
-- A bankroll input továbbra is **közös** localStorage értékkel a 4 bot
-  között (`ec_bankroll` kulcs). Ha a user külön bankrollt akar
-  csinálni botonként, a `DashboardShell.tsx`-ben kategóriánként külön
-  kulcsot kell használni (pl. `ec_bankroll_${category}`).
-- **Mid-session bankroll change** nincs kezelve, csak Reset-tel.
-  Szándékos: Kelly sizing és session loss limit a `bankrollStart`
-  alapján van számolva, futás közben módosítani inkonzisztenssé tenné.
-  Ha mégis kell: új action (`update_bankroll`) ami csak
-  `bankrollCurrent`-et tolja el, `bankrollStart` érintetlenül marad.
-- **F-Arb reset most átírja a HL session bankrollját** csak ha HL üres.
-  Ha nem üres, a user az UI-on egy banner-ben kapja a reason-t — de
-  ezt jelenleg csak `bankrollSkippedReason` válaszmezőként küldi
-  vissza a backend, **a UI még nem rendereli**. Ha kell, a
-  `FundingArbPanel.tsx` `doAction` callbackjében a
-  `r.bankrollSkippedReason`-t egy alert / toast komponensbe kell tenni.
-
-### Nyolcadik session (2026-05-10) – Auto-Trader Tab 1 visibility pass: blocker chips + open positions + weather stats parity
-
-A 4 bot Tab 1-én (Auto-Trader) ugyanaz a 3 láthatósági hiba volt:
-1. A "skip" sorokról csak hover-en derült ki **mi szűrte ki őket** — a user
-   az élő gridet végignézve nem látta szín alapján a kritérium-blokkokat.
-2. A **nyitott pozíciók** csak counterként szerepeltek (Crypton); a Weatheren
-   és HL-en hiányoztak teljesen, és a Crypto pending-listája összemosta a
-   "még tradel" és "settlement-re vár" sorokat.
-3. A Weather Tab 1-ről **hiányzott a 4-cellás stats grid** (Bankroll/PnL/
-   Trades/Open) — minden más boton ott van.
-
-**Backend (`auto-trader/index.mts` + `hyperliquid/index.mts`):**
-- `getStatus` payload bővítve `openDetails` mezővel mind crypto/weather/HL-re.
-  Crypto+weather: csak az **aktív** (még nem-settlement) pozíciók; HL: minden
-  open perp position.
-- `pending` lista most már szigorúan a "lejárt, settlement-re vár" sorokat
-  tartalmazza — Crypto: endDate < now; Weather: új
-  `getWeatherPendingForSettlement()` szűri az `isReady=true`-t.
-
-**Frontend (`shared/TraderResults.tsx` + `traderShellStyles.ts`):**
-- **`ScanResultRow`**: új tone (pass/skip/fail/neutral) → bal-szegélyes
-  szín-kódolás (zöld/narancs/piros/transzparens) + halvány bg-tint.
-- **Inline blocker line**: skip+failed-gate sorokon a sor maga megmutatja
-  az **első** elbukott gate-t — ✗ jellel, label-lel, tényleges és elvárt
-  értékkel, "+N további" ha több bukás van. Hover továbbra is a teljes
-  popoverre kattan.
-- **`OpenPositionsCard.OpenPositionRow`** kibővítve direction/entryText/
-  spreadText opcionális mezőkkel + opcionális pnlText/pnlValue.
-
-**Per-bot panelek:**
-- **CryptoTrader**: új OpenPositionsCard a pending fölött, "ends in Xh Ym"
-  countdown-nal.
-- **WeatherTrader**: új stats grid (Bankroll/PnL/Trades/Open) + alerts
-  (Stopped) + OpenPositionsCard "City · Bucket / pred X°C / settles in Yh"
-  formátumban.
-- **HyperliquidTrader**: új OpenPositionsCard a perp pozíciókkal
-  (`@$entryPrice / $X · Nx lev / TP/SL`).
-- **FundingArbPanel**: változatlan, már korábban OpenPositionsCard-ot
-  használt.
-
-Részletes leírás: `internal-docs/changelog/CHANGELOG-2026-05-10.md` —
-"2026-05-10 (b)" szekció.
-
-### Hova nyúlj legközelebb (Tab 1 UI)
-
-- **Új scan-sor szín**: a tone-mapping a `ScanResultRow`-ban van, action verb
-  alapján — új akció hozzáadásakor ott kell egy ágat felvenni (pl. "queued"
-  → neutral).
-- **Új blocker row** automatikusan jön — a `criteria` array minden új
-  gate-jét a sor szintjén kiemeli az inline blocker line, ha az volt az
-  első elbukott gate.
-- **HL live PnL chip a nyitott pozíción**: jelenleg az OpenPositionsCard
-  pnlText opcionális; ha a getHlStatus is fetcheli a markPrice-t, futtatható
-  egy unrealized PnL számítás és a `OpenPositionRow.pnlText/pnlValue`
-  kitölthető a frontend-en módosítás nélkül.
-
-### Hetedik session (2026-05-10) – HomePage: clickable per-category breakdown + Trading & Execution kategorizálás + venue badge
-
-A főoldali mission control 3 új UX-feature-t kapott:
-
-1. **Aggregated session per-category breakdown sorai kattinthatóak** —
-   `<div className="hp-bd-row">` → `<a href={`/trade/${c.category}/`}>`,
-   hover-en háttér-világosodás + 2px-es jobbra-elmozdulás + accent-szín
-   nyíl. A `multi-status.mts` által visszaadott category stringek
-   (`crypto`/`weather`/`hyperliquid`/`funding-arb`) közvetlenül URL-re
-   mappolnak.
-
-2. **Trading & Execution szekció 2 alszekcióra bomlik:**
-   - **⚙ Automated bots** (cron */3): Crypto, HL Perp, Funding-Arb, Weather
-   - **🎯 Manual execution** (user-triggered): Bybit, Binance, Polymarket Manual
-
-   Mindkét alszekció saját `hp-cat-head` header-pill-t kap bal-szegélyű
-   accent-keretttel + meta sub-label-lel.
-
-3. **Venue badge minden execution kártyára** — a cím alatt egy `venue:
-   <Polymarket | Hyperliquid | Hyperliquid + Binance | Bybit | Binance>`
-   chip mutatja, hogy melyik bot hol kereskedik.
-
-Implementáció részletei: `internal-docs/changelog/CHANGELOG-2026-05-10.md`
-"HomePage navigáció" szekciója. Egyetlen érintett fájl: `src/components/HomePage.tsx`.
-
-### Hova nyúlj legközelebb (HomePage)
-- Új execution-kártya: `CARDS[]`-be új objektum, `venue` és `auto` mezők
-  kötelezően — az alszekciós filter automatikusan a helyes csoportba teszi.
-- Venue badge analysis kártyákra: a `CapCard` már `card.venue && (...)` -nel
-  conditionally rendereli, csak `venue` mezőt kell írni.
-
-### Hatodik session (2026-05-10) – Paper resolvers: real Polymarket only, no simulator (simVersion 3)
-
-A live `mj-trading.netlify.app/trade/crypto/` paper-tracker validációja megmutatta, hogy a 9 closed trade-en kimutatott 88.9% WR / IC=0.453 / +$7.44 PnL **fake szám**: két bug együttese miatt egyetlen valós Polymarket resolution sem fut le, és minden close egy instant-trigger Brownian sim-ből származott.
-
-**Bug A — Gamma URL filter hiányos** (`paper-resolver.mts:45`, `weather/polymarket-resolver.mts:42`):
-```
-?condition_ids=0xABC...           → []     (Gamma filterezi a closed market-eket!)
-?condition_ids=0xABC...&closed=true → [{ outcomePrices: ["1","0"] }]
-```
-A `closed=true` flag nélkül egyetlen lezárult market sem található meg → `info.resolved` mindig `false` → soha nem trigger-el a "real" branch.
-
-**Bug B — Brownian sim instant-trigger deep-OTM-en** (`paper-resolver.mts:99-149` v2):
-A bound-ok fixek (tpTarget=0.75, slTarget=0.35), entry-független. Ha entry yesPrice a `[0.25, 0.65]` tartományon kívül van, az első iteráció után triggerel — a path nem szimulálódik. NO entry 0.20 → yesPrice 0.80 → upperYes=0.65 felett → instant exit NO=0.35 → garantált +75% profit minden NO < 0.35-nél.
-
-**Empirikus bizonyíték** a 9 trade-en: 8/9 exit price = 0.35 (slTarget bound), 1/9 = 0.75 (tpTarget bound). A `bitcoin-up-or-down-on-may-9-2026` valós outcome = YES ([1,0]); paper NO entry 0.35-ön $0 break-event könyvelt el a valós −$1.00 helyett.
-
-**Fix (simVersion 3):**
-
-1. **Crypto** `paper-resolver.mts` teljes átírás: csak `fetchMarketResolution()` + `closed=true` query. Brownian-bridge sim és a `simulateBrownianBridgeExit()` export törölve. A pozíció nyitva marad amíg Gamma `outcomePrices` ∈ `{0,1}`-et nem ad vissza. **Paper PnL == live PnL.**
-2. **Weather** `polymarket-resolver.mts:42` `&closed=true` hozzá. A METAR fallback (6h után) marad — fizikai mérés, nem szimuláció, és pontosan ezt használja az UMA settlement-hez.
-3. **HL directional + funding-arb** auditálva, **változtatás nem szükséges**: `getAllMids()` valós markPrice, `scanFundings()` valós HL+Binance funding rate. Az hedge-manager paper `paperFill()` a markPrice-on tölt slippage nélkül (idealizálás, nem szimuláció).
-4. `PAPER_SIM_VERSION` 2 → 3. A live deploy után az első cron tickkor a 9 v2-paper trade automatikusan archiválódik az `auto-trader-session-archive-paper-v2` Blobs key-be, és tiszta crypto session indul.
-5. `auto-trader/index.mts` paper-resolver hívás egyszerűsítve (cfg paraméter törölve), `paperFallbackAfterMs`/`paperBrownianSigma` env-loadolás törölve.
-6. `trader-settings.mts` SCHEMA: `paperFallbackAfterMs` + `paperBrownianSigma` field-ek kiszedve. Régi Blobs override-ok automatikusan ignorálva (`if (!(k in SCHEMA)) continue` a `loadRuntimeOverrides`-ban).
-
-Részletes leírás: `internal-docs/changelog/CHANGELOG-2026-05-10.md`.
-
-### Hova nyúlj legközelebb (paper validáció)
-
-- **Crypto**: a deploy utáni első cron tickkor a 9 fake trade archiválódik. Új paper trade-ek innentől csak akkor zárulnak, ha a market Polymarketen resolve-olt → 5–60 perc tipikusan a 5m/1h BTC piacokon. Nyitott trade-ek "PAPER_RESOLVE_SKIP/polymarket_not_resolved_yet" log-bejegyzéssel várják a Gamma update-et.
-- **Weather**: ugyanezt a fix-et kapta. A METAR fallback 6h után aktiválódik, ha az UMA késik.
-- **Tesztelési protokoll** új paper sessionre: hagyni a botot 24-48h-t nyugiban futni → ellenőrizni hogy a closedTrades exit-ei mind 0 vagy 1 (real resolution) vagy 0/1 (METAR fallback weather-en). Ha bármelyik trade exit-e a [0.01, 0.99] tartományban van (kivéve weather METAR-fallback resolved 1.0/0.0-t), bug.
-
-### Hatodik session follow-up (2026-05-10) – Crypto bot pending-paper-position kártya
-
-A simVersion 3 átállás utáni follow-up: a paper pozíciók most szignifikánsan tovább maradhatnak nyitva (5–60 min UMA resolution, vagy 6+ óra dispute során), mivel nincs többé Brownian fallback. A weather bot 2026-05-09-i `PendingPositionsCard`-jával szimmetrikusan a crypto botra is felkerült egy "past endDate, awaiting Polymarket resolution" kártya.
-
-- **Backend** `auto-trader/index.mts`: új `getCryptoPendingPositions(session)` helper, szűri `session.openPositions`-t `endDate < now`-ra, ageMs számítással. A `getStatus()` crypto ágában `base.pending` mezővel visszaadja. **Nincs fallback paraméter** (v3 contract).
-- **Frontend** `CryptoTrader.tsx`: `PendingPositionsCard` conditional render (`pending.count > 0`), új `formatAgeAgo` helper, `whenText: "awaiting Polymarket resolution"`. Footnote magyarázza a v3 garanciát.
-- **Mit nem változtattam**: a bot logikája 0 byte-ot se változott. Nincs új manuális reconcile gomb sem — a meglévő "Run Scan" gomb már triggereli (`auto-trader/index.mts:272-283`).
-- **Mit nem változtattam #2**: a weather bot UI érintetlen — ott marad a meglévő "⟳ Reconcile pending" gomb (külön `auto-trader-weather-reconciler-cron` + 6h METAR fallback indokolja).
-
-Részletes leírás: `internal-docs/changelog/CHANGELOG-2026-05-10.md` "Crypto bot pending-paper-position kártya (UI follow-up)" szekciója.
-
-### Hova nyúlj legközelebb (crypto pending UI)
-
-- Ha egy market 1h+ ageMs-szel a kártyán marad → vagy UMA dispute fut, vagy Gamma `closed=true` query nem találja. Diagnosztika: `curl 'https://gamma-api.polymarket.com/markets?condition_ids=0x...&closed=true'`.
-- Új mező a sorokon (pl. live mp drift az entry óta): `getCryptoPendingPositions` + `pending.positions.map` callback. Máshol nem kell nyúlni.
-
-### Ötödik session (2026-05-09) – Auto-Trader UX: reset safety + trade export + per-row criteria gates
-
-3 üzemeltető-orientált feature minden bot oldalra:
-
-1. **Type-to-confirm Reset dialog** (új `shared/ConfirmDialog.tsx`).
-   A "Reset" gomb most `Reset…` lett és modális dialógot nyit:
-   - Session summary bullet list (bankroll, trade count, PnL, open positions, started)
-   - Default-checked checkbox: "Letöltöm a JSON backup-ot reset előtt"
-   - Type-to-confirm: a "RESET" szó begépelése kell (case-sensitive)
-   - Esc + backdrop-click cancel; auto-focus; busy-state disabled
-   - Backup checkbox bekapcsolva: a reset POST előtt lefut az export
-2. **JSON trade export** (új `shared/useTradeExport.ts` hook).
-   - Új standalone "💾 Export Trades" gomb minden boton
-   - Hív `/.netlify/functions/edge-tracker?mode=paper&category=…&days=all`
-   - Self-describing JSON envelope (`$schema`, `category`, `mode`, `exportedAt`, `summary`, `signalIC`, `trades`, `sourceNote`)
-   - Letöltési fájlnév: `trades-{category}-{mode}-{ISO-ts}.json`
-3. **Per-row entry-criteria gates** (új `CriteriaSummary` + 4 mapper a `TraderResults`-ban).
-   - Minden scan-row egy "X/Y gates ✓" chip-et kap
-   - Hover/focus → CSS-only popover a teljes pass/fail bontással
-   - Per-bot mapper: `cryptoEntryCriteria` (5 gate), `weatherEntryCriteria` (3 gate), `hlEntryCriteria` (3 gate), `arbEntryCriteria` (2 gate)
-
-A 4 bot panel **nem** add hozzá Reset-et a `controls` arrayhez — a TraderShell maga rendereli, mert a confirm-dialog + backup-flow közös. A Reset slot + Export slot tisztán deklaratív callback-ek.
-
-Részletes leírás: `internal-docs/changelog/CHANGELOG-2026-05-09.md`
-"Auto-Trader UI: reset safety + trade export + per-row criteria gates" szekciója.
-
-### Hova nyúlj legközelebb (UX)
-
-- **Új entry-gate hozzáadása**: 1 sor a megfelelő `*EntryCriteria` mapper-be a `TraderResults.tsx`-ben, és minden boton + minden jövőbeli boton azonnal megjelenik a popover-ben.
-- **Server-side auto-archive Reset-nél**: a kliensoldali backup már védi az adatokat, de ha akarjuk a server-oldali sticky archive-ot is (timestamp-elt Blobs key minden Reset-nél), az 1 patch a `handleReset()`-be — a snapshot infra már megvan a v1→v2 migration-höz.
-- **Stop is gateolható**: a ConfirmDialog reusable, ha jövőben egy "Stop" is destruktívnak számít (pl. nyitott pozíciók close-olása), ugyanezzel a komponenssel "STOP" szóval gateolható.
-
-### Negyedik session (2026-05-09) – HL split: 1 doboz → 2 doboz + API audit
-
-A `/trade/hyperliquid/` egy "Hyperliquid Perp" doboz alá rejtett **két
-külön botot**: directional perp trader + funding-rate arbitrage. A főoldalon
-mostantól **két különálló kártya** látszik (`/trade/hyperliquid/` és
-`/trade/funding-arb/`), és minden HL/Binance API hívás végig lett ellenőrizve
-a hivatalos doksi alapján.
-
-**UI split:**
-- `[category].astro` static path bővítve `funding-arb`-bal.
-- `CategoryDashboard.tsx` — két top-level kategória (`hyperliquid` és
-  `funding-arb`), külön 3-tabos layout (autotrader / edge-tracker / settings).
-- `HomePage.tsx` — execution-grid-en két kártya `Hyperliquid Perp` +
-  `Funding Rate Arbitrage`. Live-readiness banner anchor a megfelelő
-  oldalra ugrik (Funding-Arb sora már nem visszairányít HL-re).
-
-**API audit (a hivatalos doksi alapján):**
-- HL Info: `allMids`, `metaAndAssetCtxs`, `clearinghouseState` mind POST+JSON.
-  `funding` HOURLY decimal string. `openInterest` COIN UNITS. ✅ konformnak
-  találva, viszont validáció szigorítva (Number.isFinite + range guards) +
-  1× retry network/5xx-en, 4xx permanent.
-- HL Exchange (SDK): trigger orderhez `positionTpsl` grouping, entry-nél
-  `na`. Order ID extraction `resting.oid ?? filled.oid`. `HL_PRIVATE_KEY`
-  formátum-ellenőrzés (0x + 64 hex). Adapter cache + `liveAdapterError()`
-  helper a hibák diagnosztikájára.
-- Binance USDT-M `premiumIndex`: **kritikus bug**. `lastFundingRate` per
-  cycle (8h alapért., DE BTC/ETH/SOL és pár másik major 4h cycle-en megy
-  2023 óta). Eddig hard-kódolt `/8` 2× alulbecsülte az hourly rate-et a
-  4h-s symbol-okon → bogus arb-belépéseket triggerelhetett. Most új
-  `fundingInfo` cache (6h TTL) — symbol-onként valós interval.
-- Binance Spot order: `data.price` MARKET-nél mindig "0", helyette
-  `fills[]` weighted average + `cummulativeQuoteQty / executedQty` fallback.
-  `newOrderRespType=FULL` explicit. `executedQty=0` ok=false.
-
-**Trade-logikai bugfixek:**
-- **Paper-resolver elveszti a signal metadatát**: HlPosition kapott opc.
-  `predictedProb / edgeAtEntry / signalBreakdown` mezőket; placeHlEntry
-  rögzíti, paper-resolver átemeli a closed trade-be → IC-szám most
-  működik.
-- **Funding-arb accrueFunding logikai hiba**: spot hedge nem fizet
-  funding-ot, az `entrySpread × hours` képlet kétszeresen büntette a
-  Binance funding-ot. Most `entryHlFunding × hours` + per-tick
-  legfrissebb HL rate (paper realizmus + spread decay reflektálódik).
-- **fr-scanner operator-precedence bug** (`!x == null` → mindig false):
-  explicit Number.isFinite check.
-- **Funding-arb live close IOC limit `pos.hlEntryPrice`-on**: volatilis
-  ticken sosem fillel; most fresh markPrice ±0.5% slippage band.
-- **Funding-arb hiányzó run-state**: új `arb-run-state.mts`, dispatcher
-  `?source=cron`-t átadja, panel pill cluster (`Scanning…/cron ON/last`)
-  most működik.
-- `simulatePaperPnl` dead code törölve.
-
-Részletes leírás: `internal-docs/changelog/CHANGELOG-2026-05-09.md`
-"Hyperliquid: split into 2 separate bots + atomic API audit + bugfixes" szekciója.
-
-### Hova nyúlj legközelebb (HL + Funding-Arb)
-
-- **Két külön kártya a főoldalon**: külön klikk, külön session, külön
-  edge-tracker. Funding-Arb most live-readiness banner-en is külön sor.
-- **`@nktkas/hyperliquid` továbbra sincs telepítve** — paper-only.
-  Élesítéshez: `npm i @nktkas/hyperliquid viem` + `HL_PRIVATE_KEY` (0x +
-  64 hex hosszúság ellenőrizve). Adapter ekkor pontos hibaüzenetet ad,
-  ha valami hiányzik.
-- **fundingInfo cache TTL**: 6h hard-coded — ha kell, env-en keresztül
-  override-olni lehet később (jelenleg nincs Settings knob rá).
-
-### Harmadik session (2026-05-09) – Auto-Trader UI unification (4 bots → 1 shell)
-
-Egységesítés: a 4 trader (Crypto, Weather, Hyperliquid, Funding-Arb) eddig
-4 különálló komponensben élt — saját CSS prefixszel, saját polling loop-pal,
-saját button stílussal és inkonzisztens validálási chip-ekkel. Egyetlen
-megosztott shell + 5 reusable card alá kerültek. Ugyanaz a "Run Scan" gomb
-mostantól minden boton ugyanúgy néz ki, ugyanazt a chip-szettet használja,
-és minden boton kötelezően megjelenik a `LiveReadinessBadge` +
-`CalibrationHealthBadge` (eddig csak Cryptón volt).
-
-**Új közös modulok** (`src/components/shared/`):
-- `TraderShell.tsx` — 1 wrapper + `useAutoTraderStatus(category, layer?)` +
-  `useTraderAction(category, layer?)` hook. Kezeli a 5s status pollot, az
-  1s relativ-time tickert, a header pill clustert (live/cron/last) és a 2
-  badge-et.
-- `TraderResults.tsx` — `ScanResultsCard`, `ScanResultRow` (rich chips +
-  signal arrows + action chip + extra/pnl + reason footer),
-  `PendingPositionsCard`, `OpenPositionsCard`, `OpportunitiesCard`,
-  `DroppedCard`. Egyetlen `ResultChip` API (label + tone + outline + title).
-- `traderShellStyles.ts` — `ts-` prefix CSS.
-
-**Eredmény LOC-ban:** Crypto 532 → 248, Weather 429 → 196, HL 304 → 161,
-F-Arb 250 → 173. ~1500 → ~778 LOC, miközben minden bot megkapta a hiányzó
-feature-eket (status cluster F-Arb-on, cal+readiness badge mindenhol, rich
-validation chips mindenhol).
-
-**Future-proof:** új trader hozzáadása mostantól ~150 LOC adapter +
-TraderShell. Új feature (modal, sparkline) egyetlen helyre kerül és minden
-bot megkapja.
-
-Részletes leírás: `internal-docs/changelog/CHANGELOG-2026-05-09.md` -
-"Auto-Trader UI unification (4 bots → 1 shell)" szekciója.
-
-### Hova nyúlj legközelebb (UI)
-
-- Új trader category hozzáadása: új trader file ~150 LOC, ami `TraderShell`
-  + `useAutoTraderStatus(category)` + `useTraderAction(category)` köré épül,
-  és a `ScanResultsCard` / megfelelő cards-okat tölti.
-- Új validation chip mindenhol (pl. spread, liquidity score): a `ResultChip`
-  API kibővítése (új tone? új ikon?) → minden bot azonnal megjeleníti.
-- A `traderShellStyles.ts` az egyetlen forrás a `ts-` osztályokhoz; minden
-  vizuális tweak ott egy helyen van.
-
-### Második session (2026-05-09) – Crypto paper trader v2 sim + calibration alarm
-
-A `paper-pnl-analysis.md` által leírt 4 strukturális hibát kódfedezetbe vontam:
-
-- **`simulatePaperExit` halfway-toward-prediction kivéve.** Új modul:
-  `auto-trader/crypto/paper-resolver.mts`. Két finalProb-független útvonal:
-  - **Real Polymarket resolution (gold standard):** paper position nyitva
-    marad amíg a market le nem zárul, utána a Gamma API `outcomePrices`
-    `[1,0]`/`[0,1]` alapján zár. Innentől az IC valós piaci kimeneteleken
-    mér.
-  - **Brownian-bridge fallback:** ha 30+ perc után sincs resolution,
-    logit-tér Brownian híd `Bernoulli(marketPriceAtEntry)` terminallal
-    (efficient-market null), TP/SL crossing check a path mentén. Tunable
-    σ (`paperBrownianSigma`).
-
-- **`btc-market-finder` deep-OTM filter.** `MIN_PRICE_BAND = 0.10`: yes < 0.10 vagy > 0.90 → skip. Ez kizárja a $0.01 fill artefaktokat.
-
-- **Calibration alarm.** Új `computeCalibrationHealth(trades, 30)` az
-  `edge-tracker/statistics.mts`-ben. 30+ trade után, ha minden signal
-  |IC| < 0.02:
-  - Paper: Telegram alarm egyszer/session (`calibrationAlertSentAt` flag).
-  - Live: session auto-stop + Telegram.
-  - UI: új `CalibrationHealthBadge` a Tab 12 Edge Tracker tetején (zöld
-    `good` ≥ 0.05 / narancs `weak` ≥ 0.02 / piros `noise` < 0.02 / szürke
-    `insufficient` < 30 trade).
-
-- **Session simVersion auto-reset.** `PAPER_SIM_VERSION = 2`. A
-  `loadSession()` ha `simVersion < 2`-t lát, archiválja a régi
-  `closedTrades`-t (`auto-trader-session-archive-paper-v1` Blobs key) és
-  tiszta sessiont ad vissza. Az élőben futó 143 régi (halfway-sim) trade
-  deploy után az első cron tickkor automatikusan archiválódik — explicit
-  reset hívás nem kell.
-
-- **Új tunable knobok** a `trader-settings.mts` SCHEMA-ban:
-  - `paperFallbackAfterMs` (1.8M ms = 30 min default)
-  - `paperBrownianSigma` (0.45 σ/√min default)
-  - `btcMinPriceBand` (0.10 default)
-
-Részletes leírás: `internal-docs/changelog/CHANGELOG-2026-05-09.md`
-"Crypto paper trader: realisztikussá tett szimulátor (v2)" szekciója.
-
-### Hova nyúlj legközelebb (crypto paper)
-
-- **Tab 12 Edge Tracker (`/trade/crypto/`)** → tetején Calibration Health
-  badge színe azonnal megmondja a paper signal-szett egészségét.
-- **30+ trade után** ha a badge piros (`noise`): a Telegram alarm már
-  elment, és a config: live váltás tilos. Iterálj a signal-combiner
-  IC weights-en, vagy a signal-aggregator-on.
-- **50+ trade és zöld badge után** lehet élesedést fontolóra venni
-  (továbbra is csak $10–20 USDC kezdő tét).
-- **Settings tab (Tab 13) → Paper resolver group:** `paperBrownianSigma`,
-  `paperFallbackAfterMs`, `btcMinPriceBand` finomhangolása.
-
-### Első session (2026-05-09) – Weather trader 6 bugfix + Settings tab + live status
-
-**Bugok kivizsgálása:** élő `mj-trading.netlify.app/trade/weather/` scan
-megmutatta, hogy a Hong Kong May 9 piacon a modell 24.4°C-t jósolt 85.5%-os
-`26°C` konszenzussal álló piac ellen, eredmény: 70%-os hamis edge. Részletes
-elemzés: `internal-docs/changelog/CHANGELOG-2026-05-09.md`.
-
-**Javított hibák:**
-- **A**: `city_offset` mis-application — Open-Meteo airport koordinátán adja
-  vissza a forecast-ot, már station-relatív. A `correctForecast` mégis hozzáadta
-  az offsetet → ~1°C-os szisztematikus alulbecslés. Új `applyCityOffset` opció,
-  default `false`. HK predikció: 23.9°C → 25°C.
-- **B**: `forecast_days=2` global max → target dátum prefix szűrő.
-- **C**: `dallas` + `tokyo` hozzáadva a `CITY_PATTERNS`-hez.
-- **D**: 8 új város a station listában: madrid, paris, milan, munich, ankara,
-  lagos, sao-paulo, austin (mind a Polymarket Gamma által aktívan szállított).
-  Dropoltak diagnosztika a UI-on: `findWeatherMarketsDetailed()` + `DroppedEvent`.
-- **E**: `maxEdgeCap` (default 0.40) — ha a gross edge nagyobb, no-trade
-  "likely model error" reason-nel. Smoke teszt: HK -60% edge mostantól blokkolva.
-- **F**: paper-mode self-validation dokumentálva (változatlan, TODO live METAR
-  reconciliation).
-
-**Új tunable Settings paraméterek (`netlify/functions/trader-settings.mts`):**
-9 weather-kategóriás field — `weatherEdgeThreshold`, `weatherConfidenceMin`,
-`weatherExitBeforeMin`, `weatherMaxPositionUSD`, `weatherMaxEdgeCap`,
-`weatherForecastDays`, plus 3 boolean toggle: `weatherApplyCityOffset`,
-`weatherUseEnsemble`, `weatherCronEnabled`. `getEffectiveWeatherConfig()`
-mergel env defaults + Blobs runtime overrides.
-
-**UI változások:**
-- `/trade/weather/` oldalon új **⚙ Beállítások** tab a generikus
-  `SettingsPanel`-lel (kategória-szűrt, bool toggle UI).
-- `WeatherTrader.tsx` status cluster: 🟢 **Scanning... (manual/cron)** pulse,
-  **cron ON · 5 min** vagy **cron OFF**, **last (manual/cron): X ago**.
-  Pollol szervert 5s-enként, lokálisan 1s-enként frissül.
-- A futás eredménye mostantól megjeleníti a kihagyott eseményeket (collapsible).
-
-**Új scheduled function:** `auto-trader-weather-cron.mts` (`*/5 * * * *`).
-Csak akkor csinál bármit, ha a Settings tabon a `weatherCronEnabled` toggle ON.
-
-**Új state:** `weather-runtime` Blobs store — `startedAt` (90s stale guard),
-`lastRunAt`, `lastResult`, `source`. Az `auto-trader-api?action=status&category=weather`
-visszaadja `runStatus` mezőben.
-
-### Hova nyúlj legközelebb (weather)
-- **Settings tab** → weather knobs állítása. `weatherCronEnabled=ON` után
-  ~5 perc múlva a következő cron tick lefut.
-- **`weatherApplyCityOffset` toggle** → ha valaki vissza akarja állítani a régi
-  bugos viselkedést, ott tudja. Default OFF (helyes).
-- **`weatherMaxEdgeCap`** → 40% default; ha a felhasználó nagyobb edge-eket is
-  látni akar (pl. paper kísérletezés), feljebb húzhatja.
-
-### Régi mai session változások (2026-05-08)
-- **A.1 Kelly egységesítés:** új `src/lib/math.ts` `kellyBinary()` (¼-Kelly + 8% hard cap), Dashboard.tsx 3 call site-ja átállítva, `MAX_KELLY_FRACTION` env default 0.20→0.08.
-- **A.2 Polymarket Auto-Claim:** új `netlify/functions/polymarket-redeem.mts` (auth-protected, intent-only mintázat) + `RedeemSection` a TradingPanel Polymarket sub-paneljében.
-- **A.3 Korai Exit (BTC 5m/15m):** TP/SL clamp + entry-window filter (60-180s), hold-to-end (<60s). `MarketInfo.openedAtEstimate` mező + `getBtcExitConfig()` env-ekkel + új `checkExitConditions()` pure függvény.
-- **A.4 Order Book Imbalance:** Binance top-10 depth ratio mint konvergencia szignál a decision-engine-ben. Új `obImbalance` mező az `AggregatedSignal`-ben.
-- **A.5 LP Subgroup A/B/C:** apex-wallets bővítve `lp_profile` (maker_ratio, two_sided, top-5 concentration) + `classifySubgroup` (FADE A/B, COPY C). Új `LPSubgroupCard` az ApexWalletsPanel-ben.
-- **A.6 Pair-Cost Arb scanner:** új `pair-cost-arb.mts` + Tab 11 D chip — VWAP-validált YES+NO redeem arb.
-- **SETTINGS rendszer:** új `trader-settings.mts` (auth-protected, Blobs runtime override store, range-clamp validáció) + új `SettingsPanel.tsx` komponens („⚙ Beállítások" 13. tab) saját login overlay-jel. `getEffectiveTraderConfig()` async wrapper merge-eli env+Blobs.
-- **B (külön MD):** `internal-docs/roadmap/hetzner-migration.md` 7-fázisos action plan a következő sessionnek (HL+funding-arb+P2.2+P3.3 Hetzner-re költözés).
-
-### Hova nyúlj legközelebb
-- Settings tabon paraméter állítás → 3 perc múlva a következő cron tick már az új értékekkel fut (env override redeploy nélkül)
-- Trading panel → Polymarket → új „Auto-Claim" section: wallet 0x… cím beírása + Ellenőriz → claimable USDC
-- Tab 11 D — Pair-Cost Arb: GET hívás `/.netlify/functions/pair-cost-arb?minProfit=0.03&notional=50` → table
-- Tab 8 (Apex) → profil betöltés → új LP Subgroup card jelenik meg ha 2000+ trade és 30+ active day a wallet-en
-
-### Mi marad a régi AKTUÁLIS ÁLLAPOT-ból (2026-04-08)
-
-### Mi működik élőben
-- Tab 06: Vol harvest fut, BTC szűrő javítva (deploy után él)
-- Tab 07: OrderFlow fut, de 1 trade → Kyle λ/VPIN null
-- Tab 08: Apex Consensus fut, piac nevek HIBÁSAK (lásd alább)
-- Tab 09: Cond Prob fut, Iran violation valódi (17.5¢ edge)
-- Tab 10: Signal Combiner fut, WAIT/50% mert kevés aktív signal
-
-### Legfontosabb bug – apex-wallets.mts
-
-A `getLeaderboard()` a Data API `/trades` endpointot hívja.
-A trades response-ban BENNE VAN a `title` és `slug` mező!
-Ezeket kell eltárolni az aggregációban, nem külön Gamma lookup-ot csinálni.
-
-```typescript
-// JELENLEGI HIBÁS MEGKÖZELÍTÉS:
-// 1. /trades lekérés → wallet aggregáció (market conditionId-val)
-// 2. consensus detection → conditionId lista
-// 3. Gamma API lookup conditionId alapján → ROSSZ PIAC NÉV
-
-// HELYES MEGKÖZELÍTÉS:
-// 1. /trades lekérés → wallet aggregáció (conditionId + title + slug eltárolás)
-// 2. consensus detection → conditionId lista + beépített title/slug
-// 3. NINCS szükség Gamma lookupra
-```
-
-A `/trades` response mezői:
-```json
-{
-  "proxyWallet": "0x...",
-  "side": "BUY",
-  "price": 0.54,
-  "size": 100,
-  "title": "Will X happen?",     ← EZT KELL HASZNÁLNI
-  "slug": "will-x-happen",       ← ÉS EZT
-  "conditionId": "0x...",
-  "timestamp": 1234567890
-}
-```
-
-### Signal Combiner – mikor ad valódi jelzést?
-
-Jelenlegi állapot: 2/5 signal aktív, combined = 0.5, WAIT
-Valódi BUY/SELL akkor lesz ha:
-1. Az apex consensus javítva → helyes piac + BUY jelzés
-2. Funding rate signal elérhető
-3. Legalább 3 signal konvergál egy irányba
-
-### Deploy workflow
-```bash
-git add -A && git commit -m "fix" && git push
-```
-Netlify auto-deploy ~1-2 perc után.
+1. **Új signal-ötlet**: új #N tétel a `new-strategies.md`-be Score-számolással
+2. **Új live-mode TODO**: új sor a `master-plan.md` "MI VAN MÉG HÁTRA" 🔴/🟠/🟡/🟢 szekcióba
+3. **Új VPS-feladat**: új fázis-lépés a `hetzner-migration.md`-be
+4. **Új env-vár**: `current-state/env-vars.md`, NEM a roadmap
+5. **Új algoritmus**: új `math/NN-name.md` + index-frissítés
+6. **Session-zárás**: a "📋 Doksi SSOT-szabályok" checklist + új `changelog/CHANGELOG-YYYY-MM-DD.md`
+
+### Történeti tanulságok (a részletek a changelog-ban)
+
+- **simV3 paper-resolver fix (2026-05-10)** — Brownian-bridge sim kivéve, csak real Polymarket resolution (Gamma `&closed=true` kötelező). Paper PnL == live PnL.
+- **6-fix crypto audit (2026-05-11)** — 12-gates decision-engine, kelly conviction gate, combiner recommendation gate, resolution-risk gate, paper fee parity.
+- **8-fix crypto deep audit (2026-05-11)** — vol_divergence T→0 gate, bankroll drift fix, apex consensus signal cleanup, cond_prob direction-aware, momentum regime-aware, EV baseline direction-aware, frontend "8 signals".
+- **5-fix weather audit (2026-05-11)** — bucket-matcher tail-CDF v2, market-disagreement gate, ensemble default ON, cloud avg, per-category log filter.
+- **HL bot live exit + lot precision fix (2026-05-10)** — `live-resolver.mts`, Binance `exchangeInfo` cache, cooldown Blobs persistence, paper slippage modeling.
+- **Auto-Trader UI unification (2026-05-09)** — 4 trader → 1 `TraderShell` + 5 reusable card, ~1500 LOC → ~778 LOC.
+
+Mindig nézd meg a `internal-docs/changelog/`-ot a részletekért, mielőtt feltételezést teszel.

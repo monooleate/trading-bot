@@ -604,6 +604,24 @@ export interface OpenPositionRationale {
   reason: string;
 }
 
+/** Live-gate snapshot — what the bot's decision-engine would say RIGHT
+ *  NOW about this market, as of the most recent cron scan. Populated by
+ *  the backend's getStatus from runStatus.lastResult.results for the
+ *  matching slug/coin. Shows whether the conviction still holds. */
+export interface LiveGateSnapshot {
+  evaluatedAt: string | null;
+  action: string | null;
+  reason: string | null;
+  direction: "YES" | "NO" | "LONG" | "SHORT" | null;
+  edge: number | null;
+  netEdge?: number | null;
+  predictedProb?: number | null;
+  marketPrice?: number | null;
+  activeSignals?: number | null;
+  kellyUsed?: number | null;
+  gates: CriteriaGate[];
+}
+
 export interface OpenPositionRow {
   /** Primary key — coin / city / market title. */
   coin: string;
@@ -624,6 +642,10 @@ export interface OpenPositionRow {
    *  Pass `null` (not undefined) to render the "no data, older position"
    *  placeholder instead of suppressing the toggle entirely. */
   rationale?: OpenPositionRationale | null;
+  /** Current gate state as of the last cron scan. Optional — falls back to
+   *  "no recent scan data" if the bot hasn't scanned this market since the
+   *  position was opened (or if the scan-result slug didn't match). */
+  liveGates?: LiveGateSnapshot | null;
 }
 
 const SIGNAL_LABELS: Array<[
@@ -781,6 +803,67 @@ function RationaleBlock({ r }: { r: OpenPositionRationale }) {
   );
 }
 
+// "Live gates" panel — the current decision-engine state for this market
+// as of the most recent cron scan. Rendered below the frozen entry-decision
+// so the operator can compare past vs present without two pages of UI.
+function LiveGatesBlock({ g }: { g: LiveGateSnapshot }) {
+  const passed = g.gates.filter((x) => x.passed).length;
+  const total  = g.gates.length;
+  const allPass = total > 0 && passed === total;
+  const evaluated = g.evaluatedAt
+    ? new Date(g.evaluatedAt).toLocaleString()
+    : "last cron tick";
+  return (
+    <div className="ts-pos-why ts-pos-why-live">
+      <div className="ts-pos-why-thesis">
+        <span className="ts-pos-why-label">Pillanatnyi gate állapot</span>
+        <span className="ts-pos-why-thesis-text">
+          {total === 0 ? (
+            <>A bot ezt a piacot a legutóbbi scan-ben nem értékelte ki (nincs friss gate-adat).</>
+          ) : (
+            <>
+              A legutóbbi scan szerint a bot most <strong>{g.action ?? "—"}</strong> akciót adna
+              {typeof g.netEdge === "number" && (
+                <> — net edge <strong>{g.netEdge >= 0 ? "+" : ""}{(g.netEdge * 100).toFixed(2)}%</strong></>
+              )}
+              {typeof g.edge === "number" && typeof g.netEdge !== "number" && (
+                <> — edge <strong>{(g.edge * 100).toFixed(2)}%</strong></>
+              )}
+              {g.direction && <> · irány <strong>{g.direction}</strong></>}
+              .
+            </>
+          )}
+        </span>
+      </div>
+      {total > 0 && (
+        <div className="ts-pos-why-gates">
+          <span className="ts-pos-why-label">
+            Gate-ek MOST · <strong>{passed}/{total}</strong> {allPass ? "✓" : "—"}
+          </span>
+          <div className="ts-pos-why-gate-list">
+            {g.gates.map((x, idx) => (
+              <div
+                key={idx}
+                className={`ts-pos-why-gate ${x.passed ? "ts-pos-why-gate-pass" : "ts-pos-why-gate-fail"}`}
+                title={x.hint}
+              >
+                <span className="ts-pos-why-gate-mark">{x.passed ? "✓" : "✗"}</span>
+                <span className="ts-pos-why-gate-label">{x.label}</span>
+                <span className="ts-pos-why-gate-actual">{x.actual ?? "—"}</span>
+                <span className="ts-pos-why-gate-req">{x.required ?? ""}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      <div className="ts-pos-why-meta">
+        <span>Evaluated: {evaluated}</span>
+        {g.reason && <span>Engine reason: {g.reason}</span>}
+      </div>
+    </div>
+  );
+}
+
 export function OpenPositionsCard({
   title,
   rows,
@@ -840,7 +923,10 @@ export function OpenPositionsCard({
           </>
         );
 
-        if (!hasRationaleSlot) {
+        const live = r.liveGates ?? null;
+        const hasLive = live && Array.isArray(live.gates);
+
+        if (!hasRationaleSlot && !hasLive) {
           return <div key={i} className="ts-pos-row">{summaryNode}</div>;
         }
 
@@ -851,13 +937,14 @@ export function OpenPositionsCard({
             </summary>
             {r_ ? (
               <RationaleBlock r={r_} />
-            ) : (
+            ) : hasRationaleSlot ? (
               <div className="ts-pos-why ts-pos-why-empty">
                 Adat nem elérhető — ez a pozíció a döntés-snapshot bevezetése előtt nyílt.
                 A jövőbeli új trade-eken minden gate, edge és signal-érték fagyasztva
                 lesz a pozíción.
               </div>
-            )}
+            ) : null}
+            {hasLive && <LiveGatesBlock g={live!} />}
           </details>
         );
       })}

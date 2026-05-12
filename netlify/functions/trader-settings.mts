@@ -23,7 +23,7 @@ const KEY = "runtime-overrides-v1";
 
 // ─── Schema: each editable field has a default range and a hard min/max ─
 
-type Category = "crypto" | "weather" | "hyperliquid" | "common";
+type Category = "crypto" | "weather" | "hyperliquid" | "funding-arb" | "sports" | "common";
 
 interface FieldSpec {
   default: number;
@@ -97,6 +97,227 @@ const SCHEMA: Record<string, FieldSpec> = {
   collinearityHighThreshold: { default: 0.7,  min: 0.5,  max: 0.95, label: "Collinearity high-pair |ρ|",    step: 0.05,  unit: "ratio", category: "common", group: "Signal collinearity", help: "Az Edge Tracker collinearity-mátrix highPairs listájába azok a párok kerülnek, ahol |ρ| > ez. Csak observability, NEM gate. Magasabb = csak az extrém kollineáris párok kerülnek figyelmeztetésbe." },
   volSignalEnabled:          { default: 1,    min: 0,    max: 1,    label: "Black-Scholes vol_divergence ON", step: 1,   unit: "bool", category: "crypto", group: "Signal toggles", help: "Default ON (Tier 1 redesign): N(d₂) digital pricing aktív 5m/15m BTC piacokon. Kikapcsolva → getVolSignal mindig null-t ad, a 8-jelzéses combiner 7 jelre megy. Csak akkor kapcsold ki, ha a paper-validáció után az IC noise marad." },
   volStrikeFetchEnabled:     { default: 1,    min: 0,    max: 1,    label: "Strike-price fetch (Binance kline)", step: 1, unit: "bool", category: "crypto", group: "Signal toggles", help: "Default ON: a piac openedAt-jére fetcheli a BTC árat (Binance 1m kline) hogy K = S₀. Kikapcsolva → K = S fallback (ATM), fairYes ≈ 0.5 minden piacon → semleges signal. Latency-trade-off: 1 extra Binance call signal-onként." },
+  // ─── Hyperliquid Perp knobs ─────────────────────────────────────
+  hlEdgeThresholdPaper:      { default: 0.12, min: 0.02,  max: 0.40,     label: "Edge threshold (paper)",       step: 0.005, unit: "frac",  category: "hyperliquid", group: "Risk & sizing", help: "Minimum |signal.edge| amitől paper módban entry-zünk HL perp-be. A live küszöb külön állítható; alacsonyabb paper = több paper trade IC-validáláshoz." },
+  hlEdgeThresholdLive:       { default: 0.18, min: 0.05,  max: 0.50,     label: "Edge threshold (live)",        step: 0.005, unit: "frac",  category: "hyperliquid", group: "Risk & sizing", help: "Live módban szigorúbb küszöb (default 18%) — csak akkor lépünk be valós tőkével ha a signal egyértelmű." },
+  hlMaxLeverage:             { default: 3,    min: 1,     max: 10,       label: "Max leverage",                 step: 0.5,   unit: "ratio", category: "hyperliquid", group: "Risk & sizing", help: "Maximum tőkeáttétel. Default 3× a konzervatív perp standard; >5× csak akkor ha az IC-d kimutathatóan >0.10 + a session Sharpe >1.0." },
+  hlVolGateRvPct:            { default: 120,  min: 50,    max: 300,      label: "Volatility gate (RV %)",       step: 5,     unit: "pct",   category: "hyperliquid", group: "Risk & sizing", help: "Skip a trade-et ha a realized volatility (annualized) ennél magasabb. Védi a botot a flash-crash + funding-spike eseményektől." },
+  hlConsecutiveLossLimit:    { default: 3,    min: 1,     max: 10,       label: "Consecutive loss limit",       step: 1,     unit: "n",     category: "hyperliquid", group: "Risk & sizing", help: "Ennyi egymás utáni loss után a session 1 órára szünetel. Anti-revenge guard." },
+  hlSessionLossLimit:        { default: 50,   min: 10,    max: 500,      label: "Session loss limit",           step: 5,     unit: "USD",   category: "hyperliquid", group: "Risk & sizing", help: "A session összesített vesztesége nem érheti el ezt — auto-stop. Reset-tel indítható újra." },
+  hlCooldownSeconds:         { default: 300,  min: 60,    max: 3600,     label: "Per-coin cooldown",            step: 30,    unit: "sec",   category: "hyperliquid", group: "Risk & sizing", help: "Ugyanazon a coin-on (BTC/ETH/SOL) mennyi mp kell két entry között." },
+  hlMaxOpenPositions:        { default: 3,    min: 1,     max: 10,       label: "Max open positions",           step: 1,     unit: "n",     category: "hyperliquid", group: "Risk & sizing", help: "Egyszerre max ennyi nyitott HL perp. >3 = nehéz kézzel monitorolni." },
+  // ─── Funding Arb knobs ──────────────────────────────────────────
+  frMinSpreadHourly:         { default: 0.0001, min: 0.00001, max: 0.005, label: "Min spread (hourly)",         step: 0.00005, unit: "frac", category: "funding-arb", group: "Risk & sizing", help: "Minimum HL/Binance funding rate különbség óránként amitől entry-zünk. 0.0001 = 0.01%/h = ~88%/yr break-even reverse." },
+  frMinOpenInterestUSD:      { default: 5000000, min: 1000000, max: 100000000, label: "Min open interest",       step: 500000,  unit: "USD",  category: "funding-arb", group: "Risk & sizing", help: "Minimum HL OI a coin-on ($M-ban). Védi a botot a vékony piacoktól ahol a slippage felemészti a spread-et." },
+  frMaxHoldDays:             { default: 14,   min: 1,     max: 60,       label: "Max hold (days)",              step: 1,     unit: "days",  category: "funding-arb", group: "Risk & sizing", help: "Ennyi nap után zárjuk a pozíciót függetlenül a spread-től. Védi a botot a stale-positionoktól (pl. funding regime váltás után)." },
+  frMaxCapitalPct:           { default: 0.40, min: 0.05,  max: 0.80,     label: "Max capital allocated",        step: 0.05,  unit: "frac",  category: "funding-arb", group: "Risk & sizing", help: "A bankroll maximum hány %-a lehet egyszerre arb pozíciókban. 40% default = még marad room a HL perp + crypto bot számára." },
+  // ─── Sports knobs ───────────────────────────────────────────────
+  sportsEdgeThreshold:       { default: 0.10, min: 0.02,  max: 0.40,     label: "Edge threshold (net)",         step: 0.005, unit: "frac",  category: "sports", group: "Risk & sizing", help: "Pinnacle-derived true probability és Polymarket-ár közti minimum edge fee után." },
+  sportsMaxPositionUSD:      { default: 20,   min: 2,     max: 200,      label: "Max position size",            step: 1,     unit: "USD",   category: "sports", group: "Risk & sizing", help: "Egy sports trade max USD értéke." },
+};
+
+// ─── Preset definitions ───────────────────────────────────────────────
+//
+// Per-bot preset bundles. Each preset is a partial map of field → value,
+// applied via POST in the same body shape as a manual save. The Loose
+// preset is meant for the early calibration phase where the operator
+// wants more paper trades to land in the IC sample; Strict is for the
+// post-live-go state where we only trade convergent signals.
+//
+// Descriptions are surfaced verbatim on the UI button tooltips so the
+// operator can decide without leaving the page.
+
+export interface PresetDefinition {
+  label: string;          // short button label (e.g. "Lazább")
+  description: string;    // tooltip / under-button hint
+  values: Record<string, number>;
+}
+
+export interface CategoryPresets {
+  loose:  PresetDefinition;
+  normal: PresetDefinition;
+  strict: PresetDefinition;
+}
+
+export const PRESETS: Record<string, CategoryPresets> = {
+  crypto: {
+    loose: {
+      label: "Lazább",
+      description: "Több paper trade az IC kalibrációhoz. A 2026-05-12 stagnáció oka: combiner confidence gate (5%) blokkolt mindent — itt 2%-ra lazítunk. Kisebb edge-küszöb + alacsonyabb min position size + alacsonyabb min OI. Csak paper módra ajánlott.",
+      values: {
+        edgeThreshold:         0.08,
+        combinerConfidenceMin: 0.02,
+        minPositionSizeUSDC:   0.20,
+        maxKellyFraction:      0.05,
+        sessionLossLimit:      30,
+        cooldownSeconds:       180,
+        bonferroniAlpha:       0.10,  // enyhébb live-gate
+      },
+    },
+    normal: {
+      label: "Normál",
+      description: "Az audit-validált default értékek (2026-05-11 12-gates rendszer). Combiner confidence 5%, edge 15%, ¼-Kelly + 8% cap. Ezzel mentünk a friss simV3 paper validációba.",
+      values: {
+        edgeThreshold:         0.15,
+        combinerConfidenceMin: 0.05,
+        minPositionSizeUSDC:   0.50,
+        maxKellyFraction:      0.08,
+        sessionLossLimit:      20,
+        cooldownSeconds:       300,
+        bonferroniAlpha:       0.05,
+      },
+    },
+    strict: {
+      label: "Szigorú",
+      description: "Csak a magas-konvergencia trade-ek. Edge ≥25%, combiner confidence ≥10%, min pozíció $2, Kelly cap 5%. Live-readiness elérése után ajánlott — kevés, de magas-konfidencia trade.",
+      values: {
+        edgeThreshold:         0.25,
+        combinerConfidenceMin: 0.10,
+        minPositionSizeUSDC:   2.00,
+        maxKellyFraction:      0.05,
+        sessionLossLimit:      15,
+        cooldownSeconds:       600,
+        bonferroniAlpha:       0.02,  // szigorúbb live-gate
+      },
+    },
+  },
+  weather: {
+    loose: {
+      label: "Lazább",
+      description: "Több paper trade: edge 6%, confidence 50%, market-disagreement 3°C tolerancia. Sanity cap 60%. Új city-k indításához vagy a calibrációs sample bővítéséhez ajánlott.",
+      values: {
+        weatherEdgeThreshold:    0.06,
+        weatherConfidenceMin:    0.50,
+        weatherMarketDisagreeMaxC: 3.0,
+        weatherMaxEdgeCap:       0.60,
+        weatherExitBeforeMin:    30,
+        weatherMaxPositionUSD:   15,
+      },
+    },
+    normal: {
+      label: "Normál",
+      description: "Edge 12%, confidence 65%, disagreement 2°C, sanity cap 40%. A 2026-05-11 audit-validált default — ezzel mentünk élesbe a 31-tagú GFS ensemble-lel.",
+      values: {
+        weatherEdgeThreshold:    0.12,
+        weatherConfidenceMin:    0.65,
+        weatherMarketDisagreeMaxC: 2.0,
+        weatherMaxEdgeCap:       0.40,
+        weatherExitBeforeMin:    45,
+        weatherMaxPositionUSD:   25,
+      },
+    },
+    strict: {
+      label: "Szigorú",
+      description: "Edge ≥20%, confidence ≥80%, disagreement ≤1.5°C, sanity cap 30%. Csak a magas-konvergencia trade-ek (extrém hideg/meleg piacok ahol az ensemble σ < 1°C).",
+      values: {
+        weatherEdgeThreshold:    0.20,
+        weatherConfidenceMin:    0.80,
+        weatherMarketDisagreeMaxC: 1.5,
+        weatherMaxEdgeCap:       0.30,
+        weatherExitBeforeMin:    60,
+        weatherMaxPositionUSD:   40,
+      },
+    },
+  },
+  hyperliquid: {
+    loose: {
+      label: "Lazább",
+      description: "Paper edge 8%, max leverage 5×, vol gate 150% — több paper sample az IC-méréshez. Csak paper módra; a live edge továbbra is 12%-on marad.",
+      values: {
+        hlEdgeThresholdPaper:   0.08,
+        hlEdgeThresholdLive:    0.12,
+        hlMaxLeverage:          5,
+        hlVolGateRvPct:         150,
+        hlConsecutiveLossLimit: 5,
+        hlSessionLossLimit:     75,
+        hlCooldownSeconds:      180,
+      },
+    },
+    normal: {
+      label: "Normál",
+      description: "Paper 12%, live 18%, leverage 3×, vol gate 120%. A 2026-05-10 audit default — TP/SL clamp + paper-vol gate parity.",
+      values: {
+        hlEdgeThresholdPaper:   0.12,
+        hlEdgeThresholdLive:    0.18,
+        hlMaxLeverage:          3,
+        hlVolGateRvPct:         120,
+        hlConsecutiveLossLimit: 3,
+        hlSessionLossLimit:     50,
+        hlCooldownSeconds:      300,
+      },
+    },
+    strict: {
+      label: "Szigorú",
+      description: "Paper 18%, live 25%, leverage 2×, vol gate 90%. Csak a magas-konvergencia perp trade-ek — live-readiness elérése után ajánlott.",
+      values: {
+        hlEdgeThresholdPaper:   0.18,
+        hlEdgeThresholdLive:    0.25,
+        hlMaxLeverage:          2,
+        hlVolGateRvPct:         90,
+        hlConsecutiveLossLimit: 2,
+        hlSessionLossLimit:     30,
+        hlCooldownSeconds:      600,
+      },
+    },
+  },
+  "funding-arb": {
+    loose: {
+      label: "Lazább",
+      description: "Spread ≥0.005%/h (~43%/yr), OI floor $2M, max 60 nap hold. Több arb sample a paper IC-hez. Vékonyabb piacokon is enged.",
+      values: {
+        frMinSpreadHourly:     0.00005,
+        frMinOpenInterestUSD:  2000000,
+        frMaxHoldDays:         60,
+        frMaxCapitalPct:       0.50,
+      },
+    },
+    normal: {
+      label: "Normál",
+      description: "Spread ≥0.01%/h (~88%/yr), OI floor $5M, 14 nap hold. A 2026-05-10 audit default — atomic 2-leg open + asymmetric close slippage.",
+      values: {
+        frMinSpreadHourly:     0.0001,
+        frMinOpenInterestUSD:  5000000,
+        frMaxHoldDays:         14,
+        frMaxCapitalPct:       0.40,
+      },
+    },
+    strict: {
+      label: "Szigorú",
+      description: "Spread ≥0.05%/h (~438%/yr), OI floor $20M, 7 nap hold. Csak az extrém-spread eseményeket fogjuk (post-listing pump, leveraged-token squeeze).",
+      values: {
+        frMinSpreadHourly:     0.0005,
+        frMinOpenInterestUSD:  20000000,
+        frMaxHoldDays:         7,
+        frMaxCapitalPct:       0.25,
+      },
+    },
+  },
+  sports: {
+    loose: {
+      label: "Lazább",
+      description: "Edge ≥5%, max pozíció $10. Több paper trade a Pinnacle-edge validáláshoz.",
+      values: {
+        sportsEdgeThreshold:  0.05,
+        sportsMaxPositionUSD: 10,
+      },
+    },
+    normal: {
+      label: "Normál",
+      description: "Edge ≥10%, max pozíció $20. A jelenlegi default — contrarian fan-bias fade Pinnacle-cross-referenced markéton.",
+      values: {
+        sportsEdgeThreshold:  0.10,
+        sportsMaxPositionUSD: 20,
+      },
+    },
+    strict: {
+      label: "Szigorú",
+      description: "Edge ≥18%, max pozíció $30. Csak a magas-konvergencia sports edge-eket (NFL playoff longshot fade, NBA chalk lemmings).",
+      values: {
+        sportsEdgeThreshold:  0.18,
+        sportsMaxPositionUSD: 30,
+      },
+    },
+  },
 };
 
 type Overrides = Partial<Record<keyof typeof SCHEMA, number>>;
@@ -163,7 +384,7 @@ export default async function handler(req: Request, _ctx: Context) {
       effective[k] = (overrides as any)[k] ?? envByKey[k] ?? spec.default;
     }
     return new Response(
-      JSON.stringify({ ok: true, schema: SCHEMA, effective, overrides, authed: auth.ok }),
+      JSON.stringify({ ok: true, schema: SCHEMA, effective, overrides, presets: PRESETS, authed: auth.ok }),
       { status: 200, headers: CORS },
     );
   }

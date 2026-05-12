@@ -54,3 +54,29 @@ export function getHlConfig(): HlTraderConfig {
     paperSimVersion:    HL_PAPER_SIM_VERSION,
   };
 }
+
+/**
+ * Effective config = env defaults merged with runtime Blobs overrides.
+ * Mirrors getEffectiveWeatherConfig: lazy import to break circular deps,
+ * env-only fallback on any read error so the trader keeps running.
+ */
+export async function getEffectiveHlConfig(): Promise<HlTraderConfig> {
+  const env = getHlConfig();
+  try {
+    const mod: any = await import("../../trader-settings.mts");
+    const ov = await mod.loadRuntimeOverrides();
+    return {
+      ...env,
+      maxLeverage:               ov.hlMaxLeverage             ?? env.maxLeverage,
+      edgeThresholdPaper:        ov.hlEdgeThresholdPaper      ?? env.edgeThresholdPaper,
+      edgeThresholdLive:         ov.hlEdgeThresholdLive       ?? env.edgeThresholdLive,
+      sessionLossLimit:          ov.hlSessionLossLimit        ?? env.sessionLossLimit,
+      cooldownSeconds:           ov.hlCooldownSeconds         ?? env.cooldownSeconds,
+      maxOpenPositions:          ov.hlMaxOpenPositions        ?? env.maxOpenPositions,
+      consecutiveLossLimit:      ov.hlConsecutiveLossLimit    ?? env.consecutiveLossLimit,
+      volGateRvPct:              ov.hlVolGateRvPct            ?? env.volGateRvPct,
+    };
+  } catch {
+    return env;
+  }
+}

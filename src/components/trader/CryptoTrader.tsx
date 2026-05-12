@@ -207,6 +207,7 @@ export default function CryptoTrader({ bankroll }: { bankroll?: number }) {
     marketPriceAtEntry: number | null;
     predictedProb: number | null;
     entryDecision: OpenPositionRationale | null;
+    liveGates: any;
   }>;
 
   const doAction = useCallback(async (action: string) => {
@@ -306,6 +307,9 @@ export default function CryptoTrader({ bankroll }: { bankroll?: number }) {
               // a "Why?" panel. `null` (older position without snapshot)
               // still toggles, but renders the placeholder message.
               rationale: p.entryDecision ?? null,
+              // "What would the bot say RIGHT NOW about this market" —
+              // a fresh gate snapshot from the most recent scan tick.
+              liveGates: p.liveGates ?? null,
             };
           })}
         />

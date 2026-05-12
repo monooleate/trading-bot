@@ -828,7 +828,11 @@ async function getStatus(config: ReturnType<typeof getTraderConfig>, category: s
     // Past-METAR-window positions awaiting settlement.
     base.pending = await getWeatherPendingForSettlement(config.paperMode);
     // Active positions still in the trading window (reconcileAfter in the future).
-    base.openDetails = getWeatherOpenActive(session);
+    // Pass the last scan's results so we can surface a "live gates" snapshot
+    // per open position — what the bot's decision-engine would say RIGHT NOW
+    // (as of the last cron tick) about that market. The frozen entry-decision
+    // shows why the bot opened; live-gates shows whether the conviction holds.
+    base.openDetails = getWeatherOpenActive(session, base.runStatus?.lastResult?.results ?? null);
   } else if (category === "crypto") {
     // Same status payload shape as weather: the UI's status cluster reads
     // the same fields regardless of venue.
@@ -838,14 +842,37 @@ async function getStatus(config: ReturnType<typeof getTraderConfig>, category: s
     // 3 has no simulator fallback — positions stay open until Gamma publishes
     // outcomePrices ∈ {0,1}.
     base.pending = getCryptoPendingPositions(session);
-    // Active positions still in the trading window.
-    base.openDetails = getCryptoOpenActive(session);
+    // Active positions still in the trading window (with live-gate snapshot).
+    base.openDetails = getCryptoOpenActive(session, base.runStatus?.lastResult?.results ?? null);
   }
   return jsonResponse(base);
 }
 
+// Lookup helper: pick the most recent scan-result entry that matches the
+// open position's slug. Returns the gates + key inputs the engine evaluated
+// on its last tick, so the UI can render a "current gate state" panel next
+// to the frozen entry-decision snapshot.
+function pickLiveScanForSlug(scanResults: any[] | null, slug: string): any | null {
+  if (!Array.isArray(scanResults)) return null;
+  const r = scanResults.find((x) => x?.market === slug);
+  if (!r) return null;
+  return {
+    evaluatedAt:   r.evaluatedAt   ?? null,
+    action:        r.action        ?? null,
+    reason:        r.reason        ?? null,
+    marketPrice:   r.marketPrice   ?? null,
+    predictedProb: r.predictedProb ?? null,
+    netEdge:       r.netEdge       ?? null,
+    edge:          r.edge          ?? null,
+    direction:     r.direction     ?? null,
+    activeSignals: r.activeSignals ?? null,
+    kellyUsed:     r.kellyUsed     ?? null,
+    gates:         Array.isArray(r.gates) ? r.gates : [],
+  };
+}
+
 // Active (still-trading-window) open positions for the crypto bot.
-function getCryptoOpenActive(session: SessionState) {
+function getCryptoOpenActive(session: SessionState, scanResults: any[] | null = null) {
   const now = Date.now();
   return session.openPositions
     .filter((p) => !p.endDate || new Date(p.endDate).getTime() >= now)
@@ -861,6 +888,7 @@ function getCryptoOpenActive(session: SessionState) {
       marketPriceAtEntry: p.marketPriceAtEntry ?? null,
       predictedProb:      p.predictedProb ?? null,
       entryDecision:      p.entryDecision ?? null,
+      liveGates:          pickLiveScanForSlug(scanResults, p.market),
     }))
     .sort((a, b) => (a.endDate ?? "").localeCompare(b.endDate ?? ""));
 }
@@ -868,7 +896,7 @@ function getCryptoOpenActive(session: SessionState) {
 // Active (still-future-reconcile) weather positions and the past-METAR
 // pending list — both are derived from the same session.openPositions array,
 // split by reconcileAfter.
-function getWeatherOpenActive(session: SessionState) {
+function getWeatherOpenActive(session: SessionState, scanResults: any[] | null = null) {
   const now = Date.now();
   return session.openPositions
     .filter((p) => p.weatherMeta && new Date(p.weatherMeta.reconcileAfter).getTime() > now)
@@ -884,6 +912,7 @@ function getWeatherOpenActive(session: SessionState) {
       openedAt:      p.openedAt,
       reconcileAfter: p.weatherMeta!.reconcileAfter,
       entryDecision: p.entryDecision ?? null,
+      liveGates:     pickLiveScanForSlug(scanResults, p.market),
     }))
     .sort((a, b) => a.reconcileAfter.localeCompare(b.reconcileAfter));
 }

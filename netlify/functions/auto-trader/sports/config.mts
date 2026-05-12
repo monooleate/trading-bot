@@ -51,6 +51,26 @@ export function getSportsConfig(): SportsConfig {
   };
 }
 
+/**
+ * Effective config = env defaults merged with runtime Blobs overrides.
+ * Lets the Loose/Normal/Strict preset on the Settings tab take effect on
+ * the next scan without a redeploy.
+ */
+export async function getEffectiveSportsConfig(): Promise<SportsConfig> {
+  const env = getSportsConfig();
+  try {
+    const mod: any = await import("../../trader-settings.mts");
+    const ov = await mod.loadRuntimeOverrides();
+    return {
+      ...env,
+      edgeThreshold:   ov.sportsEdgeThreshold  ?? env.edgeThreshold,
+      maxPositionUSDC: ov.sportsMaxPositionUSD ?? env.maxPositionUSDC,
+    };
+  } catch {
+    return env;
+  }
+}
+
 export const SPORTS_DEFAULT_BANKROLL = 50;  // $50 USDC paper-mode start
 // 2026-05-11 (k) bump: v1 sessions allowed mutex events (FIFA WC 32-way)
 // to slip through fan-bias-fade, opening systematically losing long-tail

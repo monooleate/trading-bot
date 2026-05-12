@@ -34,6 +34,7 @@ interface ArbOpenDetail {
   accumulatedFunding: number;
   openedAt:           string;
   entryDecision:      OpenPositionRationale | null;
+  liveGates?:         any;
 }
 
 interface ArbSessionSummary {
@@ -168,6 +169,7 @@ export default function FundingArbPanel({ bankroll }: { bankroll?: number }) {
     // Spread-flavor rationale popover ("Why?"). null = pre-snapshot
     // legacy position; renders the unified "no data" placeholder.
     rationale:  p.entryDecision ?? null,
+    liveGates:  p.liveGates ?? null,
   }));
 
   const oppRows: OpportunityRowLite[] = (display?.opportunities ?? []).map((o) => ({
