@@ -68,6 +68,13 @@ const SCHEMA: Record<string, FieldSpec> = {
   combinerConfidenceMin:{ default: 0.05,    min: 0.01,    max: 0.20,    label: "Combiner confidence min",      step: 0.005, unit: "frac", category: "crypto", group: "Risk & sizing", help: "Minimum |finalProb − 0.5| amitől a combiner outputot 'signal'-nek és nem zajnak vesszük. Megegyezik a signal-combiner saját recommend() WAIT-küszöbével (5%)." },
   cryptoMaxOpenPositions:{ default: 5,      min: 1,       max: 20,      label: "Max open positions",           step: 1,     unit: "n",    category: "crypto", group: "Risk & sizing", help: "Egyszerre max ennyi nyitott crypto paper pozíció. Védi a bankroll-t a túlexpozíciótól ha sok piac van egyszerre nyitva. 5 default = $250 paper-en bőven elég." },
   cryptoMinActiveSignals:{ default: 2,      min: 1,       max: 8,       label: "Min active signals",           step: 1,     unit: "n",    category: "crypto", group: "Signal toggles", help: "Minimum hány signal-nak kell konvergálnia (8-ból). 2 = laza, 4 = óvatos, 6 = csak magas-konfidencia trade-ek." },
+  // ─── Crypto sanity gates (2026-05-12 §k) ─────────────────────────
+  // Model-error védelem: a kombinátor saját zaja (egy signal source 0.5-re
+  // defaultolva) képes 40%+ "edge"-et hallucinálni. Két különálló gate:
+  //   1. Hard cap a gross edge-en (bárhol fölötte = vétó)
+  //   2. Conditional cap: WATCH-rekommendáció + nagy edge = vétó.
+  cryptoMaxEdgeCap:            { default: 0.40, min: 0.10, max: 0.95, label: "Sanity cap (max gross edge)",   step: 0.01,  unit: "frac", category: "crypto", group: "Sanity gates", help: "Ha a gross edge meghaladja ezt, vétó — szinte mindig model-error (signal source default, drift, feed crash). Ugyanaz a logika mint a weather bot 40% cap-jénél." },
+  cryptoWatchExtremeEdgeThreshold: { default: 0.20, min: 0.05, max: 0.50, label: "WATCH + extreme edge cap",  step: 0.01,  unit: "frac", category: "crypto", group: "Sanity gates", help: "Ha a combiner WATCH-ot ajánl ÉS a gross edge > ez, vétó. WATCH = low IR (alacsony combiner bizalom); ekkor a nagy edge ~mindig hallucináció. Lazább preset-en növelhető (0.30), Strict-en csökkenthető (0.15)." },
   // ─── Live-readiness gates (apply to every trader) ──────────────
   // The cron loop refuses to honor PAPER_MODE=false until a session has
   // accumulated enough validated paper data. Every trader (crypto,
@@ -110,12 +117,20 @@ const SCHEMA: Record<string, FieldSpec> = {
   hlCooldownSeconds:         { default: 300,  min: 60,    max: 3600,     label: "Per-coin cooldown",            step: 30,    unit: "sec",   category: "hyperliquid", group: "Risk & sizing", help: "Ugyanazon a coin-on (BTC/ETH/SOL) mennyi mp kell két entry között." },
   hlMaxOpenPositions:        { default: 3,    min: 1,     max: 10,       label: "Max open positions",           step: 1,     unit: "n",     category: "hyperliquid", group: "Risk & sizing", help: "Egyszerre max ennyi nyitott HL perp. >3 = nehéz kézzel monitorolni." },
   hlMinActiveSignals:        { default: 3,    min: 1,     max: 8,        label: "Min active signals",           step: 1,     unit: "n",     category: "hyperliquid", group: "Risk & sizing", help: "Minimum hány signal-nak kell konvergálnia (8-ból). HL drágább mint Polymarket → szigorúbb default (3) mint a crypto bot (2)." },
+  // HL Perp sanity gates — ugyanaz a logika mint a crypto bot-nál. HL
+  // signal.edge = |finalProb − 0.5| × 2 (directional conviction).
+  hlMaxEdgeCap:                { default: 0.40, min: 0.10, max: 0.95, label: "Sanity cap (max gross edge)",   step: 0.01,  unit: "frac", category: "hyperliquid", group: "Sanity gates", help: "HL signal.edge plafonja. Edge 0.40 = a combiner 70% biztos a directional view-ban. Felette ~mindig model-error." },
+  hlWatchExtremeEdgeThreshold: { default: 0.20, min: 0.05, max: 0.50, label: "WATCH + extreme edge cap",      step: 0.01,  unit: "frac", category: "hyperliquid", group: "Sanity gates", help: "Ha a combiner WATCH-ot ajánl + edge > ez, vétó. Azonos logika a crypto bot-éval." },
   // ─── Funding Arb knobs ──────────────────────────────────────────
   frMinSpreadHourly:         { default: 0.0001, min: 0.00001, max: 0.005, label: "Min spread (hourly)",         step: 0.00005, unit: "frac", category: "funding-arb", group: "Risk & sizing", help: "Minimum HL/Binance funding rate különbség óránként amitől entry-zünk. 0.0001 = 0.01%/h = ~88%/yr break-even reverse." },
   frMinOpenInterestUSD:      { default: 5000000, min: 1000000, max: 100000000, label: "Min open interest",       step: 500000,  unit: "USD",  category: "funding-arb", group: "Risk & sizing", help: "Minimum HL OI a coin-on ($M-ban). Védi a botot a vékony piacoktól ahol a slippage felemészti a spread-et." },
   frMaxHoldDays:             { default: 14,   min: 1,     max: 60,       label: "Max hold (days)",              step: 1,     unit: "days",  category: "funding-arb", group: "Risk & sizing", help: "Ennyi nap után zárjuk a pozíciót függetlenül a spread-től. Védi a botot a stale-positionoktól (pl. funding regime váltás után)." },
   frMaxCapitalPct:           { default: 0.40, min: 0.05,  max: 0.80,     label: "Max capital allocated",        step: 0.05,  unit: "frac",  category: "funding-arb", group: "Risk & sizing", help: "A bankroll maximum hány %-a lehet egyszerre arb pozíciókban. 40% default = még marad room a HL perp + crypto bot számára." },
   frMaxOpenPositions:        { default: 3,    min: 1,     max: 10,       label: "Max open positions",           step: 1,     unit: "n",     category: "funding-arb", group: "Risk & sizing", help: "Egyszerre max ennyi nyitott arb pozíció. >3 = kézzel nehéz monitorolni, és a kapcsolt HL bankroll túl gyorsan felemésztődik." },
+  // F-Arb sanity gate — feed-glitch detector. A funding rate-ek a valóságban
+  // max ~0.1%/h-ra mennek fel; 0.5%/h fölött ~mindig NaN / stale cache /
+  // decimal-place error a feed-en.
+  frMaxSpreadHourly:         { default: 0.005, min: 0.001, max: 0.05,    label: "Spread sanity cap (max h)",    step: 0.0005, unit: "frac", category: "funding-arb", group: "Sanity gates", help: "Funding spread hard plafonja. 0.005 = 0.5%/h ≈ 4380%/yr — a valóságban soha nem éri el normál market feed-en. Felette feed-glitch (NaN, stale cache, decimal-place bug)." },
   // ─── Sports knobs ───────────────────────────────────────────────
   sportsEdgeThreshold:       { default: 0.10, min: 0.02,  max: 0.40,     label: "Edge threshold (net)",         step: 0.005, unit: "frac",  category: "sports", group: "Risk & sizing", help: "Pinnacle-derived true probability és Polymarket-ár közti minimum edge fee után." },
   sportsMaxPositionUSD:      { default: 20,   min: 2,     max: 200,      label: "Max position size",            step: 1,     unit: "USD",   category: "sports", group: "Risk & sizing", help: "Egy sports trade max USD értéke." },
@@ -151,7 +166,7 @@ export const PRESETS: Record<string, CategoryPresets> = {
   crypto: {
     loose: {
       label: "Lazább",
-      description: "Több paper trade az IC kalibrációhoz. A 2026-05-12 stagnáció oka: combiner confidence gate (5%) blokkolt mindent — itt 2%-ra lazítunk. Kisebb edge-küszöb + alacsonyabb min position size + alacsonyabb min OI. Csak paper módra ajánlott.",
+      description: "Több paper trade az IC kalibrációhoz. A 2026-05-12 stagnáció oka: combiner confidence gate (5%) blokkolt mindent — itt 2%-ra lazítunk. Kisebb edge-küszöb + alacsonyabb min position size + alacsonyabb min OI. Sanity cap-ek enyhébbek (50% / 30%). Csak paper módra ajánlott.",
       values: {
         edgeThreshold:         0.08,
         combinerConfidenceMin: 0.02,
@@ -161,12 +176,14 @@ export const PRESETS: Record<string, CategoryPresets> = {
         cooldownSeconds:       180,
         cryptoMaxOpenPositions: 8,
         cryptoMinActiveSignals: 2,
+        cryptoMaxEdgeCap:               0.50,
+        cryptoWatchExtremeEdgeThreshold: 0.30,
         bonferroniAlpha:       0.10,  // enyhébb live-gate
       },
     },
     normal: {
       label: "Normál",
-      description: "Az audit-validált default értékek (2026-05-11 12-gates rendszer). Combiner confidence 5%, edge 15%, ¼-Kelly + 8% cap. Ezzel mentünk a friss simV3 paper validációba.",
+      description: "Az audit-validált default értékek (2026-05-11 12-gates → 2026-05-12 14-gates rendszer). Combiner confidence 5%, edge 15%, ¼-Kelly + 8% cap. Sanity cap 40%, WATCH+20%. Ezzel mentünk a friss simV3 paper validációba.",
       values: {
         edgeThreshold:         0.15,
         combinerConfidenceMin: 0.05,
@@ -176,12 +193,14 @@ export const PRESETS: Record<string, CategoryPresets> = {
         cooldownSeconds:       300,
         cryptoMaxOpenPositions: 5,
         cryptoMinActiveSignals: 3,
+        cryptoMaxEdgeCap:               0.40,
+        cryptoWatchExtremeEdgeThreshold: 0.20,
         bonferroniAlpha:       0.05,
       },
     },
     strict: {
       label: "Szigorú",
-      description: "Csak a magas-konvergencia trade-ek. Edge ≥25%, combiner confidence ≥10%, min pozíció $2, Kelly cap 5%. Live-readiness elérése után ajánlott — kevés, de magas-konfidencia trade.",
+      description: "Csak a magas-konvergencia trade-ek. Edge ≥25%, combiner confidence ≥10%, min pozíció $2, Kelly cap 5%, sanity cap 30%, WATCH+15% — kemény filter. Live-readiness elérése után ajánlott.",
       values: {
         edgeThreshold:         0.25,
         combinerConfidenceMin: 0.10,
@@ -191,6 +210,8 @@ export const PRESETS: Record<string, CategoryPresets> = {
         cooldownSeconds:       600,
         cryptoMaxOpenPositions: 3,
         cryptoMinActiveSignals: 5,
+        cryptoMaxEdgeCap:               0.30,
+        cryptoWatchExtremeEdgeThreshold: 0.15,
         bonferroniAlpha:       0.02,  // szigorúbb live-gate
       },
     },
@@ -239,7 +260,7 @@ export const PRESETS: Record<string, CategoryPresets> = {
   hyperliquid: {
     loose: {
       label: "Lazább",
-      description: "Paper edge 8%, max leverage 5×, vol gate 150% — több paper sample az IC-méréshez. Csak paper módra; a live edge továbbra is 12%-on marad.",
+      description: "Paper edge 8%, max leverage 5×, vol gate 150% — több paper sample az IC-méréshez. Sanity cap 50%, WATCH+30%. Csak paper módra; a live edge továbbra is 12%-on marad.",
       values: {
         hlEdgeThresholdPaper:   0.08,
         hlEdgeThresholdLive:    0.12,
@@ -249,11 +270,13 @@ export const PRESETS: Record<string, CategoryPresets> = {
         hlSessionLossLimit:     75,
         hlCooldownSeconds:      180,
         hlMinActiveSignals:     2,
+        hlMaxEdgeCap:               0.50,
+        hlWatchExtremeEdgeThreshold: 0.30,
       },
     },
     normal: {
       label: "Normál",
-      description: "Paper 12%, live 18%, leverage 3×, vol gate 120%. A 2026-05-10 audit default — TP/SL clamp + paper-vol gate parity.",
+      description: "Paper 12%, live 18%, leverage 3×, vol gate 120%. Sanity cap 40%, WATCH+20% (2026-05-12). A 2026-05-10 audit default — TP/SL clamp + paper-vol gate parity.",
       values: {
         hlEdgeThresholdPaper:   0.12,
         hlEdgeThresholdLive:    0.18,
@@ -263,11 +286,13 @@ export const PRESETS: Record<string, CategoryPresets> = {
         hlSessionLossLimit:     50,
         hlCooldownSeconds:      300,
         hlMinActiveSignals:     3,
+        hlMaxEdgeCap:               0.40,
+        hlWatchExtremeEdgeThreshold: 0.20,
       },
     },
     strict: {
       label: "Szigorú",
-      description: "Paper 18%, live 25%, leverage 2×, vol gate 90%. Csak a magas-konvergencia perp trade-ek — live-readiness elérése után ajánlott.",
+      description: "Paper 18%, live 25%, leverage 2×, vol gate 90%. Sanity cap 30%, WATCH+15%. Csak a magas-konvergencia perp trade-ek — live-readiness elérése után ajánlott.",
       values: {
         hlEdgeThresholdPaper:   0.18,
         hlEdgeThresholdLive:    0.25,
@@ -277,41 +302,46 @@ export const PRESETS: Record<string, CategoryPresets> = {
         hlSessionLossLimit:     30,
         hlCooldownSeconds:      600,
         hlMinActiveSignals:     5,
+        hlMaxEdgeCap:               0.30,
+        hlWatchExtremeEdgeThreshold: 0.15,
       },
     },
   },
   "funding-arb": {
     loose: {
       label: "Lazább",
-      description: "Spread ≥0.005%/h (~43%/yr), OI floor $2M, max 60 nap hold. Több arb sample a paper IC-hez. Vékonyabb piacokon is enged.",
+      description: "Spread ≥0.005%/h (~43%/yr), OI floor $2M, max 60 nap hold. Sanity cap enyhébb (1%/h). Több arb sample a paper IC-hez. Vékonyabb piacokon is enged.",
       values: {
         frMinSpreadHourly:     0.00005,
         frMinOpenInterestUSD:  2000000,
         frMaxHoldDays:         60,
         frMaxCapitalPct:       0.50,
         frMaxOpenPositions:    5,
+        frMaxSpreadHourly:     0.010,  // 1%/h sanity (loose)
       },
     },
     normal: {
       label: "Normál",
-      description: "Spread ≥0.01%/h (~88%/yr), OI floor $5M, 14 nap hold. A 2026-05-10 audit default — atomic 2-leg open + asymmetric close slippage.",
+      description: "Spread ≥0.01%/h (~88%/yr), OI floor $5M, 14 nap hold. Sanity cap 0.5%/h feed-glitch védelem. A 2026-05-10 audit default — atomic 2-leg open + asymmetric close slippage.",
       values: {
         frMinSpreadHourly:     0.0001,
         frMinOpenInterestUSD:  5000000,
         frMaxHoldDays:         14,
         frMaxCapitalPct:       0.40,
         frMaxOpenPositions:    3,
+        frMaxSpreadHourly:     0.005,
       },
     },
     strict: {
       label: "Szigorú",
-      description: "Spread ≥0.05%/h (~438%/yr), OI floor $20M, 7 nap hold. Csak az extrém-spread eseményeket fogjuk (post-listing pump, leveraged-token squeeze).",
+      description: "Spread ≥0.05%/h (~438%/yr), OI floor $20M, 7 nap hold. Sanity cap 0.3%/h (szigorúbb glitch detector). Csak az extrém-spread eseményeket fogjuk (post-listing pump, leveraged-token squeeze).",
       values: {
         frMinSpreadHourly:     0.0005,
         frMinOpenInterestUSD:  20000000,
         frMaxHoldDays:         7,
         frMaxCapitalPct:       0.25,
         frMaxOpenPositions:    2,
+        frMaxSpreadHourly:     0.003,
       },
     },
   },

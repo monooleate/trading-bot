@@ -436,3 +436,26 @@ confidence ad biztonsági réteget), ezért WATCH+extreme nem applicable.
 - `hyperliquid/funding-arb/config.mts`: env default + Blobs override
 - `hyperliquid/funding-arb/index.mts`: 1 új gate + ARB_GATE_LABELS 7 elem
   + shifted index referenciák
+
+### Settings UI integration (k follow-up)
+
+A 5 új knob (3 bot × 1-2 gate) felkerül a Settings tabra:
+
+- **`netlify/functions/trader-settings.mts` SCHEMA**: 5 új mező a "Sanity gates"
+  group alatt (külön a crypto/HL/F-Arb kategóriánál). A SettingsPanel
+  automatikusan kirenderelheti, mert a schema-driven render már fed minden
+  category + group kombinációt.
+  - `cryptoMaxEdgeCap` (range 0.10-0.95, default 0.40)
+  - `cryptoWatchExtremeEdgeThreshold` (range 0.05-0.50, default 0.20)
+  - `hlMaxEdgeCap` (range 0.10-0.95, default 0.40)
+  - `hlWatchExtremeEdgeThreshold` (range 0.05-0.50, default 0.20)
+  - `frMaxSpreadHourly` (range 0.001-0.05, default 0.005)
+
+- **PRESETS bundle-ok**: Loose/Normal/Strict variációk mindhárom bot-nál.
+  - Crypto: Loose 50%/30%, Normal 40%/20%, Strict 30%/15%
+  - HL: ugyanaz
+  - F-Arb: Loose 1%/h, Normal 0.5%/h, Strict 0.3%/h
+
+A `loadRuntimeOverrides()` típus auto-derived `Partial<Record<keyof SCHEMA,
+number>>`, így nincs külön type-update szükséges. A config.mts oldali
+override-read már fel volt készítve a 2026-05-12 (k) commit-ben.
