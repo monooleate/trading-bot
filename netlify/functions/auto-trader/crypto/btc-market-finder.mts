@@ -100,7 +100,16 @@ const CRYPTO_TAG_ID = parseInt(process.env.POLYMARKET_CRYPTO_TAG_ID || "21", 10)
 export async function findBtcMarkets(
   minOpenInterest: number = 500,
   minPriceBand: number = MIN_PRICE_BAND,
+  // Open-position slugs that should bypass the OI / price-band filters.
+  // Without this, a market whose price moved deep-OTM/deep-ITM after the
+  // bot entered is silently dropped from the scan list — the Why? panel's
+  // Live-Gates section then sees no scan-result match for the open
+  // position and renders "no recent scan data". We always want to evaluate
+  // gates for open positions so the operator can see "would I open this
+  // right now?", regardless of where the price drifted.
+  includeSlugs: string[] = [],
 ): Promise<MarketInfo[]> {
+  const includeSet = new Set(includeSlugs);
   // Fetch crypto events from Gamma API. Note: `tag` (string) is NOT a valid
   // Gamma filter — it returns 200 OK but ignores the param, mixing in NBA/NFL
   // events. The documented param is `tag_id` (numeric). `closed=false` is
@@ -136,16 +145,20 @@ export async function findBtcMarkets(
       const tokenIds = parseTokenIds(m);
       if (!tokenIds) continue;
 
-      // Check open interest / liquidity
+      const isIncluded = includeSet.has(m.slug || "");
+
+      // Check open interest / liquidity. Bypassed for open-position slugs.
       const oi = parseFloat(m.liquidityNum || m.liquidity || "0");
-      if (oi < minOpenInterest) continue;
+      if (oi < minOpenInterest && !isIncluded) continue;
 
       const yesPrice = parseYesPrice(m);
 
       // Skip deep-OTM (yes ≤ 0.10) or deep-ITM (yes ≥ 0.90) markets. These
       // are dominated by 1-2 share market-maker quotes; "fills" at the
       // top-of-book are unrealistic and inflate paper PnL.
-      if (yesPrice < minPriceBand || yesPrice > upperBand) continue;
+      // Bypassed for open-position slugs so the Why? Live-Gates panel
+      // always has fresh gate data for an already-open position.
+      if ((yesPrice < minPriceBand || yesPrice > upperBand) && !isIncluded) continue;
 
       const vol24h = parseFloat(m.volume24hr || m.volume || "0");
 

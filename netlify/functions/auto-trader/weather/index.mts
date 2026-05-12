@@ -253,9 +253,32 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
     if (!p.weatherMeta) return true; // safety: count anything weather-less as active
     return new Date(p.weatherMeta.reconcileAfter).getTime() > Date.now();
   }).length;
-  for (const market of markets.slice(0, 5)) {
+
+  // Build scan list: top 5 by ranking + any open-position market not in top 5
+  // (so the Why? Live-Gates panel always has fresh gate data for an open
+  // position, even if the bot's normal scan-window slipped past it).
+  const top5 = markets.slice(0, 5);
+  const top5Slugs = new Set(top5.map((m) => m.slug));
+  const openWeatherSlugs = new Set(
+    updatedSession.openPositions
+      .filter((p) => p.weatherMeta && new Date(p.weatherMeta.reconcileAfter).getTime() > Date.now())
+      .map((p) => p.market),
+  );
+  const extraOpenWeather = markets.filter((m) => openWeatherSlugs.has(m.slug) && !top5Slugs.has(m.slug));
+  const scanList = [...top5, ...extraOpenWeather];
+
+  for (const market of scanList) {
+    // Whether this market already has an open position. We DON'T early-skip
+    // anymore — the Why? panel on the corresponding open-position row needs
+    // the *real* current gate state (would the bot open this market right
+    // now?), not a single "already open" stub. The buy execution path
+    // remains gated on this flag below.
+    const alreadyOpen = updatedSession.openPositions.some((p) => p.market === market.slug);
+
     // Max-open-positions gate (Settings-tunable via weatherMaxOpenPositions).
-    if (activeOpenCount >= weatherMaxOpen) {
+    // Skipped for already-open markets so the Why? panel still gets fresh gate
+    // evaluation (the cap doesn't apply to an existing position).
+    if (activeOpenCount >= weatherMaxOpen && !alreadyOpen) {
       results.push({
         market: market.slug,
         action: "skip",
@@ -267,15 +290,10 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
           required: `< ${weatherMaxOpen}`,
           hint: "Csak az aktív (még trading-window-on belüli) pozíciókat számolja — a ✓ready-to-settle nem.",
         }]),
+        evaluatedAt: new Date().toISOString(),
       });
       continue;
     }
-    // Whether this market already has an open position. We DON'T early-skip
-    // anymore — the Why? panel on the corresponding open-position row needs
-    // the *real* current gate state (would the bot open this market right
-    // now?), not a single "already open" stub. The buy execution path
-    // remains gated on this flag below.
-    const alreadyOpen = updatedSession.openPositions.some((p) => p.market === market.slug);
 
     try {
       const station = getStation(market.city);

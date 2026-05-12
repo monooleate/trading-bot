@@ -295,7 +295,48 @@ körülötte 8-11 db `"not evaluated"` placeholderrel.
   set per tick per open position (ha a top-N-ben van) — a perf-hit
   elhanyagolható (a Polymarket-proxy 1h cache + a signal-combiner 3min
   cache amúgyis fedi).
-- A `markets.slice(0, 3)` top-3 slot most már egy already-open market-tel
-  is "fogyaszt" — vagyis ha a top-1 piac már nyitott, akkor csak 2 új
-  market kerül kiértékelésre. Ez minor (a már nyitott market is releváns
-  scan, mert frissíti a Why? Live-Gates panelt).
+
+## (j) Follow-up: open-position markets that drifted out of top-N scan window
+
+User észrevétel: a /trade/crypto/ oldalon az open pozíciókon a Why? Live-Gates
+panel "nincs friss gate-adat"-ot mutatott — mert a 2 open pozíció
+(`bitcoin-above-82k-on-may-13`, `bitcoin-above-78k-on-may-13`) **nem volt**
+a top-3 scan-ben (a price-band [0.10, 0.90] szűrő kiejtette őket, miután
+a piac mozgott az entry óta).
+
+**Fix (mind crypto, mind weather):**
+
+- **`findBtcMarkets` új paraméter**: `includeSlugs: string[]` — a megadott
+  slug-okra megkerüli az OI minimum és a deep-OTM/deep-ITM price-band szűrőt.
+  Így a Gamma response-ban szereplő összes open-position market mindig
+  bekerül a `markets` listába, akkor is, ha közben drift-elt out-of-band-ra.
+
+- **Crypto + Weather index.mts scan list bővítés**:
+  ```ts
+  const scanList = [...top3, ...extraOpenPositions];
+  ```
+  ahol az `extraOpenPositions` a `markets`-ben szereplő open-position
+  market-ek, amelyek nem voltak a top-3-ban (illetve weather-nél top-5-ben).
+  Vagyis a normál entry universe (top-N) ÉS a már nyitott pozíciók is
+  mindenképp kiértékelődnek.
+
+- **Max-open cap bypass open-position-ön**: a `activeOpenCount >= cap`
+  check is csak NEW entry-ket blokkol. Ha a market már nyitott, a cap
+  nem alkalmazható, ezért a teljes gate-eval lefut — különben az
+  egyetlen "Max open positions ✗" gate jelenne meg a Why? panelen.
+
+**Eredmény:**
+
+- A Why? Live-Gates panel mostantól minden open pozíción mutatja a teljes
+  gate-listát (a max-open cap-be ütköző esetekben is).
+- A drifted-out-of-band open positions (típikusan winning paper trade-ek
+  amik közelítik a $0.99-et) is kapnak fresh gate adatot — a user látja,
+  hogy "Net edge -X%" most már nem teljesül, magyarázva, hogy a bot most
+  nem nyitná meg újra.
+
+**Mellékhatás:**
+
+- A `droppedMarkets` listából kihagyjuk a már bevett open-position market-eket
+  (mert mostantól a scan-ben vannak, nem dropped). Az op-pos market-ek
+  scan-eredménye a normál `results` listában jelenik meg, `action: "skip"`,
+  `reason: "Already has open position"`.

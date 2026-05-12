@@ -435,8 +435,14 @@ async function runCryptoTrader(
   //    no-revenge-trade guard used to be lost between cron ticks).
   await warmCooldownCache();
 
-  // 1. Find active BTC markets (deep-OTM band filter applied)
-  const markets = await findBtcMarkets(config.minOpenInterest, btcMinPriceBand);
+  // 1. Find active BTC markets (deep-OTM band filter applied). Open-position
+  // slugs bypass the band/OI filter so the Why? Live-Gates panel always
+  // has a fresh evaluation for every open position — even after the
+  // price drifted to a region the bot would normally skip.
+  const activeOpenSlugs = session.openPositions
+    .filter((p) => !p.endDate || new Date(p.endDate).getTime() >= Date.now())
+    .map((p) => p.market);
+  const markets = await findBtcMarkets(config.minOpenInterest, btcMinPriceBand, activeOpenSlugs);
   if (markets.length === 0) {
     return await finish({
       ok: true,
@@ -449,17 +455,29 @@ async function runCryptoTrader(
 
   let updatedSession = session;
   const results: any[] = [];
-  // The scanner only acts on the top 3 markets per tick. Surface the rest
-  // so the UI can still show "what else is out there" — same idea as
-  // weather-trader's droppedEvents.
-  const droppedMarkets = markets.slice(3).map((m) => ({
-    slug: m.slug,
-    title: m.title,
-    currentPrice: m.currentPrice,
-    volume24h: m.volume24h,
-    endDate: m.endDate,
-    reason: "below_top_3",
-  }));
+  // Build the scan list:
+  //   - top 3 by Gamma's volume24hr ranking (the bot's normal entry universe)
+  //   - PLUS any open-position market not in top 3 (so the open position's
+  //     Why? Live-Gates panel renders fresh data even when the market
+  //     slipped below top 3 — typical once the position is in profit / deep
+  //     OTM after BTC's intraday move)
+  const top3 = markets.slice(0, 3);
+  const top3Slugs = new Set(top3.map((m) => m.slug));
+  const extraOpen = markets.filter((m) => activeOpenSlugs.includes(m.slug) && !top3Slugs.has(m.slug));
+  const scanList = [...top3, ...extraOpen];
+  // Dropped list = markets below top 3 AND not an open-position carve-out.
+  // The carve-outs are scanned, just for live-gate purposes, not for new entries.
+  const droppedMarkets = markets
+    .slice(3)
+    .filter((m) => !activeOpenSlugs.includes(m.slug))
+    .map((m) => ({
+      slug: m.slug,
+      title: m.title,
+      currentPrice: m.currentPrice,
+      volume24h: m.volume24h,
+      endDate: m.endDate,
+      reason: "below_top_3",
+    }));
 
   // 2. Process each market
   const cryptoMaxOpen = config.maxOpenPositions ?? 5;
@@ -470,7 +488,7 @@ async function runCryptoTrader(
     if (!p.endDate) return true;
     return new Date(p.endDate).getTime() >= Date.now();
   }).length;
-  for (const market of markets.slice(0, 3)) { // max 3 markets per run
+  for (const market of scanList) {
     // Check session loss limit
     if (updatedSession.sessionLoss >= config.sessionLossLimit) {
       updatedSession = stopSession(updatedSession, "Session loss limit reached");
@@ -478,10 +496,19 @@ async function runCryptoTrader(
       break;
     }
 
+    // Whether this market already has an open position. We DON'T early-skip
+    // anymore — the Why? panel on the corresponding open-position row needs
+    // the *real* current gate state (would the bot open this market right
+    // now?), not a single "already open" stub. The buy execution path
+    // remains gated on this flag below.
+    const alreadyOpen = updatedSession.openPositions.some((p) => p.market === market.slug);
+
     // Max-open-positions gate: stop opening new entries once the cap is hit.
     // Counts only ACTIVE (still-trading-window) positions — pending settle
     // doesn't block new entries. Settings-tunable via cryptoMaxOpenPositions.
-    if (activeOpenCount >= cryptoMaxOpen) {
+    // Skipped for already-open markets so the Why? panel still gets a fresh
+    // gate evaluation (the cap doesn't apply to an existing position).
+    if (activeOpenCount >= cryptoMaxOpen && !alreadyOpen) {
       results.push({
         market: market.slug,
         title: market.title,
@@ -496,16 +523,10 @@ async function runCryptoTrader(
           required: `< ${cryptoMaxOpen}`,
           hint: "Csak az aktív (még trading-window-on belüli) pozíciókat számolja — a pending settle nem.",
         }],
+        evaluatedAt: new Date().toISOString(),
       });
       continue;
     }
-
-    // Whether this market already has an open position. We DON'T early-skip
-    // anymore — the Why? panel on the corresponding open-position row needs
-    // the *real* current gate state (would the bot open this market right
-    // now?), not a single "already open" stub. The buy execution path
-    // remains gated on this flag below.
-    const alreadyOpen = updatedSession.openPositions.some((p) => p.market === market.slug);
 
     try {
       // 3. Aggregate signals
