@@ -165,22 +165,29 @@ export function makeDecision(
     `Combiner output too close to 0.5: |${finalProb.toFixed(4)} − 0.5| = ${(combinerEdgeAbs * 100).toFixed(2)}% < ${(config.combinerConfidenceMin * 100)}% — noise, not signal`,
   );
 
-  // 4. Combiner recommendation gate (audit fix #3, 2026-05-11). The
-  // combiner runs its OWN WAIT/WATCH/SKIP/BUY decision (recommend()), but
-  // before this gate the engine ignored that verdict and re-derived an
-  // entry purely from finalProb vs. marketPrice. The combiner applies the
-  // stricter joint gate (|edge| ≥ 5% AND ir ≥ 0.1 AND kellyQ ≥ 0.005) and
-  // also flips BUY → WATCH/SKIP when resolution-risk vetoes the trade.
+  // 4. Combiner recommendation gate (audit fix #3, 2026-05-11; relaxed
+  // 2026-05-12 after Kelly fix). The combiner's recommend() can return:
+  //   - WAIT   = |finalProb − 0.5| < 5% OR ir < 0.1 (no convergence)
+  //   - WATCH  = combiner's broken kelly_q < 0.005 (combiner uses model-prob
+  //              as implicit price → kelly always ~0 at "fair" pricing)
+  //   - SKIP   = resolution-risk helper vetoed the trade
+  //   - BUY YES / BUY NO = pass
+  // The WATCH state is meaningless because the combiner's Kelly is
+  // structurally broken (see kellyForSide() above). The WAIT state is
+  // already covered by Gate 3 (combinerConfidenceMin). The SKIP state is
+  // independently checked by Gate 5 (tradeRecommendedByRisk).
+  // So this gate now only blocks explicit SKIP — preserves the resolution
+  // -risk veto without depending on the broken Kelly.
   const recAction = (signal.combinerRecommendation || "").toUpperCase();
-  const recOk     = recAction.startsWith("BUY");
+  const recOk     = !recAction.startsWith("SKIP");
   gates.push({
     label: "Combiner recommendation",
     passed: recOk,
     actual:   recAction || "n/a",
-    required: "BUY YES / BUY NO",
-    hint: "A signal-combiner saját ajánlása: WAIT = nem konvergens, WATCH = túl kis pozíció, SKIP = resolution-risk veto. Csak BUY-ra trade-elünk.",
+    required: "≠ SKIP",
+    hint: "Csak SKIP-en blokkolunk (resolution-risk veto). WATCH = combiner kelly_q broken (lokál Kelly veszi át), WAIT = Gate 3 ellenőrzi.",
   });
-  if (!recOk) reasons.push(`Combiner recommendation: ${recAction || "n/a"} (not BUY)`);
+  if (!recOk) reasons.push(`Combiner recommendation: ${recAction || "n/a"} (SKIP veto)`);
 
   // 5. Resolution-risk gate (audit fix #5, 2026-05-11). The combiner's
   // analyseResolutionRisk() helper flags markets with off-platform
