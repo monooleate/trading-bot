@@ -75,6 +75,28 @@ export function padCryptoGates(evaluated: DecisionGate[]): DecisionGate[] {
   return out;
 }
 
+// Direction-aware binary-payoff Kelly fraction using the ACTUAL market price.
+//
+// The signal-combiner's own `kelly_q` field is structurally broken: it uses
+// `b = (1/p) - 1` where p is the model probability, which collapses to 0 at
+// "fair" pricing — but the market price is never the model's fair value, so
+// the combiner's kelly is always ~0. We re-compute here using the side's
+// real entry price so the Kelly gate reflects the real edge.
+//
+// For YES side: p = finalProb, price = marketPrice
+// For NO  side: p = 1 - finalProb, price = 1 - marketPrice
+// Kelly fraction f = max(0, (p*b - q) / b) where b = (1/price) - 1.
+// Quarter-Kelly is applied by the caller (¼ × cap).
+function kellyForSide(predProb: number, marketPrice: number, direction: "YES" | "NO"): number {
+  const p     = direction === "YES" ? predProb       : 1 - predProb;
+  const price = direction === "YES" ? marketPrice    : 1 - marketPrice;
+  const safePrice = Math.max(0.01, Math.min(0.99, price));
+  const b = (1 / safePrice) - 1;
+  if (b <= 0) return 0;
+  const q = 1 - p;
+  return Math.max(0, (p * b - q) / b);
+}
+
 export function makeDecision(
   signal: AggregatedSignal,
   market: MarketInfo,
@@ -83,17 +105,20 @@ export function makeDecision(
   config: TraderConfig,
   btcExit?: BtcExitCfg,
 ): TradeDecision {
-  const { finalProb, kellyFraction } = signal;
+  const { finalProb } = signal;
   const marketPrice = market.currentPrice;
   const grossEdge   = Math.abs(finalProb - marketPrice);
   const netEdge     = grossEdge - config.roundtripFeePct;
   const direction: "YES" | "NO" = finalProb > marketPrice ? "YES" : "NO";
-  // Compute the candidate position size up-front so the "Kelly méret ≥
-  // minimum" gate has a real USDC number to evaluate. The legacy code
-  // computed this only on the happy path AFTER all gates passed and then
-  // silently padded sub-min sizes up to $1; now the size is a first-class
-  // gate input.
-  const kellyCapped       = Math.min(Math.max(0, kellyFraction), config.maxKellyFraction);
+  // Re-compute the Kelly fraction here against the REAL market price.
+  // The combiner's signal.kellyFraction is broken (always ~0 at fair-implied
+  // pricing); using it as a gate would silently veto every trade. The new
+  // local kellyForSide() returns the binary-payoff Kelly for the chosen
+  // direction at the market's quoted entry price. Quarter-Kelly + cap
+  // applied below.
+  const kellyRaw    = kellyForSide(finalProb, marketPrice, direction);
+  const kellyQuarter = kellyRaw * 0.25;
+  const kellyCapped = Math.min(kellyQuarter, config.maxKellyFraction);
   const candidatePosition = bankrollUSDC * kellyCapped;
 
   const gates: DecisionGate[] = [];
