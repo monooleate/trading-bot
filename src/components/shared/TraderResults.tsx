@@ -823,27 +823,56 @@ function RationaleBlock({ r }: { r: OpenPositionRationale }) {
 // "Live gates" panel — the current decision-engine state for this market
 // as of the most recent cron scan. Rendered below the frozen entry-decision
 // so the operator can compare past vs present without two pages of UI.
+//
+// We filter the gate list down to "what actually got measured this tick":
+//   1. Drop placeholders (`actual === "not evaluated"`) — those are padded
+//      onto early-exit rows so the scan-row chip Y stays uniform across
+//      bots, but in the live-gate context they're noise: the operator
+//      wants to know which gates would currently allow opening, not why
+//      the engine short-circuited bookkeeping-wise.
+//   2. Drop the open-position-uniqueness gate. Every open row sits in a
+//      "this position exists" UI context already — re-asserting "already
+//      open" as a failing gate just buries the gates that matter (edge,
+//      kelly, OB-imbalance, etc.). The crypto bot's legitimate "Market
+//      cooldown" gate (time-based, set by setCooldown after a trade) is
+//      NOT excluded here — only the open-position guards are.
+function isOpenPositionGate(gate: CriteriaGate): boolean {
+  const l = gate.label.toLowerCase();
+  const a = (gate.actual ?? "").toLowerCase();
+  // HL / funding-arb explicit uniqueness gates.
+  if (l.includes("nincs már nyitva")) return true;     // HL: "Coin nincs már nyitva"
+  if (l.includes("per-coin uniqueness")) return true;  // Funding-arb
+  // Legacy crypto stub (pre-fix lastResult cache may still carry rows where
+  // a "Market cooldown" gate carries the synthetic "already open" actual).
+  if (l === "market cooldown" && a === "already open") return true;
+  return false;
+}
+function isMeaningfulGate(gate: CriteriaGate): boolean {
+  if (gate.actual === "not evaluated") return false;
+  if (isOpenPositionGate(gate)) return false;
+  return true;
+}
+
 function LiveGatesBlock({ g }: { g: LiveGateSnapshot }) {
-  const passed = g.gates.filter((x) => x.passed).length;
-  const total  = g.gates.length;
+  const filteredGates = g.gates.filter(isMeaningfulGate);
+  const passed = filteredGates.filter((x) => x.passed).length;
+  const total  = filteredGates.length;
   const allPass = total > 0 && passed === total;
   const evaluated = g.evaluatedAt
     ? new Date(g.evaluatedAt).toLocaleString()
     : "last cron tick";
   // Render the engine's action verb naturally — "position_opened" past-tense
   // shouldn't read as "would do action position_opened". Map each known
-  // action to a human-friendly Hungarian phrase.
-  const actionPhrase = (() => {
-    const a = (g.action || "").toLowerCase();
-    switch (a) {
-      case "skip":            return "SKIP — nem nyitna új pozíciót";
-      case "position_opened": return "pozíció megnyitva ezen a scan-en";
-      case "failed":          return "FAILED — order nem ment át";
-      case "":
-      case "—":               return "—";
-      default:                return a.toUpperCase();
-    }
-  })();
+  // action to a human-friendly Hungarian phrase. For the live-gate context
+  // we lean on `allPass` instead of the raw action verb because the scan
+  // skipped the buy on the open-position guard, NOT because a real gate
+  // failed — so "SKIP" would mislead.
+  const wouldOpenNow = total > 0 && allPass;
+  const verdict = total === 0
+    ? "—"
+    : wouldOpenNow
+      ? "MOST megnyitná (minden releváns gate ✓)"
+      : `MOST NEM nyitná (${total - passed} releváns gate ✗)`;
   return (
     <div className="ts-pos-why ts-pos-why-live">
       <div className="ts-pos-why-thesis">
@@ -853,7 +882,7 @@ function LiveGatesBlock({ g }: { g: LiveGateSnapshot }) {
             <>A bot ezt a piacot a legutóbbi scan-ben nem értékelte ki (nincs friss gate-adat).</>
           ) : (
             <>
-              A legutóbbi scan eredménye: <strong>{actionPhrase}</strong>
+              <strong>{verdict}</strong>
               {typeof g.netEdge === "number" && (
                 <> — net edge <strong>{g.netEdge >= 0 ? "+" : ""}{(g.netEdge * 100).toFixed(2)}%</strong></>
               )}
@@ -872,7 +901,7 @@ function LiveGatesBlock({ g }: { g: LiveGateSnapshot }) {
             Gate-ek MOST · <strong>{passed}/{total}</strong> {allPass ? "✓" : "—"}
           </span>
           <div className="ts-pos-why-gate-list">
-            {g.gates.map((x, idx) => (
+            {filteredGates.map((x, idx) => (
               <div
                 key={idx}
                 className={`ts-pos-why-gate ${x.passed ? "ts-pos-why-gate-pass" : "ts-pos-why-gate-fail"}`}

@@ -270,22 +270,12 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
       });
       continue;
     }
-    // Skip if already have a position. Synthetic single-gate failure so
-    // the UI's "X/Y gates" chip still renders for these rows.
-    if (updatedSession.openPositions.some((p) => p.market === market.slug)) {
-      results.push({
-        market: market.slug, action: "skip", reason: "Already has open position",
-        // Padded to Y=6 for chip uniformity across rows.
-        gates: padWeatherGates([{
-          label: "Forecast confidence ≥ küszöb",
-          passed: false,
-          actual: "already open",
-          required: "no open position",
-          hint: "Egy piacra max 1 nyitott pozíció — más gate-ek ki sem értékelődnek.",
-        }]),
-      });
-      continue;
-    }
+    // Whether this market already has an open position. We DON'T early-skip
+    // anymore — the Why? panel on the corresponding open-position row needs
+    // the *real* current gate state (would the bot open this market right
+    // now?), not a single "already open" stub. The buy execution path
+    // remains gated on this flag below.
+    const alreadyOpen = updatedSession.openPositions.some((p) => p.market === market.slug);
 
     try {
       const station = getStation(market.city);
@@ -378,18 +368,32 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
         marketModalLabel: marketModal?.label ?? null,
       });
 
+      // Common per-row context — `evaluatedAt` is the per-row scan timestamp,
+      // read by the status endpoint's `pickLiveScanForSlug` so the Why?
+      // panel's "Evaluated:" line is accurate.
+      const rowContext = {
+        market: market.slug, city: market.city,
+        predictedTemp: decision.predictedTemp,
+        marketPrice: decision.marketPrice,
+        modelProb: match.probability,
+        edge: decision.edge,
+        confidence: decision.confidence,
+        direction: decision.direction,
+        bucket: decision.bucketLabel,
+        gates: decision.gates ?? [],
+        evaluatedAt: new Date().toISOString(),
+      };
+
+      // Already-open guard: real gates were just evaluated above, so the
+      // result row carries the real picture (what the bot would do if no
+      // position existed). We just block the buy.
+      if (alreadyOpen) {
+        results.push({ ...rowContext, action: "skip", reason: "Already has open position" });
+        continue;
+      }
+
       if (!decision.shouldTrade) {
-        results.push({
-          market: market.slug, city: market.city, action: "skip", reason: decision.reason,
-          predictedTemp: decision.predictedTemp,
-          marketPrice: decision.marketPrice,
-          modelProb: match.probability,
-          edge: decision.edge,
-          confidence: decision.confidence,
-          direction: decision.direction,
-          bucket: decision.bucketLabel,
-          gates: decision.gates ?? [],
-        });
+        results.push({ ...rowContext, action: "skip", reason: decision.reason });
         continue;
       }
 
@@ -517,29 +521,18 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
         // settles it with the actual METAR temperature.
 
         results.push({
-          market: market.slug,
-          city: market.city,
+          ...rowContext,
           action: "traded",
-          bucket: decision.bucketLabel,
-          direction: decision.direction,
           entry: entryPrice,
           size: decision.positionSizeUSDC,
-          predictedTemp: decision.predictedTemp,
-          marketPrice: decision.marketPrice,
-          modelProb: match.probability,
-          edge: decision.edge,
-          confidence: decision.confidence,
           reconcileAfter,
           status: "pending_settlement",
-          gates: decision.gates ?? [],
         });
       } else {
         results.push({
-          market: market.slug, city: market.city, action: "failed", reason: "Buy order not filled",
-          predictedTemp: decision.predictedTemp,
-          edge: decision.edge,
-          confidence: decision.confidence,
-          gates: decision.gates ?? [],
+          ...rowContext,
+          action: "failed",
+          reason: "Buy order not filled",
         });
       }
     } catch (err: any) {

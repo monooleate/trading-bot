@@ -597,12 +597,14 @@ export async function getHlStatus(): Promise<any> {
   // tick) about that coin. Combined with the frozen entry-decision snapshot
   // the operator can compare "why we entered" vs "would we enter again".
   const lastScanResults: any[] | null = runStatus?.lastResult?.results ?? null;
+  const tickFinishedAt: string | null =
+    runStatus?.lastResult?.finishedAt ?? runStatus?.lastRunAt ?? null;
   const pickLiveScanForCoin = (coin: string) => {
     if (!Array.isArray(lastScanResults)) return null;
     const r = lastScanResults.find((x: any) => x?.coin === coin);
     if (!r) return null;
     return {
-      evaluatedAt: r.evaluatedAt ?? null,
+      evaluatedAt: r.evaluatedAt ?? tickFinishedAt ?? null,
       action:      r.action      ?? null,
       reason:      r.reason      ?? null,
       direction:   r.direction   ?? null,

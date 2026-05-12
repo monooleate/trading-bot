@@ -378,6 +378,7 @@ netlify deploy --prod --dir=dist
 - **CLAUDE.md karcsúsítva** (2028 → 410 sor, session history kivéve → `changelog/`)
 - **Settings preset rendszer**: Loose/Normal/Strict per-bot kapcsoló a Settings tabon, leiratokkal. 16 új knob (HL + F-Arb + Sports — eddig env-only)
 - **Live-gate snapshot open pozíciókon**: a "Why?" panel mostantól nemcsak a frozen entry-decision-t mutatja, hanem a current gate-állapotot is (narancs strip, `evaluatedAt`)
+- **Live-gate fix (mind a 4 bot)**: a Why? Live-Gates panel most a VALÓS jelenlegi gate-állapotot mutatja (crypto + weather loop megszűnt korai-skip-pelni "already open" stub-bal). UI filter dobja a "not evaluated" placeholdereket + open-position-uniqueness gate-eket — csak releváns gate-ek látszanak. Verdict frázis: *"MOST megnyitná"* / *"MOST NEM nyitná (N gate ✗)"*. (changelog §i)
 - **Weather audit**: 2 closed trade verified, mindkettő real Polymarket resolution-on zárt, PnL helyes
 - **Crypto bot diagnosztika**: a Combiner confidence gate (5%) blokkolt mindent — `Loose` preset 2%-ra állítja
 

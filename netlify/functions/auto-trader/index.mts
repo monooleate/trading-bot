@@ -500,33 +500,12 @@ async function runCryptoTrader(
       continue;
     }
 
-    // Skip if already have an open position in this market. Synthesise a
-    // single-gate failure so the UI's "X/Y gates" chip still renders for
-    // these rows (instead of disappearing) — same shape as makeDecision's
-    // gate list, just with one element.
-    if (updatedSession.openPositions.some((p) => p.market === market.slug)) {
-      results.push({
-        market: market.slug,
-        title: market.title,
-        action: "skip",
-        reason: "Already has open position",
-        marketPrice: market.currentPrice,
-        endDate: market.endDate,
-        // Padded to the canonical 9-gate shape so the UI's "X/Y gates" chip
-        // shows consistent Y across every row. The runtime gate that fires
-        // here ("Market cooldown" / open-position guard) replaces cooldown
-        // since they're functionally the same — we don't open a 2nd
-        // position on the same market.
-        gates: padCryptoGates([{
-          label: "Market cooldown",
-          passed: false,
-          actual: "already open",
-          required: "no open position",
-          hint: "Egy piacra max 1 nyitott pozíció — a cooldown gate ezt is fedi.",
-        }]),
-      });
-      continue;
-    }
+    // Whether this market already has an open position. We DON'T early-skip
+    // anymore — the Why? panel on the corresponding open-position row needs
+    // the *real* current gate state (would the bot open this market right
+    // now?), not a single "already open" stub. The buy execution path
+    // remains gated on this flag below.
+    const alreadyOpen = updatedSession.openPositions.some((p) => p.market === market.slug);
 
     try {
       // 3. Aggregate signals
@@ -554,7 +533,9 @@ async function runCryptoTrader(
       // Common per-market context surfaced in the response so the UI can
       // explain *why* the bot acted the way it did, regardless of branch.
       // `gates` powers the unified "X/Y gates" chip + hover popover — same
-      // shape across all 4 bots.
+      // shape across all 4 bots. `evaluatedAt` is the per-row scan timestamp,
+      // read by the status endpoint's `pickLiveScanForSlug` so the Why?
+      // panel's "Evaluated:" line is accurate.
       const marketContext = {
         market: market.slug,
         title: market.title,
@@ -570,7 +551,20 @@ async function runCryptoTrader(
         obImbalance: signal.obImbalance ?? null,
         endDate: market.endDate,
         gates: decision.gates ?? [],
+        evaluatedAt: new Date().toISOString(),
       };
+
+      // Already-open guard: real gates were just evaluated above, so the
+      // result row carries the real picture (what the bot would do if no
+      // position existed). We just block the buy.
+      if (alreadyOpen) {
+        log("DECISION_SKIP", config.paperMode, {
+          market: market.slug,
+          reason: "Already has open position",
+        });
+        results.push({ ...marketContext, action: "skip", reason: "Already has open position" });
+        continue;
+      }
 
       if (!decision.shouldTrade) {
         log("DECISION_SKIP", config.paperMode, {
@@ -866,7 +860,11 @@ async function getStatus(config: ReturnType<typeof getTraderConfig>, category: s
     // per open position — what the bot's decision-engine would say RIGHT NOW
     // (as of the last cron tick) about that market. The frozen entry-decision
     // shows why the bot opened; live-gates shows whether the conviction holds.
-    base.openDetails = getWeatherOpenActive(session, base.runStatus?.lastResult?.results ?? null);
+    base.openDetails = getWeatherOpenActive(
+      session,
+      base.runStatus?.lastResult?.results ?? null,
+      base.runStatus?.lastResult?.finishedAt ?? base.runStatus?.lastRunAt ?? null,
+    );
   } else if (category === "crypto") {
     // Same status payload shape as weather: the UI's status cluster reads
     // the same fields regardless of venue.
@@ -877,7 +875,11 @@ async function getStatus(config: ReturnType<typeof getTraderConfig>, category: s
     // outcomePrices ∈ {0,1}.
     base.pending = getCryptoPendingPositions(session);
     // Active positions still in the trading window (with live-gate snapshot).
-    base.openDetails = getCryptoOpenActive(session, base.runStatus?.lastResult?.results ?? null);
+    base.openDetails = getCryptoOpenActive(
+      session,
+      base.runStatus?.lastResult?.results ?? null,
+      base.runStatus?.lastResult?.finishedAt ?? base.runStatus?.lastRunAt ?? null,
+    );
   }
   return jsonResponse(base);
 }
@@ -885,13 +887,19 @@ async function getStatus(config: ReturnType<typeof getTraderConfig>, category: s
 // Lookup helper: pick the most recent scan-result entry that matches the
 // open position's slug. Returns the gates + key inputs the engine evaluated
 // on its last tick, so the UI can render a "current gate state" panel next
-// to the frozen entry-decision snapshot.
-function pickLiveScanForSlug(scanResults: any[] | null, slug: string): any | null {
+// to the frozen entry-decision snapshot. `tickFinishedAt` is the lastResult
+// timestamp — used as a per-tick fallback when the row didn't stamp its own
+// evaluatedAt (older row shapes, error branches).
+function pickLiveScanForSlug(
+  scanResults: any[] | null,
+  slug: string,
+  tickFinishedAt: string | null = null,
+): any | null {
   if (!Array.isArray(scanResults)) return null;
   const r = scanResults.find((x) => x?.market === slug);
   if (!r) return null;
   return {
-    evaluatedAt:   r.evaluatedAt   ?? null,
+    evaluatedAt:   r.evaluatedAt   ?? tickFinishedAt ?? null,
     action:        r.action        ?? null,
     reason:        r.reason        ?? null,
     marketPrice:   r.marketPrice   ?? null,
@@ -906,7 +914,11 @@ function pickLiveScanForSlug(scanResults: any[] | null, slug: string): any | nul
 }
 
 // Active (still-trading-window) open positions for the crypto bot.
-function getCryptoOpenActive(session: SessionState, scanResults: any[] | null = null) {
+function getCryptoOpenActive(
+  session: SessionState,
+  scanResults: any[] | null = null,
+  tickFinishedAt: string | null = null,
+) {
   const now = Date.now();
   return session.openPositions
     .filter((p) => !p.endDate || new Date(p.endDate).getTime() >= now)
@@ -922,7 +934,7 @@ function getCryptoOpenActive(session: SessionState, scanResults: any[] | null = 
       marketPriceAtEntry: p.marketPriceAtEntry ?? null,
       predictedProb:      p.predictedProb ?? null,
       entryDecision:      p.entryDecision ?? null,
-      liveGates:          pickLiveScanForSlug(scanResults, p.market),
+      liveGates:          pickLiveScanForSlug(scanResults, p.market, tickFinishedAt),
     }))
     .sort((a, b) => (a.endDate ?? "").localeCompare(b.endDate ?? ""));
 }
@@ -930,7 +942,11 @@ function getCryptoOpenActive(session: SessionState, scanResults: any[] | null = 
 // Active (still-future-reconcile) weather positions and the past-METAR
 // pending list — both are derived from the same session.openPositions array,
 // split by reconcileAfter.
-function getWeatherOpenActive(session: SessionState, scanResults: any[] | null = null) {
+function getWeatherOpenActive(
+  session: SessionState,
+  scanResults: any[] | null = null,
+  tickFinishedAt: string | null = null,
+) {
   const now = Date.now();
   return session.openPositions
     .filter((p) => p.weatherMeta && new Date(p.weatherMeta.reconcileAfter).getTime() > now)
@@ -946,7 +962,7 @@ function getWeatherOpenActive(session: SessionState, scanResults: any[] | null =
       openedAt:      p.openedAt,
       reconcileAfter: p.weatherMeta!.reconcileAfter,
       entryDecision: p.entryDecision ?? null,
-      liveGates:     pickLiveScanForSlug(scanResults, p.market),
+      liveGates:     pickLiveScanForSlug(scanResults, p.market, tickFinishedAt),
     }))
     .sort((a, b) => a.reconcileAfter.localeCompare(b.reconcileAfter));
 }

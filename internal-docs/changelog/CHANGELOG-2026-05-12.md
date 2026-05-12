@@ -218,3 +218,84 @@ legutóbbi manuális scan. Az `evaluatedAt` mező mutatja a UI-on.
    (jelenleg 3 nyitott Austin/HK/Seoul). Kattints a "Why?" toggle-re.
    Két panelt kell látni: a kék frozen-entry-t felül, a narancs
    live-gate snapshot-ot alatta.
+
+---
+
+## (i) Live-gate snapshot fix — relevant-only gates + crypto/weather full eval
+
+User észrevétel: a Why? panel a meglévő live trade-eken **nem mutatja, hogy
+most nyitná-e** — vagyis hogyan állnak az aktuális gate-ek. A pillanatnyi
+gate panel csak `"Market cooldown ✗ already open"` típusú stubot mutatott,
+körülötte 8-11 db `"not evaluated"` placeholderrel.
+
+**Root cause** (két részből áll):
+
+1. **Crypto + Weather**: az index.mts loop az `openPositions.some(market === slug)`
+   ellenőrzéskor `continue`-val korai-skip-pelt egy stub gate-listával
+   (`padCryptoGates([{label: "Market cooldown", actual: "already open", ...}])`
+   illetve `padWeatherGates([{label: "Forecast confidence ≥ küszöb", actual: "already open", ...}])`).
+   A valós gate-kiértékelés meg sem történt. A `pickLiveScanForSlug` ezt a
+   stub-ot olvasta fel → a Why? Live-Gates panel csak ezt látta.
+
+2. **HL Perp + Funding-arb**: a gate-eket inline kiértékelte, de a `snapGates()`
+   helper `"not evaluated"` placeholder rows-szel padded a maradék gate-eket
+   a uniform Y-szám érdekében. A scan-row chip-en ez OK, de a Live-Gates
+   panelen zaj.
+
+**Fix:**
+
+- **`src/components/shared/TraderResults.tsx` `LiveGatesBlock`**:
+  Bevezetve két szűrő (`isMeaningfulGate` + `isOpenPositionGate`):
+  - `actual === "not evaluated"` rows → kiszűrve
+  - Open-position-uniqueness gates (HL `"Coin nincs már nyitva"`,
+    Funding-arb `"Per-coin uniqueness"`, legacy crypto `"Market cooldown"`
+    `actual: "already open"`) → kiszűrve (a user már tudja, hogy van pozíciója).
+  - A crypto bot legitim cooldown gate (idő-alapú) **nem szűrődik ki** —
+    csak az `actual === "already open"` címkével.
+  - A verdict frázis átírva: a passed/total alapján mondja meg, hogy
+    `"MOST megnyitná (minden releváns gate ✓)"` vagy
+    `"MOST NEM nyitná (N releváns gate ✗)"`, az `action` verb helyett
+    (ami félrevezető lenne: SKIP-et mondana, mert a buy a `alreadyOpen`-en
+    blokkolt, nem azért mert a gate-ek elbuktak).
+
+- **`netlify/functions/auto-trader/index.mts` (crypto loop)**:
+  Megszűnt az "Already has open position" korai-skip. Helyette:
+  - `const alreadyOpen = updatedSession.openPositions.some(...)` változó
+  - signal aggregation + `makeDecision` minden esetben lefut
+  - `marketContext` real-gate értékekkel (12 gate)
+  - `if (alreadyOpen) push skip` — a result row VALÓS gate-eket hordoz
+  - `evaluatedAt: new Date().toISOString()` hozzáadva per-row.
+
+- **`netlify/functions/auto-trader/weather/index.mts`**:
+  Ugyanaz a pattern: `alreadyOpen` változó, korai-skip megszűnt, `rowContext`
+  spread-elve a `traded` / `failed` / `skip` ágakra is, `evaluatedAt`
+  per-row.
+
+- **`pickLiveScanForSlug` / `pickLiveScanForCoin` / funding-arb `pickLive`**:
+  Új `tickFinishedAt` paraméter (a `lastResult.finishedAt` vagy
+  `runStatus.lastRunAt` fallback) — ha a row nem stamp-elt saját
+  `evaluatedAt`-ot, ezzel hidalódik át. A status endpoint
+  (`getStatus`, `getHlStatus`, `getArbStatus`) átadja a tick timestamp-et
+  a helper-eknek.
+
+**Eredmény:**
+
+- A Why? panel "Pillanatnyi gate állapot" most a valós kiértékelés
+  alapján mondja meg, hogy a bot megnyitná-e most a pozíciót, ha még nem
+  lenne nyitott.
+- A "not evaluated" placeholderek és a "Coin nincs már nyitva" / "Per-coin
+  uniqueness" gate-ek nem zajolnak be a listát.
+- Mind a 4 bot (crypto, weather, HL perp, funding-arb) ugyanazt a viselkedést
+  mutatja a UI-on.
+
+**Mellékhatás / költség:**
+
+- A crypto + weather loop mostantól már nyitott market-ekre is megfuttatja
+  a signal aggregation-t (és a forecast pipeline-t). Plusz ~1-2 API call
+  set per tick per open position (ha a top-N-ben van) — a perf-hit
+  elhanyagolható (a Polymarket-proxy 1h cache + a signal-combiner 3min
+  cache amúgyis fedi).
+- A `markets.slice(0, 3)` top-3 slot most már egy already-open market-tel
+  is "fogyaszt" — vagyis ha a top-1 piac már nyitott, akkor csak 2 új
+  market kerül kiértékelésre. Ez minor (a már nyitott market is releváns
+  scan, mert frissíti a Why? Live-Gates panelt).

@@ -496,7 +496,12 @@ export async function getArbStatus(): Promise<any> {
     ok: true,
     action:   "status",
     category: "hyperliquid-arb",
-    session:  summarize(session, hlBankroll, runStatus?.lastResult?.results ?? null),
+    session:  summarize(
+      session,
+      hlBankroll,
+      runStatus?.lastResult?.results ?? null,
+      runStatus?.lastResult?.finishedAt ?? runStatus?.lastRunAt ?? null,
+    ),
     runStatus,
     // Funding-arb is wired into auto-trader-multi-cron */3 * * * *,
     // always-on (same as the directional HL bot).
@@ -562,6 +567,7 @@ function summarize(
   s: ArbSessionState,
   hl?: { bankrollStart: number; bankrollCurrent: number } | null,
   lastScanResults: any[] | null = null,
+  tickFinishedAt: string | null = null,
 ) {
   const open    = openArbPositions(s);
   const closed  = (s.positions ?? []).filter((p) => p.closedAt);
@@ -571,7 +577,7 @@ function summarize(
     const r = lastScanResults.find((x: any) => x?.coin === coin);
     if (!r) return null;
     return {
-      evaluatedAt: r.evaluatedAt ?? null,
+      evaluatedAt: r.evaluatedAt ?? tickFinishedAt ?? null,
       action:      r.action      ?? null,
       reason:      r.reason      ?? null,
       direction:   r.direction   ?? null,
