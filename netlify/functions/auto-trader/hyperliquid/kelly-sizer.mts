@@ -21,12 +21,20 @@ let leverageWarningSent = false;
 
 export interface KellyToPerpInput {
   bankrollUSDC:   number;
-  kellyFraction:  number;   // raw full-Kelly from signal-combiner
+  kellyFraction:  number;   // raw full-Kelly from signal-combiner (BROKEN — ignored)
   edge:           number;
   currentPrice:   number;
   leverage:       number;
   maxPctBankroll: number;
   coin:           HlCoin;
+  // Perp Kelly inputs (added 2026-05-12). The combiner's kellyFraction is
+  // structurally always ~0 (uses model prob as implicit price). We re-derive
+  // here using perp R/R math: Kelly = max(0, (p − (1−p)/RR)) where
+  // RR = tpPct / slPct. Defaults match decision-engine TP/SL multipliers.
+  predProb?:      number;   // finalProb (LONG side win prob)
+  direction?:     "LONG" | "SHORT";
+  tpPct?:         number;   // expected take-profit distance, default 0.02
+  slPct?:         number;   // expected stop-loss distance, default 0.01
 }
 
 export interface KellyToPerpOutput {
@@ -38,7 +46,22 @@ export interface KellyToPerpOutput {
 }
 
 export function kellyToPerpSize(p: KellyToPerpInput): KellyToPerpOutput {
-  const quarterKelly = Math.max(0, p.kellyFraction) * 0.25;
+  // Re-derive Kelly from perp-specific R/R math. The combiner's
+  // `p.kellyFraction` is structurally always ~0 (collapses to 0 at the
+  // model's own fair-implied pricing — see signal-combiner.mts:1028).
+  // Using it as the sizing input meant every HL trade was $0.
+  // New formula: f = max(0, p − (1−p)/RR), where RR = tpPct / slPct.
+  // Fallback to the old combiner kelly only if predProb is missing.
+  let rawKelly = Math.max(0, p.kellyFraction);
+  if (typeof p.predProb === "number" && Number.isFinite(p.predProb)) {
+    const tp = p.tpPct ?? 0.02;
+    const sl = p.slPct ?? 0.01;
+    const rr = Math.max(0.1, tp / sl);
+    const win = p.direction === "SHORT" ? 1 - p.predProb : p.predProb;
+    const loss = 1 - win;
+    rawKelly = Math.max(0, win - loss / rr);
+  }
+  const quarterKelly = rawKelly * 0.25;
   const cappedFrac   = Math.min(quarterKelly, p.maxPctBankroll);
   const cappedByLimit = cappedFrac < quarterKelly;
 

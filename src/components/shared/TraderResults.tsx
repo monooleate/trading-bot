@@ -830,6 +830,20 @@ function LiveGatesBlock({ g }: { g: LiveGateSnapshot }) {
   const evaluated = g.evaluatedAt
     ? new Date(g.evaluatedAt).toLocaleString()
     : "last cron tick";
+  // Render the engine's action verb naturally — "position_opened" past-tense
+  // shouldn't read as "would do action position_opened". Map each known
+  // action to a human-friendly Hungarian phrase.
+  const actionPhrase = (() => {
+    const a = (g.action || "").toLowerCase();
+    switch (a) {
+      case "skip":            return "SKIP — nem nyitna új pozíciót";
+      case "position_opened": return "pozíció megnyitva ezen a scan-en";
+      case "failed":          return "FAILED — order nem ment át";
+      case "":
+      case "—":               return "—";
+      default:                return a.toUpperCase();
+    }
+  })();
   return (
     <div className="ts-pos-why ts-pos-why-live">
       <div className="ts-pos-why-thesis">
@@ -839,7 +853,7 @@ function LiveGatesBlock({ g }: { g: LiveGateSnapshot }) {
             <>A bot ezt a piacot a legutóbbi scan-ben nem értékelte ki (nincs friss gate-adat).</>
           ) : (
             <>
-              A legutóbbi scan szerint a bot most <strong>{g.action ?? "—"}</strong> akciót adna
+              A legutóbbi scan eredménye: <strong>{actionPhrase}</strong>
               {typeof g.netEdge === "number" && (
                 <> — net edge <strong>{g.netEdge >= 0 ? "+" : ""}{(g.netEdge * 100).toFixed(2)}%</strong></>
               )}

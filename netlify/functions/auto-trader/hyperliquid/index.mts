@@ -395,6 +395,12 @@ async function runHyperliquidTraderInner(
         leverage:       config.maxLeverage,
         maxPctBankroll: config.maxPctBankroll,
         coin,
+        // 2026-05-12 fix: perp R/R Kelly instead of broken combiner Kelly.
+        // predProb = LONG-side win prob; the helper flips to (1−p) on SHORT.
+        predProb:       signal.finalProb,
+        direction:      signal.direction,
+        tpPct:          config.tpPctMax,
+        slPct:          config.slPctMax,
       });
       const sizeOk = sized.sizeCoins > 0;
       coinGates.push({
