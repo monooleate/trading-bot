@@ -50,6 +50,10 @@ function detectLeague(q: string): SportsLeague {
 interface FinderOptions {
   minVolume24h:   number;
   minHoursToEnd:  number;
+  /** Max hours until market end-date — prevents long-dated futures (e.g.
+   *  "Who wins the 2026 NBA championship?") from blocking the open-position
+   *  slots indefinitely. Settings-tunable. */
+  maxHoursToEnd?: number;
   maxMarkets?:    number;          // default 30
   /** Skip events with more than this many sub-markets — these are mutex
    *  multi-outcome events (FIFA WC 32-way winner, NBA Finals 16-way, etc.)
@@ -85,6 +89,9 @@ export async function findSportsMarkets(opts: FinderOptions): Promise<SportsMark
 
   const now = Date.now();
   const minEnd = now + opts.minHoursToEnd * 3_600_000;
+  const maxEnd = typeof opts.maxHoursToEnd === "number" && Number.isFinite(opts.maxHoursToEnd)
+    ? now + opts.maxHoursToEnd * 3_600_000
+    : Number.POSITIVE_INFINITY;
   const out: SportsMarket[] = [];
 
   for (const evt of events) {
@@ -136,11 +143,15 @@ export async function findSportsMarkets(opts: FinderOptions): Promise<SportsMark
       // pattern.
       if (isMutexQuestion(question)) continue;
 
-      // End-date gate: skip markets too close to settlement.
+      // End-date gate: skip markets too close to OR too far from settlement.
+      // The min bound avoids last-minute liquidity drops; the max bound
+      // prevents long-dated futures (championship winners, season MVP) from
+      // hogging the limited open-position slots for weeks.
       const endDate = String(m.endDate || "");
       if (!endDate) continue;
       const endTs = new Date(endDate).getTime();
       if (!Number.isFinite(endTs) || endTs < minEnd) continue;
+      if (endTs > maxEnd) continue;
 
       // Liquidity gate.
       const vol24 = parseFloat(m.volume24hr || m.volume || "0");

@@ -458,12 +458,35 @@ async function runCryptoTrader(
   }));
 
   // 2. Process each market
+  const cryptoMaxOpen = config.maxOpenPositions ?? 5;
   for (const market of markets.slice(0, 3)) { // max 3 markets per run
     // Check session loss limit
     if (updatedSession.sessionLoss >= config.sessionLossLimit) {
       updatedSession = stopSession(updatedSession, "Session loss limit reached");
       await alertSessionStop(config.paperMode, "Session loss limit reached", updatedSession);
       break;
+    }
+
+    // Max-open-positions gate: stop opening new entries once the cap is hit.
+    // Cheap fail-fast — skip remaining markets if the loop has nothing more
+    // to do beyond pushing skip rows. Settings-tunable via cryptoMaxOpenPositions.
+    if (updatedSession.openPositions.length >= cryptoMaxOpen) {
+      results.push({
+        market: market.slug,
+        title: market.title,
+        action: "skip",
+        reason: `Max open positions reached: ${updatedSession.openPositions.length}/${cryptoMaxOpen}`,
+        marketPrice: market.currentPrice,
+        endDate: market.endDate,
+        gates: [{
+          label: "Max open positions",
+          passed: false,
+          actual: `${updatedSession.openPositions.length}/${cryptoMaxOpen}`,
+          required: `< ${cryptoMaxOpen}`,
+          hint: "Egyszerre max ennyi paper pozíció lehet nyitva — Settings → Max open positions.",
+        }],
+      });
+      continue;
     }
 
     // Skip if already have an open position in this market. Synthesise a

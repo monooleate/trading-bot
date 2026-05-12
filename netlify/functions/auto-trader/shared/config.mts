@@ -33,6 +33,7 @@ export function getTraderConfig(): TraderConfig {
     roundtripFeePct: 0.036, // 1.8% entry + 1.8% exit
     minPositionSizeUSDC:   parseFloat(process.env.MIN_POSITION_SIZE_USDC   || "0.50"),
     combinerConfidenceMin: parseFloat(process.env.COMBINER_CONFIDENCE_MIN || "0.05"),
+    maxOpenPositions:      parseInt(process.env.CRYPTO_MAX_OPEN_POSITIONS  || "5", 10),
   };
 }
 
@@ -68,6 +69,7 @@ export async function getEffectiveTraderConfig(): Promise<TraderConfig> {
       sessionLossLimit:      ov.sessionLossLimit      ?? env.sessionLossLimit,
       minPositionSizeUSDC:   ov.minPositionSizeUSDC   ?? env.minPositionSizeUSDC,
       combinerConfidenceMin: ov.combinerConfidenceMin ?? env.combinerConfidenceMin,
+      maxOpenPositions:      ov.cryptoMaxOpenPositions ?? env.maxOpenPositions,
     };
   } catch {
     return env;

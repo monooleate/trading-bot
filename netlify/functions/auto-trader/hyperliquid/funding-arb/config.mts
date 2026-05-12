@@ -33,6 +33,7 @@ export async function getEffectiveFrArbConfig(): Promise<FrArbConfig> {
       minOpenInterestUSD: ov.frMinOpenInterestUSD ?? env.minOpenInterestUSD,
       maxHoldDays:        ov.frMaxHoldDays        ?? env.maxHoldDays,
       maxCapitalPct:      ov.frMaxCapitalPct      ?? env.maxCapitalPct,
+      maxArbPositions:    ov.frMaxOpenPositions   ?? env.maxArbPositions,
     };
   } catch {
     return env;

@@ -23,6 +23,9 @@ export interface SportsConfig {
   minVolume24h:        number;     // default 5000
   /** Minimum hours until market end-date (avoid last-minute liquidity drops). */
   minHoursToEnd:       number;     // default 2
+  /** Maximum hours until market end-date (prevents long-dated futures from
+   *  blocking open-position slots indefinitely). Default 72h = 3 days. */
+  maxHoursToEnd:       number;     // default 72
   /** Max open positions at once. */
   maxOpenPositions:    number;     // default 3
   /** Polymarket roundtrip fee estimate (taker × 2 sides). */
@@ -45,6 +48,7 @@ export function getSportsConfig(): SportsConfig {
     sessionLossLimit: parseFloat(process.env.SPORTS_SESSION_LOSS_LIMIT || "30"),
     minVolume24h:     parseFloat(process.env.SPORTS_MIN_VOLUME_24H   || "5000"),
     minHoursToEnd:    parseFloat(process.env.SPORTS_MIN_HOURS_TO_END || "2"),
+    maxHoursToEnd:    parseFloat(process.env.SPORTS_MAX_HOURS_TO_END || "72"),
     maxOpenPositions: parseInt  (process.env.SPORTS_MAX_OPEN_POSITIONS || "3", 10),
     roundtripFeePct:  parseFloat(process.env.SPORTS_ROUNDTRIP_FEE    || "0.04"),
     maxMarketsPerEvent: parseInt(process.env.SPORTS_MAX_MARKETS_PER_EVENT || "3", 10),
@@ -63,8 +67,11 @@ export async function getEffectiveSportsConfig(): Promise<SportsConfig> {
     const ov = await mod.loadRuntimeOverrides();
     return {
       ...env,
-      edgeThreshold:   ov.sportsEdgeThreshold  ?? env.edgeThreshold,
-      maxPositionUSDC: ov.sportsMaxPositionUSD ?? env.maxPositionUSDC,
+      edgeThreshold:    ov.sportsEdgeThreshold   ?? env.edgeThreshold,
+      maxPositionUSDC:  ov.sportsMaxPositionUSD  ?? env.maxPositionUSDC,
+      maxOpenPositions: ov.sportsMaxOpenPositions ?? env.maxOpenPositions,
+      minHoursToEnd:    ov.sportsMinHoursToEnd   ?? env.minHoursToEnd,
+      maxHoursToEnd:    ov.sportsMaxHoursToEnd   ?? env.maxHoursToEnd,
     };
   } catch {
     return env;

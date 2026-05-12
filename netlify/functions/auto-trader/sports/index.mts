@@ -77,6 +77,7 @@ async function runSportsTrader(
     markets = await findSportsMarkets({
       minVolume24h:       config.minVolume24h,
       minHoursToEnd:      config.minHoursToEnd,
+      maxHoursToEnd:      config.maxHoursToEnd,
       maxMarkets:         30,
       // Mutex-events filter: only binary moneyline events qualify
       // for contrarian fan-bias fade (2026-05-11 (k) sim v2).

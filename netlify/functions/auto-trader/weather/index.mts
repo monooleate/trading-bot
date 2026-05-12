@@ -243,7 +243,24 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
   const results: any[] = [];
 
   // 3. Process each market
+  const weatherMaxOpen = config.maxOpenPositions ?? 5;
   for (const market of markets.slice(0, 5)) {
+    // Max-open-positions gate (Settings-tunable via weatherMaxOpenPositions).
+    if (updatedSession.openPositions.length >= weatherMaxOpen) {
+      results.push({
+        market: market.slug,
+        action: "skip",
+        reason: `Max open positions reached: ${updatedSession.openPositions.length}/${weatherMaxOpen}`,
+        gates: padWeatherGates([{
+          label: "Max open positions",
+          passed: false,
+          actual: `${updatedSession.openPositions.length}/${weatherMaxOpen}`,
+          required: `< ${weatherMaxOpen}`,
+          hint: "Egyszerre max ennyi paper pozíció lehet nyitva — Settings → Max open positions.",
+        }]),
+      });
+      continue;
+    }
     // Skip if already have a position. Synthetic single-gate failure so
     // the UI's "X/Y gates" chip still renders for these rows.
     if (updatedSession.openPositions.some((p) => p.market === market.slug)) {

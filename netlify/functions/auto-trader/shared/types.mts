@@ -316,6 +316,10 @@ export interface TraderConfig {
   // treats the combiner output as noise (no convergent signal). 0.05
   // matches the combiner's internal WAIT gate so the two stay in sync.
   combinerConfidenceMin: number;
+  // Max simultaneously-open paper positions. Caps the scan loop so an
+  // exuberant signal day doesn't burn the entire bankroll on parallel
+  // entries. Optional for backward compat — default 5 if absent.
+  maxOpenPositions?: number;
 }
 
 export interface PolymarketConfig {

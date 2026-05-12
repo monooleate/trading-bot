@@ -197,6 +197,68 @@ export default function WeatherTrader({ bankroll }: { bankroll?: number }) {
         />
       )}
 
+      {/* Reconcile result: surface the response from the "⟳ Reconcile pending"
+          button so the operator can see what actually happened. Previously the
+          button fired silently — if 0 positions were ready (typical case before
+          METAR window), nothing visible changed and it looked broken. */}
+      {(lastResult as any)?.ok === true && Array.isArray((lastResult as any)?.details) && (
+        (() => {
+          const r = lastResult as any;
+          return (
+            <div className="ts-card">
+              <h3 className="ts-card-head">
+                <strong>Reconcile result</strong>
+                <span className="ts-tag" style={{ color: "var(--accent2)", borderColor: "var(--accent2)" }}>
+                  {r.scanned ?? 0} scanned
+                </span>
+                {(r.settled ?? 0) > 0 && (
+                  <span className="ts-tag" style={{ color: "var(--accent)", borderColor: "var(--accent)" }}>
+                    {r.settled} settled
+                  </span>
+                )}
+                {(r.ready ?? 0) > 0 && (r.settled ?? 0) === 0 && (
+                  <span className="ts-tag" style={{ color: "var(--warn)", borderColor: "var(--warn)" }}>
+                    {r.ready} ready, none settled
+                  </span>
+                )}
+                {(r.failed ?? 0) > 0 && (
+                  <span className="ts-tag" style={{ color: "var(--danger)", borderColor: "var(--danger)" }}>
+                    {r.failed} failed
+                  </span>
+                )}
+              </h3>
+              {r.details.map((d: any, i: number) => (
+                <div key={i} className={`ts-row ts-row-${d.status === "settled" ? "pass" : d.status === "pending" ? "skip" : "fail"}`}>
+                  <div className="ts-row-main">
+                    <div className="ts-row-title">
+                      {d.city} · {d.date} · <span style={{ color: "var(--muted)" }}>{d.bucketLabel}</span>
+                    </div>
+                    <div className="ts-row-reason">
+                      {d.status === "settled" && (
+                        <>Settled @ {((d.exitPrice ?? 0) * 100).toFixed(0)}¢ · PnL {(d.pnl ?? 0) >= 0 ? "+" : ""}${(d.pnl ?? 0).toFixed(2)} ({d.source})</>
+                      )}
+                      {d.status === "pending" && (d.reason || "Awaiting settlement")}
+                      {d.status === "fetch-failed" && `Fetch failed: ${d.reason ?? "unknown"}`}
+                      {d.status === "no-meta" && "Position has no weather metadata (legacy)"}
+                    </div>
+                  </div>
+                  <span className={`ts-row-action ts-act-${d.status === "settled" ? "closed" : "skip"}`}>
+                    {d.status}
+                  </span>
+                </div>
+              ))}
+              {(r.ready ?? 0) === 0 && (r.scanned ?? 0) > 0 && (
+                <div className="ts-row-reason" style={{ padding: "0.6rem", color: "var(--muted)", fontSize: "0.7rem" }}>
+                  Egyik pozíció se ért meg még a settle-ig. A weather bot a `reconcileAfter` időpont után
+                  (end-of-day station idő + 6h METAR-ablak) tudja zárni. A pending kártyán a "settles in X"
+                  mutatja mikor lesz először elérhető a Polymarket Gamma resolution VAGY a METAR fallback.
+                </div>
+              )}
+            </div>
+          );
+        })()
+      )}
+
       {pending && pending.count > 0 && (
         <PendingPositionsCard
           title={`${pending.count} pending paper position${pending.count > 1 ? "s" : ""} — awaiting Polymarket settlement`}

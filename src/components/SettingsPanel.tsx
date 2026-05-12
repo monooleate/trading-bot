@@ -250,6 +250,14 @@ export default function SettingsPanel({ category, title, subtitle }: SettingsPan
     if (!grouped[g]) { grouped[g] = []; groupOrder.push(g); }
     grouped[g].push([k, spec]);
   }
+  // "Risk & sizing" always renders first — sits directly under the preset
+  // selector so the operator sees the effect of a Loose/Normal/Strict
+  // click without scrolling.
+  groupOrder.sort((a, b) => {
+    if (a === "Risk & sizing") return -1;
+    if (b === "Risk & sizing") return 1;
+    return 0;
+  });
 
   return (
     <>

@@ -732,14 +732,31 @@ function RationaleBlock({ r }: { r: OpenPositionRationale }) {
         </div>
         <div className="ts-pos-why-cell">
           <span className="ts-pos-why-cell-label">
-            {isSpread ? "OI" : "Aktív signal-ok"}
+            {isSpread
+              ? "OI"
+              : r.signalBreakdown
+                ? "Aktív signal-ok"
+                : "Forecast confidence"}
           </span>
           <span className="ts-pos-why-cell-val">
             {isSpread
               ? r.openInterestUSD !== undefined
                 ? `$${(r.openInterestUSD / 1e6).toFixed(1)}M`
                 : "—"
-              : `${r.activeSignals}/5`}
+              : r.signalBreakdown
+                // Crypto / HL: 8-signal combiner, count from the breakdown
+                // object so the denominator matches the actual signal set.
+                ? `${r.activeSignals}/${
+                    [r.signalBreakdown.funding_rate, r.signalBreakdown.orderflow,
+                     r.signalBreakdown.vol_divergence, r.signalBreakdown.apex_consensus,
+                     r.signalBreakdown.cond_prob, r.signalBreakdown.momentum,
+                     r.signalBreakdown.contrarian, r.signalBreakdown.pairs_spread]
+                      .filter((v) => v !== undefined).length
+                  }`
+                // Weather (no 8-signal combiner): forecast-driven, the
+                // `activeSignals` field carries the model confidence as a
+                // pseudo-count (0-1 scaled internally). Surface that as a %.
+                : "forecast-driven"}
           </span>
         </div>
       </div>

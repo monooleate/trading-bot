@@ -66,6 +66,7 @@ const SCHEMA: Record<string, FieldSpec> = {
   // combiner outputs (the 8 raw signals all default to 0.5 when absent;
   // their weighted average converges to 0.5 without real input).
   combinerConfidenceMin:{ default: 0.05,    min: 0.01,    max: 0.20,    label: "Combiner confidence min",      step: 0.005, unit: "frac", category: "crypto", group: "Risk & sizing", help: "Minimum |finalProb − 0.5| amitől a combiner outputot 'signal'-nek és nem zajnak vesszük. Megegyezik a signal-combiner saját recommend() WAIT-küszöbével (5%)." },
+  cryptoMaxOpenPositions:{ default: 5,      min: 1,       max: 20,      label: "Max open positions",           step: 1,     unit: "n",    category: "crypto", group: "Risk & sizing", help: "Egyszerre max ennyi nyitott crypto paper pozíció. Védi a bankroll-t a túlexpozíciótól ha sok piac van egyszerre nyitva. 5 default = $250 paper-en bőven elég." },
   // ─── Live-readiness gates (apply to every trader) ──────────────
   // The cron loop refuses to honor PAPER_MODE=false until a session has
   // accumulated enough validated paper data. Every trader (crypto,
@@ -88,6 +89,7 @@ const SCHEMA: Record<string, FieldSpec> = {
   weatherUseEnsemble:     { default: 1,    min: 0,    max: 1,    label: "Use 31-member GFS ensemble",    step: 1,     unit: "bool", category: "weather", group: "Forecast pipeline", help: "Default ON (2026-05-11): 31 GFS ensemble tag → P(YES) = (hány tag jósol >= threshold) / 31, empirikus σ. Kikapcsolva csak a control run + hardcoded σ=1.0/1.5. Az ensemble adatok elérhetők az Open-Meteo ensemble API-n." },
   weatherCronEnabled:     { default: 0,    min: 0,    max: 1,    label: "Enable scheduled cron runs",    step: 1,     unit: "bool", category: "weather", group: "Scheduling", help: "A weather auto-trader-weather-cron 5 percenként fut, de csak akkor csinál bármit ha ez a toggle BE van kapcsolva. Default OFF — biztonsági ráhagyás." },
   weatherMarketDisagreeMaxC: { default: 2.0, min: 0.5, max: 5.0, label: "Max market disagreement",       step: 0.1,   unit: "°C",   category: "weather", group: "Risk & sizing", help: "Skip a trade-et ha a bot predikciója >ennyi °C-kal eltér a piac modális (legmagasabban árazott) bucketjétől. Lényeg: a >2°C disagreement gyakran model hiba (rossz station, stale forecast), nem alfa. 2.0 = ~3.6°F = általában 1-2 bucket spread." },
+  weatherMaxOpenPositions:   { default: 5,    min: 1,   max: 20,  label: "Max open positions",            step: 1,     unit: "n",    category: "weather", group: "Risk & sizing", help: "Egyszerre max ennyi nyitott weather pozíció. 5 default = a 8-10 város × 5-7 nap × 8 bucket-ből bőven elég jó konvergens fogadásra." },
   // ─── Tier 1 (32. session) belső konstansok expose-olva ──────────────
   // A Black-Scholes vol_divergence + collinearity matrix + Bonferroni IC
   // threshold számára. Default = a Tier 1 hardcoded értékei, vagyis a
@@ -111,9 +113,13 @@ const SCHEMA: Record<string, FieldSpec> = {
   frMinOpenInterestUSD:      { default: 5000000, min: 1000000, max: 100000000, label: "Min open interest",       step: 500000,  unit: "USD",  category: "funding-arb", group: "Risk & sizing", help: "Minimum HL OI a coin-on ($M-ban). Védi a botot a vékony piacoktól ahol a slippage felemészti a spread-et." },
   frMaxHoldDays:             { default: 14,   min: 1,     max: 60,       label: "Max hold (days)",              step: 1,     unit: "days",  category: "funding-arb", group: "Risk & sizing", help: "Ennyi nap után zárjuk a pozíciót függetlenül a spread-től. Védi a botot a stale-positionoktól (pl. funding regime váltás után)." },
   frMaxCapitalPct:           { default: 0.40, min: 0.05,  max: 0.80,     label: "Max capital allocated",        step: 0.05,  unit: "frac",  category: "funding-arb", group: "Risk & sizing", help: "A bankroll maximum hány %-a lehet egyszerre arb pozíciókban. 40% default = még marad room a HL perp + crypto bot számára." },
+  frMaxOpenPositions:        { default: 3,    min: 1,     max: 10,       label: "Max open positions",           step: 1,     unit: "n",     category: "funding-arb", group: "Risk & sizing", help: "Egyszerre max ennyi nyitott arb pozíció. >3 = kézzel nehéz monitorolni, és a kapcsolt HL bankroll túl gyorsan felemésztődik." },
   // ─── Sports knobs ───────────────────────────────────────────────
   sportsEdgeThreshold:       { default: 0.10, min: 0.02,  max: 0.40,     label: "Edge threshold (net)",         step: 0.005, unit: "frac",  category: "sports", group: "Risk & sizing", help: "Pinnacle-derived true probability és Polymarket-ár közti minimum edge fee után." },
   sportsMaxPositionUSD:      { default: 20,   min: 2,     max: 200,      label: "Max position size",            step: 1,     unit: "USD",   category: "sports", group: "Risk & sizing", help: "Egy sports trade max USD értéke." },
+  sportsMaxOpenPositions:    { default: 3,    min: 1,     max: 15,       label: "Max open positions",           step: 1,     unit: "n",     category: "sports", group: "Risk & sizing", help: "Egyszerre max ennyi nyitott sports pozíció. Default 3 — a hosszú-lejáratú piacok különben hetekig blokkolják a slot-okat." },
+  sportsMinHoursToEnd:       { default: 2,    min: 0,     max: 72,       label: "Min hours to end-date",        step: 1,     unit: "h",     category: "sports", group: "Market filter", help: "Csak olyan piacokat fogad el, ahol legalább ennyi óra van a settlement-ig. Védi a botot az utolsó-pillanat liquidity-drop-tól." },
+  sportsMaxHoursToEnd:       { default: 72,   min: 6,     max: 8760,     label: "Max hours to end-date",        step: 6,     unit: "h",     category: "sports", group: "Market filter", help: "Csak olyan piacokat fogad el, ahol nem több mint ennyi óra van a settlement-ig. Default 72h (3 nap) = a 3 open slot 3 napon belül felszabadul. Növeld ha hosszabb-lejáratú edge-eket akarsz (pl. season-long futures), csökkentsd ha csak match-day moneyline kell." },
 };
 
 // ─── Preset definitions ───────────────────────────────────────────────
@@ -151,6 +157,7 @@ export const PRESETS: Record<string, CategoryPresets> = {
         maxKellyFraction:      0.05,
         sessionLossLimit:      30,
         cooldownSeconds:       180,
+        cryptoMaxOpenPositions: 8,
         bonferroniAlpha:       0.10,  // enyhébb live-gate
       },
     },
@@ -164,6 +171,7 @@ export const PRESETS: Record<string, CategoryPresets> = {
         maxKellyFraction:      0.08,
         sessionLossLimit:      20,
         cooldownSeconds:       300,
+        cryptoMaxOpenPositions: 5,
         bonferroniAlpha:       0.05,
       },
     },
@@ -177,6 +185,7 @@ export const PRESETS: Record<string, CategoryPresets> = {
         maxKellyFraction:      0.05,
         sessionLossLimit:      15,
         cooldownSeconds:       600,
+        cryptoMaxOpenPositions: 3,
         bonferroniAlpha:       0.02,  // szigorúbb live-gate
       },
     },
@@ -192,6 +201,7 @@ export const PRESETS: Record<string, CategoryPresets> = {
         weatherMaxEdgeCap:       0.60,
         weatherExitBeforeMin:    30,
         weatherMaxPositionUSD:   15,
+        weatherMaxOpenPositions: 8,
       },
     },
     normal: {
@@ -204,6 +214,7 @@ export const PRESETS: Record<string, CategoryPresets> = {
         weatherMaxEdgeCap:       0.40,
         weatherExitBeforeMin:    45,
         weatherMaxPositionUSD:   25,
+        weatherMaxOpenPositions: 5,
       },
     },
     strict: {
@@ -216,6 +227,7 @@ export const PRESETS: Record<string, CategoryPresets> = {
         weatherMaxEdgeCap:       0.30,
         weatherExitBeforeMin:    60,
         weatherMaxPositionUSD:   40,
+        weatherMaxOpenPositions: 3,
       },
     },
   },
@@ -269,6 +281,7 @@ export const PRESETS: Record<string, CategoryPresets> = {
         frMinOpenInterestUSD:  2000000,
         frMaxHoldDays:         60,
         frMaxCapitalPct:       0.50,
+        frMaxOpenPositions:    5,
       },
     },
     normal: {
@@ -279,6 +292,7 @@ export const PRESETS: Record<string, CategoryPresets> = {
         frMinOpenInterestUSD:  5000000,
         frMaxHoldDays:         14,
         frMaxCapitalPct:       0.40,
+        frMaxOpenPositions:    3,
       },
     },
     strict: {
@@ -289,32 +303,42 @@ export const PRESETS: Record<string, CategoryPresets> = {
         frMinOpenInterestUSD:  20000000,
         frMaxHoldDays:         7,
         frMaxCapitalPct:       0.25,
+        frMaxOpenPositions:    2,
       },
     },
   },
   sports: {
     loose: {
       label: "Lazább",
-      description: "Edge ≥5%, max pozíció $10. Több paper trade a Pinnacle-edge validáláshoz.",
+      description: "Edge ≥5%, max pozíció $10, max 5 nap a settlement-ig, 5 open slot. Több paper trade a Pinnacle-edge validáláshoz.",
       values: {
-        sportsEdgeThreshold:  0.05,
-        sportsMaxPositionUSD: 10,
+        sportsEdgeThreshold:    0.05,
+        sportsMaxPositionUSD:   10,
+        sportsMaxOpenPositions: 5,
+        sportsMinHoursToEnd:    2,
+        sportsMaxHoursToEnd:    120,  // 5 days
       },
     },
     normal: {
       label: "Normál",
-      description: "Edge ≥10%, max pozíció $20. A jelenlegi default — contrarian fan-bias fade Pinnacle-cross-referenced markéton.",
+      description: "Edge ≥10%, max pozíció $20, max 3 nap a settlement-ig, 3 open slot. Match-day moneyline-fókusz — gyors slot-forgás.",
       values: {
-        sportsEdgeThreshold:  0.10,
-        sportsMaxPositionUSD: 20,
+        sportsEdgeThreshold:    0.10,
+        sportsMaxPositionUSD:   20,
+        sportsMaxOpenPositions: 3,
+        sportsMinHoursToEnd:    2,
+        sportsMaxHoursToEnd:    72,   // 3 days
       },
     },
     strict: {
       label: "Szigorú",
-      description: "Edge ≥18%, max pozíció $30. Csak a magas-konvergencia sports edge-eket (NFL playoff longshot fade, NBA chalk lemmings).",
+      description: "Edge ≥18%, max pozíció $30, max 24 ó a settlement-ig, 2 open slot. Csak a same-day chalk fade-ek (NFL playoff longshot, NBA chalk lemmings).",
       values: {
-        sportsEdgeThreshold:  0.18,
-        sportsMaxPositionUSD: 30,
+        sportsEdgeThreshold:    0.18,
+        sportsMaxPositionUSD:   30,
+        sportsMaxOpenPositions: 2,
+        sportsMinHoursToEnd:    2,
+        sportsMaxHoursToEnd:    24,   // 1 day
       },
     },
   },

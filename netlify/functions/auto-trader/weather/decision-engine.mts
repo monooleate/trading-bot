@@ -24,6 +24,8 @@ export interface WeatherConfig {
   // consensus modal bucket by more than this many °C — a soft alpha-vs-
   // model-error filter. Default 2.0°C ≈ 3.6°F.
   marketDisagreeMaxC: number; // default 2.0
+  // Max simultaneously-open weather positions. Caps the scan loop.
+  maxOpenPositions: number;   // default 5
 }
 
 export interface WeatherTradeDecision {
@@ -77,6 +79,7 @@ export function getWeatherConfig(): WeatherConfig {
     // threshold (°C). Default 2.0°C → ~3.6°F → typically 1-2 buckets of drift
     // before we treat it as model error rather than alpha.
     marketDisagreeMaxC: parseFloat(process.env.WEATHER_DISAGREE_MAX_C || "2.0"),
+    maxOpenPositions:   parseInt(process.env.WEATHER_MAX_OPEN_POSITIONS || "5", 10),
   };
 }
 
@@ -105,6 +108,7 @@ export async function getEffectiveWeatherConfig(): Promise<WeatherConfig> {
       cronEnabled:     ov.weatherCronEnabled !== undefined
         ? ov.weatherCronEnabled >= 0.5 : env.cronEnabled,
       marketDisagreeMaxC: ov.weatherMarketDisagreeMaxC ?? env.marketDisagreeMaxC,
+      maxOpenPositions:   ov.weatherMaxOpenPositions   ?? env.maxOpenPositions,
     };
   } catch {
     return env;
