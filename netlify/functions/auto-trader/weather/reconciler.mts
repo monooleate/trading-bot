@@ -62,6 +62,16 @@ export interface ReconcileDetail {
   pnl?:          number;
   status:        "settled" | "pending" | "fetch-failed" | "no-meta";
   reason?:       string;
+  // Tentative outcome preview — populated for pending positions when the
+  // current METAR observation is informative (day's max likely already
+  // observed even before the formal 6h fallback window). UI surfaces this
+  // as a "leaning W/L" hint so the operator doesn't have to guess.
+  tentative?: {
+    actualMaxC: number;
+    isWin:      boolean;
+    pnl:        number;
+    source:     "metar-preview";
+  };
 }
 
 export async function runWeatherReconciler(paperMode: boolean = true): Promise<ReconcileResult> {
@@ -76,13 +86,44 @@ export async function runWeatherReconciler(paperMode: boolean = true): Promise<R
     const meta = pos.weatherMeta;
     if (!meta) continue; // not a weather paper position
 
-    // Time gate: don't try to settle before reconcileAfter.
+    // Time gate: don't try to settle before reconcileAfter. We still attempt
+    // a tentative METAR fetch though — by reconcileAfter time the day's max
+    // is usually already in the books even if Polymarket/UMA haven't booked
+    // the resolution yet. The tentative outcome is informational only; the
+    // settled close still requires reconcileAfter to pass + a real source.
     if (Date.now() < new Date(meta.reconcileAfter).getTime()) {
+      let tentative: ReconcileDetail["tentative"] | undefined = undefined;
+      try {
+        const station = getStation(meta.city);
+        if (station) {
+          const metar = await fetchMetarDailyMax(meta.stationIcao, meta.date, station.tz);
+          if (metar) {
+            const f = metar.dailyMaxC * 9 / 5 + 32;
+            const settlementC = parseFloat((((Math.round(f) - 32) * 5) / 9).toFixed(2));
+            const isTailLow  = /\bor\s+below\b|\bor\s+lower\b/i.test(meta.bucketLabel);
+            const isTailHigh = /\bor\s+(higher|above|more)\b/i.test(meta.bucketLabel);
+            const bucketWon = isTailLow ? settlementC <= meta.bucketTempC + 0.5
+                            : isTailHigh ? settlementC >= meta.bucketTempC - 0.5
+                            : Math.abs(settlementC - meta.bucketTempC) < 0.5;
+            const positionWon = pos.direction === "YES" ? bucketWon : !bucketWon;
+            const exit = positionWon ? 1.0 : 0.0;
+            tentative = {
+              actualMaxC: metar.dailyMaxC,
+              isWin:      positionWon,
+              pnl:        pos.shares * exit - pos.costBasis,
+              source:     "metar-preview",
+            };
+          }
+        }
+      } catch {
+        // METAR preview is best-effort. Failure leaves tentative undefined.
+      }
       details.push({
         market: pos.market, city: meta.city, date: meta.date,
         bucketLabel: meta.bucketLabel, predictedMaxC: meta.predictedMaxC,
         status: "pending",
         reason: `Settles after ${meta.reconcileAfter}`,
+        tentative,
       });
       continue;
     }
@@ -124,12 +165,39 @@ export async function runWeatherReconciler(paperMode: boolean = true): Promise<R
         new Date(meta.reconcileAfter).getTime() + METAR_FALLBACK_AFTER_HOURS * 3_600_000;
 
       if (!fallbackEligible) {
-        // Within the Polymarket settlement window — wait for it.
+        // Within the Polymarket settlement window — wait for it. Still try
+        // a tentative METAR preview: by this point reconcileAfter has passed,
+        // so the day's max is in the books (just not yet booked via Gamma).
+        let tentative: ReconcileDetail["tentative"] | undefined = undefined;
+        try {
+          const station = getStation(meta.city);
+          if (station) {
+            const metar = await fetchMetarDailyMax(meta.stationIcao, meta.date, station.tz);
+            if (metar) {
+              const f = metar.dailyMaxC * 9 / 5 + 32;
+              const settlementC = parseFloat((((Math.round(f) - 32) * 5) / 9).toFixed(2));
+              const isTailLow  = /\bor\s+below\b|\bor\s+lower\b/i.test(meta.bucketLabel);
+              const isTailHigh = /\bor\s+(higher|above|more)\b/i.test(meta.bucketLabel);
+              const bucketWon = isTailLow ? settlementC <= meta.bucketTempC + 0.5
+                              : isTailHigh ? settlementC >= meta.bucketTempC - 0.5
+                              : Math.abs(settlementC - meta.bucketTempC) < 0.5;
+              const positionWon = pos.direction === "YES" ? bucketWon : !bucketWon;
+              const exit = positionWon ? 1.0 : 0.0;
+              tentative = {
+                actualMaxC: metar.dailyMaxC,
+                isWin:      positionWon,
+                pnl:        pos.shares * exit - pos.costBasis,
+                source:     "metar-preview",
+              };
+            }
+          }
+        } catch { /* preview best-effort */ }
         details.push({
           market: pos.market, city: meta.city, date: meta.date,
           bucketLabel: meta.bucketLabel, predictedMaxC: meta.predictedMaxC,
           status: "pending",
           reason: "Polymarket has not resolved yet, METAR fallback not eligible",
+          tentative,
         });
         continue;
       }

@@ -241,6 +241,17 @@ export default function WeatherTrader({ bankroll }: { bankroll?: number }) {
                       {d.status === "fetch-failed" && `Fetch failed: ${d.reason ?? "unknown"}`}
                       {d.status === "no-meta" && "Position has no weather metadata (legacy)"}
                     </div>
+                    {d.tentative && (
+                      <div className="ts-row-reason" style={{
+                        color: d.tentative.isWin ? "var(--accent)" : "var(--danger)",
+                        marginTop: 2,
+                      }}>
+                        {d.tentative.isWin ? "🟢 leaning WIN" : "🔴 leaning LOSS"}
+                        {" · "}METAR-preview max <strong>{d.tentative.actualMaxC.toFixed(1)}°C</strong>
+                        {" · "}tentative PnL <strong>{d.tentative.pnl >= 0 ? "+" : ""}${d.tentative.pnl.toFixed(2)}</strong>
+                        <span style={{ color: "var(--muted)", marginLeft: 8 }}>(informational — final settle Polymarket/METAR-on)</span>
+                      </div>
+                    )}
                   </div>
                   <span className={`ts-row-action ts-act-${d.status === "settled" ? "closed" : "skip"}`}>
                     {d.status}

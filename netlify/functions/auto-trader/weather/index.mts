@@ -244,19 +244,28 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
 
   // 3. Process each market
   const weatherMaxOpen = config.maxOpenPositions ?? 5;
+  // Active positions only — past-reconcileAfter (pending settle) positions
+  // are effectively done and shouldn't block new entries. The settle just
+  // hasn't been booked yet because METAR/Gamma haven't reported. This is
+  // a user-facing decision: "✓ ready to settle" rows in the pending card
+  // do NOT count against this cap, only the still-trading rows do.
+  const activeOpenCount = updatedSession.openPositions.filter((p) => {
+    if (!p.weatherMeta) return true; // safety: count anything weather-less as active
+    return new Date(p.weatherMeta.reconcileAfter).getTime() > Date.now();
+  }).length;
   for (const market of markets.slice(0, 5)) {
     // Max-open-positions gate (Settings-tunable via weatherMaxOpenPositions).
-    if (updatedSession.openPositions.length >= weatherMaxOpen) {
+    if (activeOpenCount >= weatherMaxOpen) {
       results.push({
         market: market.slug,
         action: "skip",
-        reason: `Max open positions reached: ${updatedSession.openPositions.length}/${weatherMaxOpen}`,
+        reason: `Max active positions reached: ${activeOpenCount}/${weatherMaxOpen}`,
         gates: padWeatherGates([{
           label: "Max open positions",
           passed: false,
-          actual: `${updatedSession.openPositions.length}/${weatherMaxOpen}`,
+          actual: `${activeOpenCount}/${weatherMaxOpen}`,
           required: `< ${weatherMaxOpen}`,
-          hint: "Egyszerre max ennyi paper pozíció lehet nyitva — Settings → Max open positions.",
+          hint: "Csak az aktív (még trading-window-on belüli) pozíciókat számolja — a ✓ready-to-settle nem.",
         }]),
       });
       continue;

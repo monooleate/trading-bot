@@ -459,6 +459,13 @@ async function runCryptoTrader(
 
   // 2. Process each market
   const cryptoMaxOpen = config.maxOpenPositions ?? 5;
+  // Active positions only — past-endDate pending positions are effectively
+  // done (waiting for Polymarket UMA resolution) and shouldn't block new
+  // entries. The "Pending" card on the UI already separates them visually.
+  const activeOpenCount = updatedSession.openPositions.filter((p) => {
+    if (!p.endDate) return true;
+    return new Date(p.endDate).getTime() >= Date.now();
+  }).length;
   for (const market of markets.slice(0, 3)) { // max 3 markets per run
     // Check session loss limit
     if (updatedSession.sessionLoss >= config.sessionLossLimit) {
@@ -468,22 +475,22 @@ async function runCryptoTrader(
     }
 
     // Max-open-positions gate: stop opening new entries once the cap is hit.
-    // Cheap fail-fast — skip remaining markets if the loop has nothing more
-    // to do beyond pushing skip rows. Settings-tunable via cryptoMaxOpenPositions.
-    if (updatedSession.openPositions.length >= cryptoMaxOpen) {
+    // Counts only ACTIVE (still-trading-window) positions — pending settle
+    // doesn't block new entries. Settings-tunable via cryptoMaxOpenPositions.
+    if (activeOpenCount >= cryptoMaxOpen) {
       results.push({
         market: market.slug,
         title: market.title,
         action: "skip",
-        reason: `Max open positions reached: ${updatedSession.openPositions.length}/${cryptoMaxOpen}`,
+        reason: `Max active positions reached: ${activeOpenCount}/${cryptoMaxOpen}`,
         marketPrice: market.currentPrice,
         endDate: market.endDate,
         gates: [{
           label: "Max open positions",
           passed: false,
-          actual: `${updatedSession.openPositions.length}/${cryptoMaxOpen}`,
+          actual: `${activeOpenCount}/${cryptoMaxOpen}`,
           required: `< ${cryptoMaxOpen}`,
-          hint: "Egyszerre max ennyi paper pozíció lehet nyitva — Settings → Max open positions.",
+          hint: "Csak az aktív (még trading-window-on belüli) pozíciókat számolja — a pending settle nem.",
         }],
       });
       continue;
