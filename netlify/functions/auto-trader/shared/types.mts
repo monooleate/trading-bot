@@ -320,6 +320,10 @@ export interface TraderConfig {
   // exuberant signal day doesn't burn the entire bankroll on parallel
   // entries. Optional for backward compat — default 5 if absent.
   maxOpenPositions?: number;
+  // Minimum number of non-null signals required for the combiner output to
+  // be trusted. Was hardcoded 2 in the decision-engine; now Settings-tunable
+  // via cryptoMinActiveSignals (default 2). Higher = stricter convergence.
+  minActiveSignals?: number;
 }
 
 export interface PolymarketConfig {

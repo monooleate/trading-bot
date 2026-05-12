@@ -67,6 +67,7 @@ const SCHEMA: Record<string, FieldSpec> = {
   // their weighted average converges to 0.5 without real input).
   combinerConfidenceMin:{ default: 0.05,    min: 0.01,    max: 0.20,    label: "Combiner confidence min",      step: 0.005, unit: "frac", category: "crypto", group: "Risk & sizing", help: "Minimum |finalProb − 0.5| amitől a combiner outputot 'signal'-nek és nem zajnak vesszük. Megegyezik a signal-combiner saját recommend() WAIT-küszöbével (5%)." },
   cryptoMaxOpenPositions:{ default: 5,      min: 1,       max: 20,      label: "Max open positions",           step: 1,     unit: "n",    category: "crypto", group: "Risk & sizing", help: "Egyszerre max ennyi nyitott crypto paper pozíció. Védi a bankroll-t a túlexpozíciótól ha sok piac van egyszerre nyitva. 5 default = $250 paper-en bőven elég." },
+  cryptoMinActiveSignals:{ default: 2,      min: 1,       max: 8,       label: "Min active signals",           step: 1,     unit: "n",    category: "crypto", group: "Signal toggles", help: "Minimum hány signal-nak kell konvergálnia (8-ból). 2 = laza, 4 = óvatos, 6 = csak magas-konfidencia trade-ek." },
   // ─── Live-readiness gates (apply to every trader) ──────────────
   // The cron loop refuses to honor PAPER_MODE=false until a session has
   // accumulated enough validated paper data. Every trader (crypto,
@@ -108,6 +109,7 @@ const SCHEMA: Record<string, FieldSpec> = {
   hlSessionLossLimit:        { default: 50,   min: 10,    max: 500,      label: "Session loss limit",           step: 5,     unit: "USD",   category: "hyperliquid", group: "Risk & sizing", help: "A session összesített vesztesége nem érheti el ezt — auto-stop. Reset-tel indítható újra." },
   hlCooldownSeconds:         { default: 300,  min: 60,    max: 3600,     label: "Per-coin cooldown",            step: 30,    unit: "sec",   category: "hyperliquid", group: "Risk & sizing", help: "Ugyanazon a coin-on (BTC/ETH/SOL) mennyi mp kell két entry között." },
   hlMaxOpenPositions:        { default: 3,    min: 1,     max: 10,       label: "Max open positions",           step: 1,     unit: "n",     category: "hyperliquid", group: "Risk & sizing", help: "Egyszerre max ennyi nyitott HL perp. >3 = nehéz kézzel monitorolni." },
+  hlMinActiveSignals:        { default: 3,    min: 1,     max: 8,        label: "Min active signals",           step: 1,     unit: "n",     category: "hyperliquid", group: "Risk & sizing", help: "Minimum hány signal-nak kell konvergálnia (8-ból). HL drágább mint Polymarket → szigorúbb default (3) mint a crypto bot (2)." },
   // ─── Funding Arb knobs ──────────────────────────────────────────
   frMinSpreadHourly:         { default: 0.0001, min: 0.00001, max: 0.005, label: "Min spread (hourly)",         step: 0.00005, unit: "frac", category: "funding-arb", group: "Risk & sizing", help: "Minimum HL/Binance funding rate különbség óránként amitől entry-zünk. 0.0001 = 0.01%/h = ~88%/yr break-even reverse." },
   frMinOpenInterestUSD:      { default: 5000000, min: 1000000, max: 100000000, label: "Min open interest",       step: 500000,  unit: "USD",  category: "funding-arb", group: "Risk & sizing", help: "Minimum HL OI a coin-on ($M-ban). Védi a botot a vékony piacoktól ahol a slippage felemészti a spread-et." },
@@ -158,6 +160,7 @@ export const PRESETS: Record<string, CategoryPresets> = {
         sessionLossLimit:      30,
         cooldownSeconds:       180,
         cryptoMaxOpenPositions: 8,
+        cryptoMinActiveSignals: 2,
         bonferroniAlpha:       0.10,  // enyhébb live-gate
       },
     },
@@ -172,6 +175,7 @@ export const PRESETS: Record<string, CategoryPresets> = {
         sessionLossLimit:      20,
         cooldownSeconds:       300,
         cryptoMaxOpenPositions: 5,
+        cryptoMinActiveSignals: 3,
         bonferroniAlpha:       0.05,
       },
     },
@@ -186,6 +190,7 @@ export const PRESETS: Record<string, CategoryPresets> = {
         sessionLossLimit:      15,
         cooldownSeconds:       600,
         cryptoMaxOpenPositions: 3,
+        cryptoMinActiveSignals: 5,
         bonferroniAlpha:       0.02,  // szigorúbb live-gate
       },
     },
@@ -243,6 +248,7 @@ export const PRESETS: Record<string, CategoryPresets> = {
         hlConsecutiveLossLimit: 5,
         hlSessionLossLimit:     75,
         hlCooldownSeconds:      180,
+        hlMinActiveSignals:     2,
       },
     },
     normal: {
@@ -256,6 +262,7 @@ export const PRESETS: Record<string, CategoryPresets> = {
         hlConsecutiveLossLimit: 3,
         hlSessionLossLimit:     50,
         hlCooldownSeconds:      300,
+        hlMinActiveSignals:     3,
       },
     },
     strict: {
@@ -269,6 +276,7 @@ export const PRESETS: Record<string, CategoryPresets> = {
         hlConsecutiveLossLimit: 2,
         hlSessionLossLimit:     30,
         hlCooldownSeconds:      600,
+        hlMinActiveSignals:     5,
       },
     },
   },

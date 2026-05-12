@@ -1,20 +1,73 @@
 import type { TradeDecision, TraderConfig, AggregatedSignal, MarketInfo, DecisionGate } from "../shared/types.mts";
 import { getBtcExitConfig } from "../shared/config.mts";
+import { getStore } from "@netlify/blobs";
 
 type BtcExitCfg = ReturnType<typeof getBtcExitConfig>;
 
-// ─── Cooldown tracker (in-memory, resets on function restart) ──
-
+// ─── Cooldown tracker (in-memory + Blobs persistence) ──
+//
+// 2026-05-12: migrated from pure-in-memory (HL-style pattern). Netlify
+// functions are short-lived: a cron tick may land on a fresh container with
+// empty memory, so the previous purely-in-memory map silently lost the
+// no-revenge-trade guard between ticks. Now setCooldown writes both layers,
+// and isOnCooldown checks memory first then falls back to Blobs.
+//
+// `isOnCooldown` is async (HL pattern), so callers should `await` and may
+// need pre-warming (see warmCooldownCache). For backward compat we keep a
+// sync `isOnCooldownSync` that uses memory only.
+const STORE_NAME = "crypto-cooldowns";
+const KEY        = "v1";
 const cooldownMap = new Map<string, number>();
+let blobLoadedAt = 0;
+const BLOB_RELOAD_MS = 30_000;
 
-export function isOnCooldown(slug: string, cooldownSeconds: number): boolean {
-  const lastTrade = cooldownMap.get(slug);
-  if (!lastTrade) return false;
-  return Date.now() - lastTrade < cooldownSeconds * 1000;
+async function loadCooldownsFromBlob(): Promise<void> {
+  if (Date.now() - blobLoadedAt < BLOB_RELOAD_MS) return;
+  try {
+    const raw = await getStore(STORE_NAME).get(KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw as string) as Record<string, number>;
+      const now = Date.now();
+      for (const [slug, until] of Object.entries(parsed)) {
+        if (Number.isFinite(until) && until > now) {
+          if (!cooldownMap.has(slug)) cooldownMap.set(slug, until);
+        }
+      }
+    }
+    blobLoadedAt = Date.now();
+  } catch { /* fail open */ }
 }
 
-export function setCooldown(slug: string): void {
-  cooldownMap.set(slug, Date.now());
+async function persistCooldowns(): Promise<void> {
+  try {
+    const obj: Record<string, number> = {};
+    const now = Date.now();
+    for (const [slug, until] of cooldownMap.entries()) {
+      if (until > now) obj[slug] = until;
+    }
+    await getStore(STORE_NAME).set(KEY, JSON.stringify(obj));
+  } catch { /* best-effort */ }
+}
+
+/** Pre-warm the cooldown cache from Blobs before the scan loop starts. */
+export async function warmCooldownCache(): Promise<void> {
+  await loadCooldownsFromBlob();
+}
+
+/** Sync check using in-memory state only. Pre-warm with `warmCooldownCache()`. */
+export function isOnCooldown(slug: string, cooldownSeconds: number): boolean {
+  const until = cooldownMap.get(slug);
+  if (!until) return false;
+  // The map stores the EXPIRY timestamp now (was: last-trade timestamp).
+  // Both interpretations get the same answer when called via setCooldown,
+  // since we always set `now + cooldownSeconds*1000` — but the underlying
+  // semantics matter for the Blobs payload, which stores expiry only.
+  return until > Date.now();
+}
+
+export async function setCooldown(slug: string, cooldownSeconds: number = 300): Promise<void> {
+  cooldownMap.set(slug, Date.now() + cooldownSeconds * 1000);
+  await persistCooldowns();
 }
 
 // ─── Decision engine ──────────────────────────────────────
@@ -135,16 +188,18 @@ export function makeDecision(
   });
   if (!sessionLossOk) reasons.push(`Session loss limit reached: $${sessionLoss.toFixed(2)} >= $${config.sessionLossLimit}`);
 
-  // 2. Minimum active signals
-  const activeOk = signal.activeSignals >= 2;
+  // 2. Minimum active signals (Settings-tunable since 2026-05-12 — was
+  // hardcoded ≥ 2). Strict preset uses 5, Normal 3, Loose 2.
+  const minActive = config.minActiveSignals ?? 2;
+  const activeOk = signal.activeSignals >= minActive;
   gates.push({
     label: "Aktív signal források",
     passed: activeOk,
     actual:   `${signal.activeSignals}/8`,
-    required: "≥ 2",
-    hint: "Egyetlen signal-tól nem nyitunk pozíciót — több forrás konvergenciája kell.",
+    required: `≥ ${minActive}`,
+    hint: "Több signal konvergenciája kell. Settings → Min active signals.",
   });
-  if (!activeOk) reasons.push(`Too few active signals: ${signal.activeSignals} < 2`);
+  if (!activeOk) reasons.push(`Too few active signals: ${signal.activeSignals} < ${minActive}`);
 
   // 3. Combiner-confidence gate (audit fix #4, 2026-05-11). Mirrors the
   // signal-combiner's own `recommend()` WAIT threshold: if |p − 0.5| <

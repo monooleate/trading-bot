@@ -120,9 +120,12 @@ export function makeHlDecision(
     return { shouldTrade: false, reason: `Already have open ${signal.coin} position`, edge: signal.edge, threshold };
   }
 
-  // Signal-quality gates
-  if (signal.activeSignals < 3) {
-    return { shouldTrade: false, reason: `Only ${signal.activeSignals}/5 signals active`, edge: signal.edge, threshold };
+  // Signal-quality gates (Settings-tunable since 2026-05-12 via
+  // hlMinActiveSignals; was hardcoded 3, label said "/5" but the combiner
+  // emits 8 signals).
+  const minActive = config.minActiveSignals ?? 3;
+  if (signal.activeSignals < minActive) {
+    return { shouldTrade: false, reason: `Only ${signal.activeSignals}/8 signals active (min ${minActive})`, edge: signal.edge, threshold };
   }
   if (signal.resolutionCategory === "SKIP") {
     return { shouldTrade: false, reason: "Underlying market resolution risk = SKIP", edge: signal.edge, threshold };

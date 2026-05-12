@@ -324,13 +324,14 @@ async function runHyperliquidTraderInner(
         required: "no duplicate",
         hint: "Egy coinra max 1 nyitott perp pozíció.",
       });
-      const activeSignalsOk = signal.activeSignals >= 3;
+      const minActiveSignalsHl = config.minActiveSignals ?? 3;
+      const activeSignalsOk = signal.activeSignals >= minActiveSignalsHl;
       coinGates.push({
         label: HL_GATE_LABELS[7],
         passed: activeSignalsOk,
-        actual: `${signal.activeSignals}/5`,
-        required: "≥ 3",
-        hint: "HL-en a magasabb költség miatt min. 3 signal konvergenciája kell.",
+        actual: `${signal.activeSignals}/8`,
+        required: `≥ ${minActiveSignalsHl}`,
+        hint: "HL-en min. ennyi signal-nak kell konvergálnia (Settings → Min active signals).",
       });
       const resolutionOk = signal.resolutionCategory !== "SKIP";
       coinGates.push({

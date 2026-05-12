@@ -34,6 +34,7 @@ export function getTraderConfig(): TraderConfig {
     minPositionSizeUSDC:   parseFloat(process.env.MIN_POSITION_SIZE_USDC   || "0.50"),
     combinerConfidenceMin: parseFloat(process.env.COMBINER_CONFIDENCE_MIN || "0.05"),
     maxOpenPositions:      parseInt(process.env.CRYPTO_MAX_OPEN_POSITIONS  || "5", 10),
+    minActiveSignals:      parseInt(process.env.CRYPTO_MIN_ACTIVE_SIGNALS  || "2", 10),
   };
 }
 
@@ -70,6 +71,7 @@ export async function getEffectiveTraderConfig(): Promise<TraderConfig> {
       minPositionSizeUSDC:   ov.minPositionSizeUSDC   ?? env.minPositionSizeUSDC,
       combinerConfidenceMin: ov.combinerConfidenceMin ?? env.combinerConfidenceMin,
       maxOpenPositions:      ov.cryptoMaxOpenPositions ?? env.maxOpenPositions,
+      minActiveSignals:      ov.cryptoMinActiveSignals ?? env.minActiveSignals,
     };
   } catch {
     return env;

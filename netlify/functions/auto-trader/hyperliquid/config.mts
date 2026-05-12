@@ -51,6 +51,7 @@ export function getHlConfig(): HlTraderConfig {
     roundtripFeePct:    parseFloat(process.env.HL_ROUNDTRIP_FEE_PCT    || "0.0007"),
     tpPctMax:           parseFloat(process.env.HL_TP_PCT_MAX           || "0.02"),
     slPctMax:           parseFloat(process.env.HL_SL_PCT_MAX           || "0.01"),
+    minActiveSignals:   parseInt  (process.env.HL_MIN_ACTIVE_SIGNALS   || "3", 10),
     paperSimVersion:    HL_PAPER_SIM_VERSION,
   };
 }
@@ -75,6 +76,7 @@ export async function getEffectiveHlConfig(): Promise<HlTraderConfig> {
       maxOpenPositions:          ov.hlMaxOpenPositions        ?? env.maxOpenPositions,
       consecutiveLossLimit:      ov.hlConsecutiveLossLimit    ?? env.consecutiveLossLimit,
       volGateRvPct:              ov.hlVolGateRvPct            ?? env.volGateRvPct,
+      minActiveSignals:          ov.hlMinActiveSignals        ?? env.minActiveSignals,
     };
   } catch {
     return env;

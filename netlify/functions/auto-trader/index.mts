@@ -26,7 +26,7 @@ import { computeLiveReadiness, shouldForcePaper, type LiveReadinessReport } from
 import { PAPER_SIM_VERSION } from "./crypto/session-manager.mts";
 import { findBtcMarkets } from "./crypto/btc-market-finder.mts";
 import { aggregateSignals } from "./crypto/signal-aggregator.mts";
-import { makeDecision, setCooldown, padCryptoGates } from "./crypto/decision-engine.mts";
+import { makeDecision, setCooldown, padCryptoGates, warmCooldownCache } from "./crypto/decision-engine.mts";
 import { placeBuyOrder } from "./crypto/execution.mts";
 import { handleBuyLifecycle, handleSellLifecycle, checkExitConditions } from "./crypto/order-lifecycle.mts";
 import { resolvePendingPaperPositions } from "./crypto/paper-resolver.mts";
@@ -431,6 +431,10 @@ async function runCryptoTrader(
     });
   }
 
+  // 0. Pre-warm cooldown cache from Blobs (cold-start protection — the
+  //    no-revenge-trade guard used to be lost between cron ticks).
+  await warmCooldownCache();
+
   // 1. Find active BTC markets (deep-OTM band filter applied)
   const markets = await findBtcMarkets(config.minOpenInterest, btcMinPriceBand);
   if (markets.length === 0) {
@@ -646,7 +650,7 @@ async function runCryptoTrader(
 
       // 7. Update session with open position
       updatedSession = addOpenPosition(updatedSession, paperPosition);
-      setCooldown(market.slug);
+      await setCooldown(market.slug, config.cooldownSeconds);
 
       // Format signal arrows for telegram
       const signalArrows = formatSignalArrows(signal.signalBreakdown);

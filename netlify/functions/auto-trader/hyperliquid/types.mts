@@ -108,6 +108,9 @@ export interface HlTraderConfig {
   // perp-side bounds (default 2% / 1% = 2:1 RR over a 4h horizon).
   tpPctMax:         number;         // e.g. 0.02 = ±2% from entry
   slPctMax:         number;         // e.g. 0.01 = ±1% from entry
+  // Min signals from the 8-signal combiner. Default 3 (HL has higher fees
+  // than Polymarket, so requires more convergence than crypto's 2).
+  minActiveSignals?: number;
   // Paper sim version: bumped when paper PnL semantics change so old
   // sessions auto-reset on load. v2 adds TP/SL clamps + paper funding
   // accrual + paper-side volatility gate.

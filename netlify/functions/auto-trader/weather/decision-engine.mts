@@ -253,7 +253,25 @@ export function makeWeatherDecision(params: {
 
   // 7. Kelly cap (informational — Math.min always satisfies the cap, but
   // surfacing the actual value lets the operator see how close we are).
-  const kellyFraction = Math.max(0, netEdge) * forecast.confidence * 0.25;
+  //
+  // Proper binary-payoff Kelly using the bucket's market price.
+  // Previously: `netEdge × confidence × 0.25` heuristic — ignored the
+  // bucket price entirely, undersizing deep-OTM tail bets by ~3-5×.
+  // Now: f = (p*b − q)/b, b = (1/bucketPrice) − 1, then confidence-scaled.
+  // Direction-aware: YES side uses match.probability vs bucketPrice,
+  // NO side uses (1 − match.probability) vs (1 − bucketPrice).
+  const bucketPrice = match.bucket.currentPrice;
+  const probYes     = (typeof (match as any).probability === "number")
+    ? (match as any).probability
+    : bucketPrice + match.edge;  // fallback: matchProb = bucketPrice + edge
+  const probSide  = direction === "YES" ? probYes : 1 - probYes;
+  const priceSide = direction === "YES" ? bucketPrice : 1 - bucketPrice;
+  const safePrice = Math.max(0.01, Math.min(0.99, priceSide));
+  const b = (1 / safePrice) - 1;
+  const rawKelly = b > 0 ? Math.max(0, (probSide * b - (1 - probSide)) / b) : 0;
+  // ¼-Kelly + confidence shrinkage. Confidence is a noisy signal so we
+  // dampen Kelly by it (acts as a Bayesian shrinkage toward 0).
+  const kellyFraction = rawKelly * forecast.confidence * 0.25;
   const cappedKelly   = Math.min(kellyFraction, KELLY_CAP);
   gates.push({
     label: "Kelly méret ≤ cap",
