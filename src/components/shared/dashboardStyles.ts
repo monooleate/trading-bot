@@ -80,5 +80,25 @@ export const dashboardCSS = `
 .ec-vs-sep{font-family:var(--mono);font-size:14px;color:var(--border)}
 .ec-home-link{font-family:var(--mono);font-size:10px;color:var(--muted);text-decoration:none;letter-spacing:.1em;text-transform:uppercase;transition:color .15s}
 .ec-home-link:hover{color:var(--accent)}
-@media(max-width:768px){.ec-grid2{grid-template-columns:1fr}.ec-content{padding:13px}}
+@media(max-width:768px){
+  .ec-grid2{grid-template-columns:1fr}
+  .ec-content{padding:13px}
+  .ec-header{padding:10px 14px;flex-wrap:wrap;gap:8px}
+  .ec-header>div{flex-wrap:wrap;gap:8px}
+  .ec-tabs{padding:0 14px}
+  .ec-tab{padding:11px 12px;font-size:10.5px;letter-spacing:.07em}
+  .ec-big{font-size:24px}
+  .ec-sec-title{font-size:16px}
+  .ec-card{padding:14px}
+  .ec-sbar-lbl{width:auto;text-align:left;font-size:9.5px}
+  .ec-vs{gap:10px;flex-wrap:wrap}
+  .ec-consensus{font-size:34px}
+}
+@media(max-width:480px){
+  .ec-content{padding:10px}
+  .ec-tabs{padding:0 10px}
+  .ec-card{padding:12px}
+  .ec-big{font-size:22px}
+  .ec-sbar-row{flex-wrap:wrap}
+}
 `;

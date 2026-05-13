@@ -210,6 +210,7 @@ function ExchangePanel({ exchange }: { exchange: Exchange }) {
           </div>
         </div>
         {balances.length > 0 && (
+          <div className="tbl-scroll">
           <table className="tp-tbl">
             <thead><tr><th>Coin</th><th>Egyenleg</th><th>Szabad</th><th>USD érték</th></tr></thead>
             <tbody>
@@ -223,6 +224,7 @@ function ExchangePanel({ exchange }: { exchange: Exchange }) {
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </div>
 
@@ -232,6 +234,7 @@ function ExchangePanel({ exchange }: { exchange: Exchange }) {
         {positions.length === 0
           ? <div style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--muted)" }}>Nincs nyitott pozíció</div>
           : (
+            <div className="tbl-scroll">
             <table className="tp-tbl">
               <thead><tr><th>Symbol</th><th>Side</th><th>Méret</th><th>Entry</th><th>Mark</th><th>PnL</th><th>Lev.</th></tr></thead>
               <tbody>
@@ -250,6 +253,7 @@ function ExchangePanel({ exchange }: { exchange: Exchange }) {
                 ))}
               </tbody>
             </table>
+            </div>
           )}
       </div>
 
@@ -373,6 +377,7 @@ function RedeemSection() {
             Begyűjthető — {info.redeemable?.length ?? 0} pozíció
           </div>
           {info.redeemable?.length > 0 ? (
+            <div className="tbl-scroll">
             <table className="tp-tbl">
               <thead><tr><th>Kérdés</th><th>Outcome</th><th>Shares</th><th>Claim</th></tr></thead>
               <tbody>
@@ -386,6 +391,7 @@ function RedeemSection() {
                 ))}
               </tbody>
             </table>
+            </div>
           ) : (
             <div style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--muted)" }}>Nincs jelenleg redeemelhető pozíció.</div>
           )}
@@ -455,6 +461,7 @@ function PolymarketPanel() {
       <div style={{ display: "grid", gridTemplateColumns: markets.length && selected ? "1.2fr 1fr" : "1fr", gap: 15 }}>
         <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 4, padding: 18 }}>
           <div className="tp-section">Top piacok ({markets.length})</div>
+          <div className="tbl-scroll">
           <table className="tp-tbl">
             <thead><tr><th>Kérdés</th><th>YES</th><th>NO</th><th>Vol 24h</th></tr></thead>
             <tbody>
@@ -468,6 +475,7 @@ function PolymarketPanel() {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
 
         {selected && (

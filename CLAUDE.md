@@ -360,7 +360,7 @@ netlify deploy --prod --dir=dist
 
 ---
 
-## AKTUÁLIS ÁLLAPOT (2026-05-12)
+## AKTUÁLIS ÁLLAPOT (2026-05-13)
 
 **Élő deploy:** `mj-trading.netlify.app`. Paper mode, simVersion 3 (crypto), v2 (HL).
 
@@ -373,7 +373,11 @@ netlify deploy --prod --dir=dist
 | **HL Perp** | $200 → $200 | $0 | 0 closed | 0 open | Idle (paper) |
 | **F-Arb** | $200 → $200 (shared HL) | $0 | 0 closed | 0 open | Idle (paper) |
 
-### Mit fix utoljára (33. session, 2026-05-12)
+### Mit fix utoljára (34. session, 2026-05-13)
+
+- **Mobile UI optimalizálás + tap-to-tooltip rendszer**: a 100+ `title=` HTML hover-tooltip mostantól mobilon is működik (touch-tap-re custom popup `Base.astro`-ban inline JS-sel). Global `.tbl-scroll` wrapper class minden táblán (Apex/ArbMatrix/SignalCombiner/OrderFlow/VolDivergence/TradingPanel — 12 tábla). iOS auto-zoom megelőzése (input font-size ≥16px), notch/safe-area support, `theme-color` meta. Dashboard shell mobile breakpoints (`ec-header`, `ec-tabs`, `ec-card`). (changelog 2026-05-13)
+
+### Mit fix korábban (33. session, 2026-05-12)
 
 - **CLAUDE.md karcsúsítva** (2028 → 410 sor, session history kivéve → `changelog/`)
 - **Settings preset rendszer**: Loose/Normal/Strict per-bot kapcsoló a Settings tabon, leiratokkal. 16 új knob (HL + F-Arb + Sports — eddig env-only)
@@ -384,7 +388,7 @@ netlify deploy --prod --dir=dist
 - **Weather audit**: 2 closed trade verified, mindkettő real Polymarket resolution-on zárt, PnL helyes
 - **Crypto bot diagnosztika**: a Combiner confidence gate (5%) blokkolt mindent — `Loose` preset 2%-ra állítja
 
-### Mit fix korábban (32. session, 2026-05-11)
+### Mit fix még korábban (32. session, 2026-05-11)
 
 - Tier 1 math fix: vol_divergence Black-Scholes N(d₂), collinearity matrix, Bonferroni IC threshold (`internal-docs/math/13-crypto-bot.md` §9)
 - Signal Combiner UI "Edge" javítva (50% deviation → valódi trade edge)

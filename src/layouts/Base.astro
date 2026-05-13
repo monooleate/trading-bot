@@ -6,7 +6,8 @@ const { title = "EdgeCalc // Polymarket & Funding Arb Toolkit" } = Astro.props;
 <html lang="hu">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#0a0a0c" />
     <title>{title}</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -16,5 +17,104 @@ const { title = "EdgeCalc // Polymarket & Funding Arb Toolkit" } = Astro.props;
   </head>
   <body>
     <slot />
+    <script is:inline>
+      // Touch-tap tooltip: a 100+ helyen használt `title=` HTML hover-szöveg
+      // mobilon nem jelenik meg (touch nem trigger-eli). Itt egy globális
+      // tap-handlert kötünk: érintőeszközön kattintásra megjeleníti a title
+      // tartalmát egy floating popup-ban, ami auto-dismiss-elődik.
+      (function () {
+        if (typeof window === "undefined") return;
+        // coarse pointer = mobile / tablet / touchscreen
+        var coarse = window.matchMedia && window.matchMedia("(pointer: coarse)").matches;
+        if (!coarse) return;
+
+        // Felülírjuk a natív `title`-t `data-tip`-re, hogy a böngésző se
+        // próbálja kihúzni long-press-en (zavaró default UI).
+        function reTagTitles(root) {
+          var nodes = (root || document).querySelectorAll("[title]");
+          for (var i = 0; i < nodes.length; i++) {
+            var el = nodes[i];
+            var t  = el.getAttribute("title");
+            if (t && t.length) {
+              el.setAttribute("data-tip", t);
+              el.removeAttribute("title");
+            }
+          }
+        }
+        // Első scan + figyeljük a React DOM-mutácókat (új title-ök render után).
+        reTagTitles(document);
+        if (typeof MutationObserver !== "undefined") {
+          var mo = new MutationObserver(function (muts) {
+            for (var i = 0; i < muts.length; i++) {
+              var m = muts[i];
+              if (m.type === "attributes" && m.attributeName === "title") {
+                reTagTitles(m.target);
+              } else if (m.addedNodes && m.addedNodes.length) {
+                for (var j = 0; j < m.addedNodes.length; j++) {
+                  var n = m.addedNodes[j];
+                  if (n.nodeType === 1) reTagTitles(n);
+                }
+              }
+            }
+          });
+          mo.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["title"] });
+        }
+
+        // Egy globális popup elem, amit ide-oda mozgatunk a tapped elemhez.
+        var tip = document.createElement("div");
+        tip.className = "tap-tip";
+        tip.setAttribute("role", "tooltip");
+        tip.style.display = "none";
+        document.body.appendChild(tip);
+
+        var hideTimer = null;
+        function hide() {
+          tip.style.display = "none";
+          tip.classList.remove("tap-tip-visible");
+        }
+        function position(el) {
+          var r  = el.getBoundingClientRect();
+          var vw = window.innerWidth;
+          tip.style.display = "block";
+          // mérés után pozícionálunk: kalkuláljuk a tip méretét
+          var tr = tip.getBoundingClientRect();
+          var left = r.left + r.width / 2 - tr.width / 2;
+          var top  = r.bottom + 8;
+          // viewport-clamp
+          if (left < 8) left = 8;
+          if (left + tr.width > vw - 8) left = vw - tr.width - 8;
+          // ha lecsúszik, fent megjelenítjük
+          if (top + tr.height > window.innerHeight - 8) {
+            top = r.top - tr.height - 8;
+          }
+          if (top < 8) top = 8;
+          tip.style.left = left + "px";
+          tip.style.top  = top + "px";
+        }
+        document.addEventListener("click", function (ev) {
+          // Bezárás ha tip-en kívül kattint
+          if (tip.contains(ev.target)) return;
+          var el = ev.target;
+          while (el && el !== document.body) {
+            if (el.getAttribute && el.getAttribute("data-tip")) {
+              ev.preventDefault();
+              ev.stopPropagation();
+              var txt = el.getAttribute("data-tip");
+              tip.textContent = txt;
+              tip.classList.add("tap-tip-visible");
+              position(el);
+              if (hideTimer) clearTimeout(hideTimer);
+              hideTimer = setTimeout(hide, 4500);
+              return;
+            }
+            el = el.parentElement;
+          }
+          hide();
+        }, true);
+        // Scroll vagy resize → bezárjuk
+        window.addEventListener("scroll", hide, { passive: true });
+        window.addEventListener("resize", hide);
+      })();
+    </script>
   </body>
 </html>

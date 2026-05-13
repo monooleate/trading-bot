@@ -346,6 +346,7 @@ export default function VolDivergencePanel() {
               Nincs BTC kontraktadat – kattints a Frissít gombra
             </div>
           ) : (
+            <div className="tbl-scroll">
             <table className="vd-tbl">
               <thead>
                 <tr>
@@ -380,6 +381,7 @@ export default function VolDivergencePanel() {
                 })}
               </tbody>
             </table>
+            </div>
           )}
         </div>
 

@@ -212,6 +212,7 @@ export default function SignalCombinerPanel({ bankroll }: { bankroll: number }) 
         {showPicker && (
           <div className="sc-card" style={{ maxHeight: 280, overflowY: "auto" }}>
             <div className="sc-ct">Piac kiválasztása</div>
+            <div className="tbl-scroll">
             <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: "var(--mono)", fontSize: 11 }}>
               <thead>
                 <tr style={{ borderBottom: "1px solid var(--border)" }}>
@@ -238,6 +239,7 @@ export default function SignalCombinerPanel({ bankroll }: { bankroll: number }) 
                 ))}
               </tbody>
             </table>
+            </div>
           </div>
         )}
 
@@ -533,6 +535,7 @@ function MultiMarketScanner({ bankroll, markets, onSelectMarket }: { bankroll: n
       )}
 
       {results.length > 0 && (
+        <div className="tbl-scroll">
         <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: "var(--mono)", fontSize: 11 }}>
           <thead>
             <tr style={{ borderBottom: "1px solid var(--border)" }}>
@@ -590,6 +593,7 @@ function MultiMarketScanner({ bankroll, markets, onSelectMarket }: { bankroll: n
             })}
           </tbody>
         </table>
+        </div>
       )}
     </div>
   );

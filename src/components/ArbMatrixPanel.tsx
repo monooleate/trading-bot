@@ -109,6 +109,7 @@ function VWAPTab({ bankroll }: { bankroll: number }) {
       {markets.length > 0 && (
         <div className="am-card">
           <div className="am-ct">VWAP Arbitrázs Eredmények</div>
+          <div className="tbl-scroll">
           <table className="am-tbl">
             <thead>
               <tr>
@@ -141,6 +142,7 @@ function VWAPTab({ bankroll }: { bankroll: number }) {
               ))}
             </tbody>
           </table>
+          </div>
 
           {data?.summary && (
             <div className="am-info" style={{ marginTop:14 }}>
@@ -479,6 +481,7 @@ function PairCostTab() {
               Nincs jelenleg pair-cost arb a megadott küszöbök fölött.
             </div>
           ) : (
+            <div className="tbl-scroll">
             <table className="am-tbl">
               <thead>
                 <tr>
@@ -507,6 +510,7 @@ function PairCostTab() {
                 ))}
               </tbody>
             </table>
+            </div>
           )}
           <div style={{ marginTop: 12, fontFamily: "var(--mono)", fontSize: 10, color: "var(--muted)", lineHeight: 1.7 }}>
             ⚠ Execution: a két oldalt atomikusan kell venni (YES+NO együtt), majd resolution után az auto-claim.

@@ -117,6 +117,7 @@ function MarketPicker({ onSelect }: { onSelect: (tokenId: string, question: stri
     <div className="of-card">
       <div className="of-ct">Piac kiválasztása (kattints az elemzéshez)</div>
       {resolving && <div style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--warn)", padding: "4px 0" }}>Elemzés: {resolving}...</div>}
+      <div className="tbl-scroll">
       <table className="of-tbl">
         <thead><tr><th>Kérdés</th><th>YES</th><th>Vol 24h</th></tr></thead>
         <tbody>
@@ -144,6 +145,7 @@ function MarketPicker({ onSelect }: { onSelect: (tokenId: string, question: stri
           )}
         </tbody>
       </table>
+      </div>
     </div>
   );
 }

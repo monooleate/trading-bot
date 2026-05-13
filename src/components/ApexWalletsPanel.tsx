@@ -486,6 +486,7 @@ function LeaderboardTab({ bankroll }: { bankroll: number }) {
           <div className="aw-ct" style={{ margin: 0 }}>Top Wallets ({data?.count ?? 0}) – {window}</div>
           <button className="aw-btn" onClick={() => load(window)} disabled={loading}>{loading ? "..." : "⟳"}</button>
         </div>
+        <div className="tbl-scroll">
         <table className="aw-tbl">
           <thead>
             <tr><th>#</th><th>Wallet</th><th>PnL</th><th>Volume</th><th>Trades</th><th>Apex?</th></tr>
@@ -512,6 +513,7 @@ function LeaderboardTab({ bankroll }: { bankroll: number }) {
             })}
           </tbody>
         </table>
+        </div>
         <div className="aw-info" style={{ marginTop: 14 }}>
           <strong>Megjegyzés:</strong> A leaderboard PnL alapú rangsor. Sharpe és win rate számításhoz a Python script szükséges (<code>--consensus</code> mód), mivel az a wallet-enkénti trade history-t is lekéri.
         </div>
