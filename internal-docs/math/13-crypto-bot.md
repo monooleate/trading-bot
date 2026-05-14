@@ -504,26 +504,33 @@ végén dönt `shouldTrade = gates.every(g => g.passed)` — így a UI a
 teljes pass/fail listát megjeleníti a "Why?" panel-en. A `reason` mező
 az első bukó gate üzenetét hordozza, hogy a sor footer-en olvasható maradjon.
 
-### A 12 gate (2026-05-11 audit fix után)
+### A 15 gate (2026-05-14e cross-position consistency után)
 
 | # | Gate | Match rule | Default | Where to tune |
 |---|------|------------|---------|---------------|
 | 1 | **Session loss limit** | `sessionLoss < cfg.sessionLossLimit` | $20 | `SESSION_LOSS_LIMIT` env / Settings `sessionLossLimit` |
-| 2 | **Aktív signal források** | `signal.activeSignals ≥ 2` | 2 (hard-coded) | – (kódban) |
+| 2 | **Aktív signal források** | `signal.activeSignals ≥ minActiveSignals` | 2 (Loose) / 3 (Normal) / 5 (Strict) | Settings `cryptoMinActiveSignals` |
 | 3 | **Combiner confidence (\|p − 0.5\|)** ✦ | `\|finalProb − 0.5\| ≥ combinerConfidenceMin` | 0.05 | `COMBINER_CONFIDENCE_MIN` env / Settings `combinerConfidenceMin` |
-| 4 | **Combiner recommendation** ✦ | `signal.combinerRecommendation.startsWith("BUY")` | hard-coded | – (a `signal-combiner` `recommend()` outputja) |
-| 5 | **Resolution-risk gate** ✦ | `signal.tradeRecommendedByRisk !== false` | hard-coded | – (a `signal-combiner` `analyseResolutionRisk()` helper-éből) |
-| 6 | **Market cooldown** | `now - lastTrade(slug) ≥ cooldownSeconds * 1000` | 300s | `COOLDOWN_SECONDS` / Settings `cooldownSeconds` |
-| 7 | **Open interest** | `market.openInterest ≥ cfg.minOpenInterest` | $500 | `minOpenInterest` (kódban — nincs Settings knob) |
-| 8 | **Entry window** ⚠ | csak ha `market.openedAtEstimate != null`. `ageMs ∈ [start, end]` | [60s, 180s] | `BTC_ENTRY_WINDOW_*` env / Settings `btcEntryWindow*Ms` |
-| 9 | **OB imbalance konvergencia** | `signal.obImbalance.direction != decision.direction.opposite` | UP ≥ 1.80, DOWN ≤ 0.55 | `obImbalanceUpRatio` / `obImbalanceDownRatio` |
-| 10 | **Net edge ≥ küszöb** | `\|finalProb − marketPrice\| − roundtripFeePct ≥ edgeThreshold` | 15% (3.6% fee után) | `EDGE_THRESHOLD_CRYPTO` / Settings `edgeThreshold` |
-| 11 | **Kelly méret ≥ minimum** ✦ | `bankroll * kellyCapped ≥ minPositionSizeUSDC` | $0.50 | `MIN_POSITION_SIZE_USDC` env / Settings `minPositionSizeUSDC` |
-| 12 | **Kelly méret ≤ cap** (informational) | `min(kellyFraction, maxKellyFraction)` | 8% bankroll | `MAX_KELLY_FRACTION` / Settings `maxKellyFraction` |
+| 4 | **Combiner recommendation** ✦ | `!signal.combinerRecommendation.startsWith("SKIP")` | hard-coded | – (a `signal-combiner` `recommend()` outputja) |
+| 5 | **Combiner trust (WATCH + extrém edge)** ✦✦ | `!(rec === "WATCH" && grossEdge > watchExtremeEdgeThreshold)` | WATCH + 20%+ blokk | Settings `watchExtremeEdgeThreshold` |
+| 6 | **Resolution-risk gate** ✦ | `signal.tradeRecommendedByRisk !== false` | hard-coded | – (a `signal-combiner` `analyseResolutionRisk()` helper-éből) |
+| 7 | **Market cooldown** | `now - lastTrade(slug) ≥ cooldownSeconds * 1000` | 300s | `COOLDOWN_SECONDS` / Settings `cooldownSeconds` |
+| 8 | **Open interest** | `market.openInterest ≥ cfg.minOpenInterest` | $500 | `minOpenInterest` (kódban — nincs Settings knob) |
+| 9 | **Entry window** ⚠ | csak ha `market.openedAtEstimate != null`. `ageMs ∈ [start, end]` | [60s, 180s] | `BTC_ENTRY_WINDOW_*` env / Settings `btcEntryWindow*Ms` |
+| 10 | **OB imbalance konvergencia** | `signal.obImbalance.direction != decision.direction.opposite` | UP ≥ 1.80, DOWN ≤ 0.55 | `obImbalanceUpRatio` / `obImbalanceDownRatio` |
+| 11 | **Net edge ≥ küszöb** | `\|finalProb − marketPrice\| − roundtripFeePct ≥ edgeThreshold` | 15% (3.6% fee után) | `EDGE_THRESHOLD_CRYPTO` / Settings `edgeThreshold` |
+| 12 | **Sanity cap (gross edge ≤ cap)** ✦✦ | `grossEdge ≤ maxEdgeCap` | 40% | Settings `cryptoMaxEdgeCap` |
+| 13 | **Kelly méret ≥ minimum** ✦ | `bankroll * kellyCapped ≥ minPositionSizeUSDC` | $0.50 | `MIN_POSITION_SIZE_USDC` env / Settings `minPositionSizeUSDC` |
+| 14 | **Kelly méret ≤ cap** (informational) | `min(kellyFraction, maxKellyFraction)` | 8% bankroll | `MAX_KELLY_FRACTION` / Settings `maxKellyFraction` |
+| 15 | **Monotonicitás (egyéb nyitott pozíciók)** ✦✦✦ | `findMonotonicityViolation(cand, open BTC-above-K positions) === null` | hard-coded | – (cross-position-gates.mts) |
 
-✦ Új gate-ek a 2026-05-11 audit fixből (3 új konvergencia-gate + Kelly minimum gate). A korábbi 9 gate listából a régi "Kelly conviction (combiner > 0)" gate-et kivettem — a "Kelly méret ≥ minimum" (#11) funkcionálisan ekvivalens, csak a tényleges $ méreten ellenőriz, nem a 0-küszöbös conviction-en.
+✦ Új gate-ek a 2026-05-11 audit fixből (3 új konvergencia-gate + Kelly minimum gate). A korábbi 9 gate listából a régi "Kelly conviction (combiner > 0)" gate-et kivettem — a "Kelly méret ≥ minimum" (#13) funkcionálisan ekvivalens, csak a tényleges $ méreten ellenőriz, nem a 0-küszöbös conviction-en.
 
-⚠ Az **#8 entry window** csak rövid (5m/15m) BTC piacokon aktív. Daily piacokon idle, mert az `openedAtEstimate` null — ekkor a gate "n/a (daily market)" actual-lal és `passed: true`-val szerepel a listán, hogy Y = 12 stabil maradjon a UI-on.
+✦✦ Új gate-ek a 2026-05-12 expansion-ből: a Combiner trust + Sanity cap blokkolja az alacsony-IR kombinátor + extrém edge ("hallucinated alpha") és a > 40% gross-edge model-error eseteket. Részletek a 2026-05-12 changelog-ban.
+
+✦✦✦ Új gate a 2026-05-14e cross-position consistency sweep-ből — lásd §9.5 "Cross-market consistency gate (monotonicity)". Trigger: 2026-05-14 paper session 78K-NO @ 52% + 80K-YES @ 53% incidens.
+
+⚠ Az **#9 entry window** csak rövid (5m/15m) BTC piacokon aktív. Daily piacokon idle, mert az `openedAtEstimate` null — ekkor a gate "n/a (daily market)" actual-lal és `passed: true`-val szerepel a listán, hogy Y = 15 stabil maradjon a UI-on.
 
 ### A 3 új konvergencia-gate miértje (2026-05-11 audit)
 

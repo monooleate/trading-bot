@@ -116,20 +116,37 @@ A bot a crypto bot signal pipeline-ját ÚJRAHASZNÁLJA — nem külön logikát
 
 ## 4. Decision gates (`hyperliquid/decision-engine.mts:makeHlDecision`)
 
-A 8 gate sorrendben (short-circuit – első bukás reason). A `entryDecision`
-snapshot a `EntryDecisionSnapshot.gates[]` array-jébe szigorúan ezeket
-építi (`auto-trader/hyperliquid/index.mts:240-296`):
+A 15 gate sorrendben (a runner inline-ban evaluálja az összeset, non-short-circuit
+— `auto-trader/hyperliquid/index.mts:226-585`). A `entryDecision`
+snapshot a `EntryDecisionSnapshot.gates[]` array-jébe a teljes listát
+építi:
 
 | # | Gate | Forrás | Default | Bukás → reason |
 |---|------|--------|---------|----------------|
-| 1 | Session loss limit | `session.sessionLoss < config.sessionLossLimit` | $50 | `Session loss limit reached ($50)` |
-| 2 | Open positions ≤ max | `session.openPositions.length < maxOpenPositions` | 3 | `Max open positions (3) reached` |
-| 3 | Consecutive losses < limit | `session.consecutiveLosses < consecutiveLossLimit` | 3 | `3 consecutive losses — pause required` |
-| 4 | Coin cooldown | `cooldownMap[coin] !> now` | 300s | `<COIN> on cooldown` |
-| 5 | Per-coin uniqueness | `!session.openPositions.some(p => p.coin === coin)` | – | `Already have open <COIN> position` |
-| 6 | Aktív signal források | `signal.activeSignals >= 3` | ≥ 3/8 | `Only N/5 signals active` |
-| 7 | Resolution risk | `signal.resolutionCategory !== "SKIP"` | – | `Underlying market resolution risk = SKIP` |
-| 8 | Net edge ≥ küszöb | `(signal.edge − feePct) >= edgeThreshold[paperMode?paper:live]` | 0.12 paper / 0.18 live | `Net edge X% < Y% threshold` |
+| 1 | Coin cooldown | `cooldownMap[coin] !> now` | 300s | `<COIN> on cooldown` |
+| 2 | Signal forrás elérhető | `getHlSignalForCoin(coin) !== null` | – | `no signal` |
+| 3 | Volatility (RV) ≤ küszöb | `volatilityGate(coin, volGateRvPct)` | 120% RV/yr | `<COIN> RV X% > 120%` |
+| 4 | Session loss < limit | `session.sessionLoss < config.sessionLossLimit` | $50 | `Session loss limit reached ($50)` |
+| 5 | Open positions < max | `session.openPositions.length < maxOpenPositions` | 3 | `Max open positions (3) reached` |
+| 6 | Consecutive losses < limit | `session.consecutiveLosses < consecutiveLossLimit` | 3 | `3 consecutive losses — pause required` |
+| 7 | Coin nincs már nyitva | `!session.openPositions.some(p => p.coin === coin)` | – | `Already have open <COIN> position` |
+| 8 | **Directional-consistency (no LONG+SHORT same coin)** ✦ | `!session.openPositions.some(p => p.coin === coin && p.direction !== signal.direction)` | – | `Directional conflict: <DIR>-<COIN> már nyitva` |
+| 9 | Aktív signal források ≥ 3 | `signal.activeSignals >= minActiveSignals` | ≥ 3 (Loose 2, Strict 5) | `Only N/8 signals active (min 3)` |
+| 10 | Resolution risk ≠ SKIP | `signal.resolutionCategory !== "SKIP"` | – | `Underlying market resolution risk = SKIP` |
+| 11 | Net edge ≥ küszöb | `(signal.edge − feePct) >= edgeThreshold[paperMode?paper:live]` | 0.12 paper / 0.18 live | `Net edge X% < Y% threshold` |
+| 12 | Sanity cap (gross edge ≤ cap) | `signal.edge <= maxEdgeCap` | 40% | `Gross edge X% > sanity cap 40%` |
+| 13 | Combiner trust (WATCH + extrém edge) | `!(rec === "WATCH" && edge > watchExtremeEdgeThreshold)` | WATCH + 20%+ blokk | `Combiner trust: WATCH + X% edge` |
+| 14 | HL price elérhető | `getCurrentPrice(coin, paperMode) !== null` | – | `no HL price` |
+| 15 | Méret > 0 | `kellyToPerpSize(...).sizeCoins > 0` | – | `size rounds to zero` |
+
+✦ Új gate a 2026-05-14e cross-position consistency sweep-ből — lásd a §10-es technikai debt H6 tételét. A meglévő #7 "Coin nincs már nyitva" gate stricter (max 1 / coin); a #8 expliciten néven nevezi a LONG+SHORT-pár tilalmát, defense-in-depth + UI clarity.
+
+> **Megjegyzés:** a doc régebbi verziójában csak 8 gate szerepelt, mert a
+> `makeHlDecision()` short-circuit verziójára hivatkozott. A 2026-05-10
+> óta a runner inline non-short-circuit gate-pipeline-t használ
+> (HL_GATE_LABELS[15]), és minden scan row egyenlő hosszú gate-listát
+> küld a UI-nak. A `makeHlDecision()` ma a Net edge gate utáni
+> backup-verdict-et adja, ugyanazon a feltételeken.
 
 ### Vol gate (külön szakasz, MINDIG fut – paper + live parity)
 
