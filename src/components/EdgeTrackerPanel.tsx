@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, Fragment } from "react";
 import CalibrationHealthBadge from "./shared/CalibrationHealthBadge";
 
 // ─── Types (mirror backend) ─────────────────────────────
@@ -59,10 +59,21 @@ interface HistogramBin { lo: number; hi: number; count: number; }
 
 interface TradeRow {
   closedAt: string; openedAt: string; category: string;
-  market: string; direction: "YES" | "NO";
+  market: string; direction: "YES" | "NO" | "LONG" | "SHORT";
   entryPrice: number; exitPrice: number; shares: number;
   pnl: number; pnlPct: number;
   edgeAtEntry: number; predictedProb: number;
+}
+
+interface CalibrationView {
+  category: "crypto" | "hyperliquid";
+  useRealizedIC: boolean;
+  shrinkageK: number;
+  computedAt: string | null;
+  sampleSize: number;
+  priors:    Record<string, number>;
+  realized:  Record<string, { ic: number; n: number }>;
+  effective: Record<string, number>;
 }
 
 interface EdgeTrackerData {
@@ -77,6 +88,7 @@ interface EdgeTrackerData {
   heatmap: HeatmapCell[];
   distribution: HistogramBin[];
   trades: TradeRow[];
+  calibrationView?: CalibrationView | null;
 }
 
 // ─── Color tokens (match dashboardStyles) ───────────────
@@ -168,6 +180,7 @@ export default function EdgeTrackerPanel({ defaultCategory = "all" }: Props) {
           )}
 
           <SummaryCards s={data.summary} />
+          {data.calibrationView && <CalibrationViewCard view={data.calibrationView} />}
           <CumulativePnlChart points={data.cumulativePnl} />
           <div className="et-grid2">
             <CalibrationChart buckets={data.calibration} />
@@ -590,7 +603,7 @@ function TradeTable({ trades }: { trades: TradeRow[] }) {
       <div className="et-chart-header">
         <h3>Recent Trades ({trades.length})</h3>
       </div>
-      <div className="et-table-wrap">
+      <div className="et-table-wrap tbl-scroll">
         <table className="ec-tbl">
           <thead>
             <tr>
@@ -599,22 +612,80 @@ function TradeTable({ trades }: { trades: TradeRow[] }) {
             </tr>
           </thead>
           <tbody>
-            {trades.map((t, i) => (
-              <tr key={i}>
-                <td>{new Date(t.closedAt).toLocaleDateString()} {new Date(t.closedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</td>
-                <td><span className="ec-tag">{t.category}</span></td>
-                <td className="ec-mq">{t.market}</td>
-                <td className={t.direction === "YES" ? "ec-pos" : "ec-neg"}>{t.direction}</td>
-                <td>{(t.edgeAtEntry * 100).toFixed(1)}%</td>
-                <td>{(t.entryPrice * 100).toFixed(0)}¢</td>
-                <td>{(t.exitPrice * 100).toFixed(0)}¢</td>
-                <td className={t.pnl >= 0 ? "ec-pos" : "ec-neg"}>
-                  {t.pnl >= 0 ? "+" : ""}${t.pnl.toFixed(2)}
-                </td>
-              </tr>
-            ))}
+            {trades.map((t, i) => {
+              const isYesLike = t.direction === "YES" || t.direction === "LONG";
+              // Polymarket markets price in [0,1] (¢); HL perp prices in USD.
+              const isBinaryPrice = t.entryPrice >= 0 && t.entryPrice <= 1;
+              const fmtPrice = (p: number) =>
+                isBinaryPrice
+                  ? `${(p * 100).toFixed(0)}¢`
+                  : p >= 1000 ? `$${p.toFixed(0)}` : `$${p.toFixed(2)}`;
+              const pnl = Number.isFinite(t.pnl) ? t.pnl : 0;
+              return (
+                <tr key={i}>
+                  <td>{new Date(t.closedAt).toLocaleDateString()} {new Date(t.closedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</td>
+                  <td><span className="ec-tag">{t.category}</span></td>
+                  <td className="ec-mq">{t.market}</td>
+                  <td className={isYesLike ? "ec-pos" : "ec-neg"}>{t.direction}</td>
+                  <td>{((t.edgeAtEntry ?? 0) * 100).toFixed(1)}%</td>
+                  <td>{fmtPrice(t.entryPrice)}</td>
+                  <td>{fmtPrice(t.exitPrice)}</td>
+                  <td className={pnl >= 0 ? "ec-pos" : "ec-neg"}>
+                    {pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
+      </div>
+    </div>
+  );
+}
+
+// ─── Calibration view (realized vs prior IC) ────────────
+
+function CalibrationViewCard({ view }: { view: CalibrationView }) {
+  const signals = Object.keys(view.priors);
+  const ts = view.computedAt
+    ? new Date(view.computedAt).toLocaleString([], { dateStyle: "short", timeStyle: "short" })
+    : "—";
+  return (
+    <div className="et-chart">
+      <div className="et-chart-header">
+        <h3>Signal IC calibration ({view.category})</h3>
+        <span className={`et-cal-toggle ${view.useRealizedIC ? "et-cal-on" : "et-cal-off"}`}>
+          {view.useRealizedIC ? "ON" : "OFF"} · K={view.shrinkageK} · N={view.sampleSize} · {ts}
+        </span>
+      </div>
+      <div className="et-cal-grid">
+        <div className="et-cal-head et-cal-name">Signal</div>
+        <div className="et-cal-head">Prior</div>
+        <div className="et-cal-head">Realized (n)</div>
+        <div className="et-cal-head">Effective</div>
+        {signals.map((s) => {
+          const prior = view.priors[s] ?? 0;
+          const r = view.realized[s];
+          const eff = view.effective[s] ?? prior;
+          const delta = eff - prior;
+          return (
+            <Fragment key={s}>
+              <div className="et-cal-name">{s.replace("_", " ")}</div>
+              <div className="et-cal-val">{(prior * 100).toFixed(1)}%</div>
+              <div className="et-cal-val">
+                {r && r.n > 0 ? `${(r.ic * 100).toFixed(1)}% (${r.n})` : <span className="et-cal-muted">—</span>}
+              </div>
+              <div className={`et-cal-val ${delta > 0.005 ? "ec-pos" : delta < -0.005 ? "ec-neg" : ""}`}>
+                {(eff * 100).toFixed(1)}%
+              </div>
+            </Fragment>
+          );
+        })}
+      </div>
+      <div className="et-chart-footer">
+        {view.useRealizedIC
+          ? `Live calibrált — a combiner az 'Effective' oszlopot használja (priors keverve a realized IC-vel, K=${view.shrinkageK} shrinkage).`
+          : `Statikus prior aktív — kapcsold be: Settings → Signal calibration → "Use realized IC". Sample-size növelése csökkenti a shrinkage súlyát (N=${view.sampleSize}, K=${view.shrinkageK} → realized weight ≈ ${((view.sampleSize / Math.max(1, view.sampleSize + view.shrinkageK)) * 100).toFixed(0)}%).`}
       </div>
     </div>
   );
@@ -701,6 +772,17 @@ const styles = `
 .et-hist-bar { width: 100%; border-radius: 2px 2px 0 0; opacity: 0.85; transition: height 0.4s ease; }
 .et-hist-axis { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 9px; color: var(--muted); padding: 6px 4px 0; }
 
+.et-cal-toggle { font-family: var(--mono); font-size: 9.5px; padding: 3px 8px; border-radius: 10px; letter-spacing: 0.06em; }
+.et-cal-on  { background: rgba(200,241,53,0.12); color: #c8f135; border: 1px solid rgba(200,241,53,0.5); }
+.et-cal-off { background: rgba(241,160,53,0.10); color: #f1a035; border: 1px solid rgba(241,160,53,0.45); }
+.et-cal-grid { display: grid; grid-template-columns: 1.6fr 1fr 1.4fr 1fr; gap: 6px 14px; font-family: var(--mono); font-size: 11px; padding: 6px 0; }
+.et-cal-head { color: var(--muted); font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.08em; border-bottom: 1px solid var(--border); padding-bottom: 4px; }
+.et-cal-name { color: var(--text); text-transform: capitalize; }
+.et-cal-val  { color: var(--text); text-align: left; }
+.et-cal-muted { color: var(--muted); }
+@media (max-width: 480px) {
+  .et-cal-grid { grid-template-columns: 1.4fr 0.9fr 1.2fr 1fr; font-size: 10px; gap: 4px 8px; }
+}
 .et-table-wrap { overflow-x: auto; }
 .et-empty { text-align: center; padding: 30px; color: var(--muted); font-family: var(--mono); font-size: 11px; }
 

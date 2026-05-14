@@ -15,6 +15,52 @@ function stdDev(xs: number[]): number {
 }
 
 /**
+ * Weighted Pearson correlation. Same contract as `pearsonCorrelation` but
+ * each pair (xs[i], ys[i]) is weighted by ws[i]. Used by realized-IC
+ * recalibration to apply exponential decay over a trade history (recent
+ * trades count more than old ones). Weights of zero / NaN drop the pair.
+ *
+ * If `ws` is omitted or all-zero, falls back to the unweighted formula
+ * (equivalent to ws = [1,1,...]).
+ */
+export function weightedPearsonCorrelation(
+  xs: number[],
+  ys: number[],
+  ws: number[],
+): number {
+  if (xs.length !== ys.length || xs.length !== ws.length || xs.length < 2) return 0;
+  let sumW = 0;
+  let mx = 0;
+  let my = 0;
+  // First pass: weighted means.
+  for (let i = 0; i < xs.length; i++) {
+    if (
+      !Number.isFinite(xs[i]) || !Number.isFinite(ys[i]) || !Number.isFinite(ws[i]) || ws[i] <= 0
+    ) continue;
+    sumW += ws[i];
+    mx   += ws[i] * xs[i];
+    my   += ws[i] * ys[i];
+  }
+  if (sumW <= 0) return 0;
+  mx /= sumW;
+  my /= sumW;
+  // Second pass: weighted covariance + variances.
+  let num = 0, dx = 0, dy = 0;
+  for (let i = 0; i < xs.length; i++) {
+    if (
+      !Number.isFinite(xs[i]) || !Number.isFinite(ys[i]) || !Number.isFinite(ws[i]) || ws[i] <= 0
+    ) continue;
+    const a = xs[i] - mx;
+    const b = ys[i] - my;
+    num += ws[i] * a * b;
+    dx  += ws[i] * a * a;
+    dy  += ws[i] * b * b;
+  }
+  const denom = Math.sqrt(dx * dy);
+  return denom === 0 ? 0 : num / denom;
+}
+
+/**
  * Pearson correlation between two numeric arrays.
  * Returns 0 if either array is constant, length mismatches, or fewer than
  * 2 finite pairs remain after dropping NaN/Infinity. Pairs are kept
@@ -186,30 +232,49 @@ export function computeCumulativePnl(trades: ClosedTrade[]): CumulativePoint[] {
     const t = trades[i];
     actualCum += t.pnl;
 
-    // Random baseline: expected PnL if outcome was 50/50
-    // E[pnl] = 0.5 * (1 - entry) * shares + 0.5 * (-entry) * shares
-    //       = shares * 0.5 * (1 - 2*entry)
-    const costBasis = t.shares * t.entryPrice;
-    const randomExpected = t.shares * 0.5 * (1 - 2 * t.entryPrice);
-    randomCum += randomExpected;
+    // The random/EV baselines below use the Polymarket-binary payout model
+    // (entryPrice ∈ [0,1] is the YES probability, shares × (1−entryPrice)
+    // is the win payoff). For directional perp trades (HL) entryPrice is a
+    // USD coin price (e.g. 80531) and the formula would blow the chart
+    // scale to millions. For perp trades the "random direction" baseline
+    // is 0 (a coin-flip directional bet has zero expected return before
+    // fees) and we don't have enough info to model EV without knowing
+    // typical price-move magnitude, so we collapse EV onto the actual
+    // line. This keeps the chart readable for HL while preserving the
+    // original Polymarket semantics for crypto / weather / sports.
+    const isBinary = t.entryPrice >= 0 && t.entryPrice <= 1;
 
-    // EV baseline: if predicted prob is correct (direction-aware).
-    //
-    // Fix #F (2026-05-11): the legacy formula used `predictedProb` (which
-    // is always the YES probability) directly as the win-probability,
-    // ignoring `t.direction`. For NO trades the actual win-probability is
-    // `1 - predictedProb` — without this correction the EV baseline
-    // chart pointed in the wrong direction for every NO trade, making
-    // the trader's signal-fidelity comparison meaningless on mixed sides.
-    if (t.predictedProb !== undefined) {
-      const winProb =
-        t.direction === "NO" ? 1 - t.predictedProb : t.predictedProb;
-      const winPayoff = t.shares * (1 - t.entryPrice);
-      const lossPayoff = -costBasis;
-      const evExpected = winProb * winPayoff + (1 - winProb) * lossPayoff;
-      evCum += evExpected;
+    if (isBinary) {
+      // Random baseline: expected PnL if outcome was 50/50
+      // E[pnl] = 0.5 * (1 - entry) * shares + 0.5 * (-entry) * shares
+      //       = shares * 0.5 * (1 - 2*entry)
+      const costBasis = t.shares * t.entryPrice;
+      const randomExpected = t.shares * 0.5 * (1 - 2 * t.entryPrice);
+      randomCum += randomExpected;
+
+      // EV baseline: if predicted prob is correct (direction-aware).
+      //
+      // Fix #F (2026-05-11): the legacy formula used `predictedProb` (which
+      // is always the YES probability) directly as the win-probability,
+      // ignoring `t.direction`. For NO trades the actual win-probability is
+      // `1 - predictedProb` — without this correction the EV baseline
+      // chart pointed in the wrong direction for every NO trade, making
+      // the trader's signal-fidelity comparison meaningless on mixed sides.
+      if (t.predictedProb !== undefined) {
+        // SHORT mirrors NO for perp trades expressed in this synthetic
+        // binary basis (treated identically by the win-prob inversion).
+        const isYesLike = t.direction === "YES" || (t.direction as any) === "LONG";
+        const winProb = isYesLike ? t.predictedProb : 1 - t.predictedProb;
+        const winPayoff = t.shares * (1 - t.entryPrice);
+        const lossPayoff = -costBasis;
+        const evExpected = winProb * winPayoff + (1 - winProb) * lossPayoff;
+        evCum += evExpected;
+      } else {
+        evCum += t.pnl; // fall back to actual
+      }
     } else {
-      evCum += t.pnl; // fall back to actual
+      // Non-binary venue (HL perp etc.): random ≡ 0 cumulative, EV ≡ actual.
+      evCum += t.pnl;
     }
 
     points.push({
@@ -243,10 +308,11 @@ export function computeCalibration(trades: ClosedTrade[]): CalibrationBucket[] {
     const lo = edges[i];
     const hi = edges[i + 1];
     // Filter trades whose EFFECTIVE prob (prob of the direction taken) falls in bucket
-    // For YES trades: predictedProb; for NO: 1 - predictedProb
+    // For YES/LONG trades: predictedProb; for NO/SHORT: 1 - predictedProb
+    const isYesLike = (d: any) => d === "YES" || d === "LONG";
     const inBucket = trades.filter((t) => {
       if (t.predictedProb === undefined) return false;
-      const p = t.direction === "YES" ? t.predictedProb : 1 - t.predictedProb;
+      const p = isYesLike(t.direction) ? t.predictedProb : 1 - t.predictedProb;
       return p >= lo && p < hi;
     });
 
@@ -262,7 +328,7 @@ export function computeCalibration(trades: ClosedTrade[]): CalibrationBucket[] {
       continue;
     }
 
-    const predictedAvg = mean(inBucket.map((t) => t.direction === "YES" ? t.predictedProb! : 1 - t.predictedProb!));
+    const predictedAvg = mean(inBucket.map((t) => isYesLike(t.direction) ? t.predictedProb! : 1 - t.predictedProb!));
     const actualWinRate = inBucket.filter((t) => t.pnl > 0).length / inBucket.length;
     const deviation = actualWinRate - predictedAvg;
 

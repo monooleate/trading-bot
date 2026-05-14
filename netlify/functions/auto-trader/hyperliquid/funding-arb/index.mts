@@ -101,12 +101,15 @@ async function runFundingArbInner(): Promise<any> {
         maxDrawdownPct:    readyOv.liveReadyMaxDrawdownPct,
       } as any,
     });
-    const force = shouldForcePaper(config.paperMode, liveReadiness);
+    const overrideEnabled = readyOv.liveReadyOverrideEnabled === 1;
+    const force = shouldForcePaper(config.paperMode, liveReadiness, overrideEnabled);
     if (force.forcePaper) {
       log("ERROR", true, { liveBlocked: true, category: "funding-arb", reason: force.reason });
       const failed = liveReadiness.gates.filter((g) => g.applicable && !g.passed).map((g) => g.label);
       await alertLiveBlocked("funding-arb", force.reason!, failed);
       config.paperMode = true;
+    } else if (force.overrideActive) {
+      log("ERROR", false, { liveOverride: true, category: "funding-arb", reason: "OVERRIDE ACTIVE — readiness gate bypassed" });
     }
   } catch {}
 

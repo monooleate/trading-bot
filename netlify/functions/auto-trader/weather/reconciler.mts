@@ -322,6 +322,22 @@ export async function runWeatherReconciler(paperMode: boolean = true): Promise<R
 
   if (settled > 0) {
     await saveSession(session, "weather");
+    // Persist realized IC calibration so the Coach-mode recommendations
+    // engine has fresh per-signal IC numbers. Weather uses the synthetic
+    // `forecast_edge` signal — the only entry the calibration record will
+    // populate for this category, but it's enough to drive the
+    // recommendations gate. Half-life optional; honors operator Setting.
+    try {
+      const cal: any = await import("../shared/signal-calibration.mts");
+      let halfLifeTrades: number | null = null;
+      try {
+        const settingsMod: any = await import("../../trader-settings.mts");
+        const ov = (await settingsMod.loadRuntimeOverrides()) ?? {};
+        const hl = (ov as any).icHalfLifeTrades;
+        if (typeof hl === "number" && Number.isFinite(hl) && hl > 0) halfLifeTrades = hl;
+      } catch {}
+      await cal.persistCalibration("weather", session.closedTrades, { halfLifeTrades });
+    } catch { /* best-effort */ }
   }
 
   return {

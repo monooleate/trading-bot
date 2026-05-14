@@ -24,6 +24,7 @@ export interface LiveReadinessReport {
   gatesTotal:  number;
   gates:       ReadinessGate[];
   reason:      string;
+  overrideActive?: boolean;   // user has flipped liveReadyOverrideEnabled=1
   summary?: {
     tradeCount:   number;
     winRate:      number;
@@ -83,17 +84,31 @@ export default function LiveReadinessBadge({
   if (!data) return null;
 
   const isCompact = variant === "compact";
-  const tone = data.ready ? "ready" : "not-ready";
+  // Override takes precedence: when the operator has flipped the master
+  // override on, the gate state below is informational only — the bot
+  // will trade live regardless. Tone reflects that.
+  const tone = data.overrideActive ? "override" : data.ready ? "ready" : "not-ready";
+  const headline = data.overrideActive
+    ? "OVERRIDE — LIVE"
+    : data.ready
+    ? "LIVE-READY"
+    : "PAPER ONLY";
 
   return (
     <div className={`lrb lrb-${tone} ${isCompact ? "lrb-compact" : "lrb-full"}`}>
       <div className="lrb-head">
         <span className="lrb-dot" />
-        <span className="lrb-label">{data.ready ? "LIVE-READY" : "PAPER ONLY"}</span>
+        <span className="lrb-label">{headline}</span>
         <span className="lrb-count">
           {data.gatesPassed}/{data.gatesTotal} gates
         </span>
       </div>
+      {data.overrideActive && (
+        <div className="lrb-override-warn">
+          ⚠ Readiness gate bypassed via Settings → Live readiness → "Override readiness gate".
+          Bot trades LIVE regardless of paper-validation gates. Turn off when no longer needed.
+        </div>
+      )}
       {!isCompact && (
         <>
           <div className="lrb-reason">{data.reason}</div>
@@ -123,6 +138,16 @@ export default function LiveReadinessBadge({
         .lrb-compact { padding: 6px 10px; font-size: 10px; margin-bottom: 8px; }
         .lrb-ready     { background: #0f1f00; border-color: #c8f135; color: #c8f135; }
         .lrb-not-ready { background: #1f1500; border-color: #f1a035; color: #f1a035; }
+        .lrb-override  { background: #1f0008; border-color: #f13535; color: #f13535; }
+        .lrb-override-warn {
+          background: rgba(241, 53, 53, 0.12);
+          border: 1px solid rgba(241, 53, 53, 0.35);
+          border-radius: 3px;
+          padding: 6px 8px;
+          font-size: 10px;
+          color: #ffb0b0;
+          line-height: 1.4;
+        }
         .lrb-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
         .lrb-dot { width: 9px; height: 9px; border-radius: 50%; background: currentColor; box-shadow: 0 0 6px currentColor; }
         .lrb-label { font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; }

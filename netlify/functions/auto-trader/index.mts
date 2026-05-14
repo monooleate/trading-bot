@@ -300,7 +300,7 @@ async function runCryptoTrader(
     if (typeof ov.obImbalanceUpRatio    === "number") obUp                 = ov.obImbalanceUpRatio;
     if (typeof ov.obImbalanceDownRatio  === "number") obDown               = ov.obImbalanceDownRatio;
     if (typeof ov.btcMinPriceBand       === "number") btcMinPriceBand      = ov.btcMinPriceBand;
-    for (const k of ["liveReadyMinTrades", "liveReadyMinWinRate", "liveReadyMinIC", "liveReadyMaxCalibDev", "liveReadyMinSharpe", "liveReadyMaxDrawdownPct", "bonferroniAlpha", "bonferroniGoodMultiplier"]) {
+    for (const k of ["liveReadyMinTrades", "liveReadyMinWinRate", "liveReadyMinIC", "liveReadyMaxCalibDev", "liveReadyMinSharpe", "liveReadyMaxDrawdownPct", "liveReadyOverrideEnabled", "bonferroniAlpha", "bonferroniGoodMultiplier"]) {
       if (typeof ov[k] === "number") readyOv[k] = ov[k];
     }
   } catch {}
@@ -325,7 +325,8 @@ async function runCryptoTrader(
       maxDrawdownPct:    readyOv.liveReadyMaxDrawdownPct,
     } as any,
   });
-  const cryptoForce = shouldForcePaper(config.paperMode, cryptoReadiness);
+  const overrideEnabled = readyOv.liveReadyOverrideEnabled === 1;
+  const cryptoForce = shouldForcePaper(config.paperMode, cryptoReadiness, overrideEnabled);
   if (cryptoForce.forcePaper) {
     config.paperMode = true;
     if (!session.calibrationAlertSentAt) {
@@ -335,6 +336,13 @@ async function runCryptoTrader(
       session = { ...session, calibrationAlertSentAt: new Date().toISOString() };
       await saveSession(session);
     }
+  } else if (cryptoForce.overrideActive && !session.calibrationAlertSentAt) {
+    // Audit log: user has consciously bypassed the readiness gate. One
+    // Telegram alarm per session so they don't forget the override is on.
+    log("ERROR", false, { liveOverride: true, category: "crypto", reason: "OVERRIDE ACTIVE — readiness gate bypassed" });
+    await alertLiveBlocked("crypto", "OVERRIDE ACTIVE — bot trades LIVE despite readiness gate", ["liveReadyOverrideEnabled=1"]).catch(() => {});
+    session = { ...session, calibrationAlertSentAt: new Date().toISOString() };
+    await saveSession(session);
   }
 
   // Helper: persists the final result snapshot into the run-state store and
@@ -369,6 +377,21 @@ async function runCryptoTrader(
         if (last && last.market === res.market) {
           await alertTradeClosed(config.paperMode, last, session.sessionPnL, session.openPositions.length);
         }
+      }
+      // Recompute + persist realized IC calibration when new trades closed.
+      // Cheap (O(N × signals)) so we always do it on close; the combiner
+      // decides whether to BLEND it via the `useRealizedIC` Settings knob.
+      // Pass the half-life from Settings so the persisted record reflects
+      // the operator's chosen recency weighting (default null = uniform).
+      try {
+        const cal: any = await import("./shared/signal-calibration.mts");
+        const halfLifeOv = (readyOv as any).icHalfLifeTrades;
+        const halfLifeTrades: number | null =
+          typeof halfLifeOv === "number" && Number.isFinite(halfLifeOv) && halfLifeOv > 0
+            ? halfLifeOv : null;
+        await cal.persistCalibration("crypto", session.closedTrades, { halfLifeTrades });
+      } catch (err: any) {
+        log("ERROR", config.paperMode, { calibration: "persist-failed", category: "crypto", error: err?.message });
       }
     }
   }
@@ -867,6 +890,9 @@ async function getStatus(config: ReturnType<typeof getTraderConfig>, category: s
     simVersionExpected: category === "crypto" ? PAPER_SIM_VERSION : null,
     thresholds,
   });
+  // Surface override state for the UI even on the read-only status path
+  // (so the badge can show "OVERRIDE" without waiting for a cron tick).
+  base.liveReadiness.overrideActive = readyOv.liveReadyOverrideEnabled === 1;
 
   // Surface weather-specific live status: lastRun timestamp, currently-
   // scanning flag, and the most recent run summary. Powers the UI badge.

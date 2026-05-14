@@ -98,6 +98,53 @@ A Polymarket napi-max hőmérsékleti piacai **negRisk események**: egy `(váro
 | **NOAA** | `api.weather.gov/points/{lat,lon}` → `forecastHourly` | Csak US-i városokra extra signal | `User-Agent` header kötelező, °F-ban ad értéket |
 | **Aviation Weather METAR** | `aviationweather.gov/api/data/metar` | Fallback settlement, DEB feedback | `ids=<ICAO>&format=json&hours=36`. T-group remark-ban van a precíz tenths-°C érték |
 
+> **Megjegyzés:** **Minden 4 forrás public + zéró-auth** — egyetlen API-kulcs sem szükséges. Open-Meteo: 10 000 hívás/nap/IP rate limit (bőven elég 24 város × 4 tick/óra = 2 304 hívás/nap). NOAA + METAR: `User-Agent` header kötelező (hardcoded `"EdgeCalc-AutoTrader/1.0"`), különben 403. A `USE_ENSEMBLE` env nem auth, csak feature-flag.
+
+### 3.B Opcionális adatforrás-upgrade-ek (jövőbeli fejlesztés)
+
+A fenti 4-forrásos pipeline a paper trade-eken validáltan működik (2 closed trade real Polymarket resolution-on, 2026-05-10..13). Az alábbiak **NICE-TO-HAVE** upgrade-ek, amelyek **nem precondition** a live élesítéshez — a mai pipeline elég a sub-$1 000 weather trading-hez.
+
+#### (a) ECMWF közvetlen API — teljes 51-tagú ensemble
+
+- **Endpoint:** [`api.ecmwf.int`](https://api.ecmwf.int) (ECMWF Web API + MARS), saját kulcs.
+- **Mit nyer:** A jelenleg fetchelt `ecmwf_ifs025` az Open-Meteo-n keresztül **csak a determinisztikus IFS futás**. A közvetlen API a teljes 51-tagú ECMWF-ENS-t adja — ezt második ensemble-forrásként a `fetchEnsemble` mellé bekötve javul a σ-becslés (jelenleg σ csak GFS 31-tagra épül, az ECMWF-perturbáció zaja nem mérhető).
+- **Költség:** akadémiai use case-re ingyenes (jelszó-igénylés ~1 hét átfutás), kereskedelmi célra ~€2 000/hó MARS subscription.
+- **Implementáció:** új modul `ecmwf-ensemble.mts` az `ensemble-forecast.mts` mintájára, és a `forecast-engine.mts` `Promise.all`-jában 5. fetch.
+- **Becsült edge-növekedés:** +2–4% IC tail-bucket-eken (a kontinentális európai városokon szisztematikusan jobb: Madrid, Milan, Munich, Paris, Ankara).
+- **Új env:** `ECMWF_API_KEY` + `ECMWF_API_EMAIL` (sajátkulcs-tárolás Netlify env-ben).
+- **Verdict:** **legnagyobb edge-impact / mérsékelt komplexitás.** Akadémiai kulcsra érdemes várni; addig az Open-Meteo deterministic IFS marad.
+
+#### (b) NOAA GFS GRIB2 közvetlen — bypass Open-Meteo aggregátort
+
+- **Forrás:** [`noaa-gfs-bdp-pds`](https://registry.opendata.aws/noaa-gfs-bdp-pds/) S3 public bucket, zéró auth, zéró rate limit.
+- **Mit nyer:** Az Open-Meteo ~5–15 perces késéssel szervírozza a fresh GFS futást (saját parsing-batch a háttérben). A közvetlen GRIB2 pull a futás után ~5 perccel kapja meg az adatot → frissebb model-edge, kevesebb model-lag (lásd `model-lag-detector.mts`).
+- **Költség:** S3 transfer díj minimális (egy állomásra fókuszált GRIB2 ~0.5 MB / futás × 4 futás/nap × 24 város ≈ $0.05/hó). Zéró API-kulcs.
+- **Implementáció:** GRIB2 parser kell — `grib2-simple` npm modul vagy `wgrib2` CLI binary. A Netlify Functions 10s timeout + cold start miatt a CLI-eszköz problémás; pure-JS parser használata feasible, de overhead jelentős.
+- **Becsült edge-növekedés:** +5–10 perc model-freshness window-szélesedés, ~+1–2% extra reaktivitás. Marginális, hacsak nem 15-perces market-eken futunk.
+- **Verdict:** **csak Hetzner-migráció (C1) után érdemes**, párhuzamosan a WebSocket-feedekkel. Netlify-on a parser overhead felemészti a freshness-nyereséget.
+
+#### (c) Kereskedelmi időjárás-szolgáltatók
+
+- **Jelöltek:** Tomorrow.io, Visual Crossing, AccuWeather Enterprise, Weather Underground PWS.
+- **Költség:** $50–500/hó tier-től függően.
+- **Mit nyer:** Jobb retrospektív validáció (10+ év historikus modell-output IC-kalibrációhoz), saját proprietary ensemble (pl. Tomorrow.io a Pangaea-modell-jét keveri GFS+ECMWF-fel), néhol sűrűbb update frequency.
+- **Verdict:** **NEM ajánlott a jelenlegi skálán.** A GFS+ECMWF+DEB-blend forecast-minősége nem érdemben rosszabb a kereskedelmi szolgáltatóknál a 24–72h-os horizonton. A $50–500/hó költség csak ROI-pozitív, ha az aggregált weather-trade volume > $5 000/hó. Jelenleg a paper-mode bankroll $100 → 50–100x volume-növekedés kell hozzá.
+- **Kivétel:** ha multi-day market-ekre (3–7 nap előre) bővítünk, és a 7-day GFS skill-drop kritikus lesz → akkor a Tomorrow.io "Beyond Tomorrow" tier (~$250/hó) megfontolható.
+
+#### Mit NE csináljunk
+
+- ❌ **Multiple Open-Meteo accounts a rate limit kerülésére.** A 10 000 hívás/nap/IP bőven elég, +4× headroom van.
+- ❌ **OpenWeatherMap.** Pontatlan modell, korlátozott update freq, $40/hó. Strikt rosszabb az Open-Meteo-nál (egyező GFS/ECMWF backend, gyengébb post-processing).
+- ❌ **GFS GRIB2 saját parsing Netlify Functions-on.** A 10s timeout + cold start + parser-init nem fér bele biztonságosan.
+
+#### Prioritási sorrend (ha valamikor erőforrás lesz rá)
+
+1. **(a) ECMWF közvetlen** — legnagyobb edge-impact, akadémiai kulcs ingyenes, ~3 nap implementáció.
+2. **(b) NOAA GFS GRIB2** — csak C1 (Hetzner) után, mert Netlify-on a parser overhead = freshness-nyereség.
+3. **(c) Kereskedelmi szolgáltató** — csak skálázódás után ($5k+/hó volume) vagy multi-day market-bővülés esetén.
+
+**Tracking:** master-plan.md `🟢 NICE-TO-HAVE` 13. tétel hivatkozik vissza erre a szekcióra.
+
 ---
 
 ## 4. Forecast engine — ensemble matek

@@ -69,8 +69,11 @@ export async function getHlSignalForCoin(coin: HlCoin): Promise<HlSignalResult |
   if (!slug) return null;
 
   try {
+    // `&category=hyperliquid` opts this call into the realized-IC blend
+    // path when Settings → Signal calibration → "Use realized IC" is ON.
+    // Without the toggle the combiner uses static priors as before.
     const r = await fetch(
-      `${FN}/signal-combiner?slug=${encodeURIComponent(slug)}`,
+      `${FN}/signal-combiner?slug=${encodeURIComponent(slug)}&category=hyperliquid`,
       { signal: AbortSignal.timeout(TIMEOUT) },
     );
     if (!r.ok) return null;

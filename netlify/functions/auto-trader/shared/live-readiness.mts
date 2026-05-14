@@ -88,6 +88,11 @@ export interface LiveReadinessReport {
     simVersionExpected: number | null;
   };
   reason: string;                       // one-line human-readable summary
+  // Override state (set by `shouldForcePaper`, surfaced to the UI):
+  // true means the operator has flipped `liveReadyOverrideEnabled=1` and
+  // the bot is bypassing the readiness gate. Even when the gate would
+  // have failed, the bot trades live.
+  overrideActive?: boolean;
 }
 
 interface ComputeArgs {
@@ -243,16 +248,31 @@ export function computeLiveReadiness(args: ComputeArgs): LiveReadinessReport {
 // Convenience: if the trader is configured for live mode but readiness is
 // not OK, this returns the canonical paper-mode-fallback decision the cron
 // path should enforce. Centralised here so all traders use the same rule.
+//
+// `overrideEnabled` (Settings → Live readiness → "Override readiness gate"):
+// when true AND the bot is configured for live, skip the gate evaluation
+// entirely. The report is annotated with `overrideActive=true` so the UI
+// can surface this state, but the bot is NOT forced back to paper.
 export function shouldForcePaper(
   configuredPaperMode: boolean,
   readiness: LiveReadinessReport,
-): { forcePaper: boolean; reason: string | null } {
-  if (configuredPaperMode) return { forcePaper: false, reason: null }; // already paper, nothing to enforce
-  if (readiness.ready) return { forcePaper: false, reason: null };
+  overrideEnabled: boolean = false,
+): { forcePaper: boolean; reason: string | null; overrideActive: boolean } {
+  if (configuredPaperMode) return { forcePaper: false, reason: null, overrideActive: false }; // already paper, nothing to enforce
+  if (overrideEnabled) {
+    readiness.overrideActive = true;
+    return {
+      forcePaper: false,
+      reason: null,
+      overrideActive: true,
+    };
+  }
+  if (readiness.ready) return { forcePaper: false, reason: null, overrideActive: false };
   return {
     forcePaper: true,
     reason:
       `Live trading blocked by readiness gate: ${readiness.reason} ` +
       `(${readiness.gatesPassed}/${readiness.gatesTotal} gates passed)`,
+    overrideActive: false,
   };
 }

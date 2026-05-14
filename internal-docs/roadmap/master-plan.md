@@ -14,7 +14,7 @@
 > alapján készült. Claude Code-nak átadható, prioritásokkal ellátott
 > fejlesztési terv.
 >
-> **Utolsó státusz-frissítés:** 2026-05-11
+> **Utolsó státusz-frissítés:** 2026-05-14
 
 ---
 
@@ -558,6 +558,21 @@ amiket az audit talált meg:
 12. **HLP Vault auto-deposit**
     Bankroll-arány-tartó cron ami a HL bankroll 40%-át passzív yield-re
     küldi HLP-be. Manuálisan ma is működik.
+
+13. **Weather forecast-forrás upgrade-ek**
+    A jelenlegi 4-forrásos pipeline (Open-Meteo GFS + ECMWF + NOAA + METAR)
+    100%-ban ingyenes és validált. 3 opcionális továbbfejlesztés érhető el,
+    részletes spec: [`../math/16-weather-bot.md` §3.B](../math/16-weather-bot.md#3b-opcionális-adatforrás-upgrade-ek-jövőbeli-fejlesztés).
+    - (a) **ECMWF közvetlen API** — teljes 51-tagú ensemble (akadémiai kulcs
+      ingyenes, ~€2k/hó kereskedelmi). +2-4% IC európai városokon. ~3 nap.
+    - (b) **NOAA GFS GRIB2 közvetlen** — S3 public bucket, +5-10 perc
+      freshness. **Csak C1 (Hetzner) után**, mert Netlify-on a parser-overhead
+      felemészti a nyereséget.
+    - (c) **Kereskedelmi szolgáltató** (Tomorrow.io / Visual Crossing) —
+      $50-500/hó. **Csak ha aggregált volume > $5k/hó** vagy multi-day
+      market-bővülés esetén.
+
+    Prioritás: (a) legnagyobb edge-impact, (b) Hetzner-függő, (c) skála-függő.
 
 ---
 

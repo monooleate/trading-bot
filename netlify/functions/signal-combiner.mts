@@ -993,7 +993,16 @@ async function getPairsSpreadSignal(market: MarketInfo): Promise<{ prob: number 
 }
 
 // ─── KOMBINÁTOR ───────────────────────────────────────────────────────────────
-function combine(signals: Record<string, number | null>) {
+// `icMap` (optional): per-signal IC override map. When provided, the combiner
+// uses these IC values instead of the static SIGNAL_ICS priors. The
+// signal-calibration pipeline computes these as Bayes-shrinkage blends of
+// realized IC (from closedTrades) and the academic priors. Falling back to
+// SIGNAL_ICS when a signal is missing from icMap (or the whole map is
+// undefined) means existing callers behave exactly as before.
+function combine(
+  signals: Record<string, number | null>,
+  icMap?: Record<string, number>,
+) {
   const valid: Record<string, number> = {};
   for (const [k, v] of Object.entries(signals)) {
     if (v !== null && !isNaN(v)) valid[k] = v;
@@ -1003,6 +1012,9 @@ function combine(signals: Record<string, number | null>) {
   const n     = names.length;
   if (n === 0) return { combined: 0.5, weights: {}, ir: 0, kelly_q: 0, cv_edge: 1 };
 
+  const icFor = (k: string) =>
+    (icMap && Number.isFinite(icMap[k]) ? icMap[k] : SIGNAL_ICS[k]) || 0.05;
+
   const mean = names.reduce((s, k) => s + valid[k], 0) / n;
   const demeaned: Record<string, number> = {};
   for (const k of names) demeaned[k] = valid[k] - mean;
@@ -1010,7 +1022,7 @@ function combine(signals: Record<string, number | null>) {
   let totalW = 0;
   const weights: Record<string, number> = {};
   for (const k of names) {
-    const ic = SIGNAL_ICS[k] || 0.05;
+    const ic = icFor(k);
     const w  = ic * (1 + Math.abs(demeaned[k]) * 0.5);
     weights[k] = w;
     totalW += w;
@@ -1020,7 +1032,7 @@ function combine(signals: Record<string, number | null>) {
   let combined = 0;
   for (const k of names) combined += weights[k] * valid[k];
 
-  const avgIC = names.reduce((s, k) => s + (SIGNAL_ICS[k] || 0.05), 0) / n;
+  const avgIC = names.reduce((s, k) => s + icFor(k), 0) / n;
   const effN  = Math.max(1, n * 0.6);
   const ir    = avgIC * Math.sqrt(effN);
 
@@ -1062,9 +1074,20 @@ export default async function handler(req: Request, _ctx: Context) {
 
   const url  = new URL(req.url);
   const slug = url.searchParams.get("slug") || "";
+  // Optional category param: when provided + `useRealizedIC` is ON in
+  // trader-settings, the combiner blends per-category realized IC
+  // (computed by auto-trader/shared/signal-calibration.mts from the
+  // bot's closedTrades) into the static priors via Bayes-shrinkage.
+  // Falling back to static priors when absent keeps the public API stable.
+  const categoryParam = url.searchParams.get("category");
+  const calibrationCategory =
+    categoryParam === "crypto" || categoryParam === "hyperliquid"
+      ? categoryParam
+      : null;
 
-  // Cache keyed by market
-  const cKey = `combined:${slug || "auto"}`;
+  // Cache keyed by market + category (different IC blends per-category
+  // would otherwise share a single cache entry and bleed across bots).
+  const cKey = `combined:${slug || "auto"}:${calibrationCategory ?? "static"}`;
   let store: any = null;
   try {
     store = getStore("signal-combiner-v3");
@@ -1125,7 +1148,38 @@ export default async function handler(req: Request, _ctx: Context) {
       pairs_spread:   pairs.prob,
     };
 
-    const combo = combine(raw_signals);
+    // Optional realized-IC blend. Off by default — operator opts in via
+    // Settings → Signal calibration → "Use realized IC (per-bot)". When ON
+    // + category is recognised, load the latest calibration record from
+    // Blobs (computed on cron tick by signal-calibration.mts) and shrink
+    // toward the static priors with constant K (default 30).
+    let effectiveICMap: Record<string, number> | undefined;
+    let calibrationMeta: any = null;
+    if (calibrationCategory) {
+      try {
+        const settings: any = await import("./trader-settings.mts");
+        const ov = await settings.loadRuntimeOverrides();
+        const useRealized = ov.useRealizedIC === 1;
+        const k = typeof ov.calibrationShrinkageK === "number" ? ov.calibrationShrinkageK : 30;
+        if (useRealized) {
+          const cal: any = await import("./auto-trader/shared/signal-calibration.mts");
+          const record = await cal.loadCalibration(calibrationCategory);
+          if (record) {
+            effectiveICMap = cal.effectiveICs(SIGNAL_ICS, record, k);
+            calibrationMeta = {
+              category:    calibrationCategory,
+              computedAt:  record.computedAt,
+              sampleSize:  record.sampleSize,
+              shrinkageK:  k,
+              perSignal:   record.perSignal,
+              effective:   effectiveICMap,
+            };
+          }
+        }
+      } catch { /* swallow — fall back to static priors */ }
+    }
+
+    const combo = combine(raw_signals, effectiveICMap);
     const rec   = recommend(combo.combined, combo.ir, combo.kelly_q);
     const active = Object.values(raw_signals).filter(v => v !== null).length;
 
@@ -1175,6 +1229,9 @@ export default async function handler(req: Request, _ctx: Context) {
         ir:          combo.ir,
         formula:     `IR = 0.070 × √${active} = ${combo.ir.toFixed(3)}`,
       },
+      // Optional realized-IC calibration metadata (null when off or no record).
+      // Lets the UI render "Calibrated vs Prior IC" + which K + sample size.
+      calibration: calibrationMeta,
       kelly: {
         full:     parseFloat((combo.kelly_q * 4).toFixed(4)),
         quarter:  combo.kelly_q,

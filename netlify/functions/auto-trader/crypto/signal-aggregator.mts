@@ -69,7 +69,10 @@ export async function aggregateSignals(
 
   let result: AggregatedSignal | null = null;
   try {
-    const url = `${FN}/signal-combiner?slug=${encodeURIComponent(slug)}`;
+    // `&category=crypto` opts this call into the realized-IC blend path
+    // when Settings → Signal calibration → "Use realized IC" is ON.
+    // Without the flag set it has no effect on combiner output.
+    const url = `${FN}/signal-combiner?slug=${encodeURIComponent(slug)}&category=crypto`;
     const res = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT) });
     const data = await res.json();
 

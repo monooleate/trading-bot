@@ -86,6 +86,15 @@ const SCHEMA: Record<string, FieldSpec> = {
   liveReadyMaxCalibDev:    { default: 0.07, min: 0.01, max: 0.30, label: "Max calibration deviation", step: 0.01, unit: "frac",  category: "common", group: "Live readiness", help: "A predicted-prob és tényleges-win-rate átlagos eltérése bucket-enként. <0.07 = a model jól kalibrált. Csak crypto + weather-re." },
   liveReadyMinSharpe:      { default: 0.5,  min: 0,    max: 5.0,  label: "Min Sharpe ratio",          step: 0.05, unit: "ratio", category: "common", group: "Live readiness", help: "Per-trade kockázat-igazított hozam minimum. 0.5 = elfogadható, 1.0+ = jó, 2.0+ = kiváló (általában gyanús kis mintán)." },
   liveReadyMaxDrawdownPct: { default: 25,   min: 5,    max: 80,   label: "Max drawdown %",            step: 1,    unit: "pct",   category: "common", group: "Live readiness", help: "Maximum megengedett drawdown a kezdő bankrollhoz képest. >25% = a stratégia túl volatilis a live-hoz, csökkenteni kell a Kelly fraction-t vagy szigorítani a signal filtereket." },
+  // Master override: amikor BE van kapcsolva, a 7-gate readiness ellenőrzés
+  // mind a 4 bot-on bypass-olva van — ha PAPER_MODE=false, a bot LIVE-ra
+  // megy AKKOR IS, ha bukik bármelyik gate. Reverzibilis: kikapcsolva
+  // azonnal visszaáll a normál readiness-vezérlés. Session-enként egyszer
+  // Telegram alarm fut hogy ne felejtsd kikapcsolva (audit log).
+  // ⚠️ Csak akkor használd, ha a paper-validáció kell hogy "elég jó" de
+  // a gate túl szigorúan blokkolja, vagy ha tudatosan kockáztatod a
+  // live-flippelést egy kis sample-en (pl. új bot bemelegítés).
+  liveReadyOverrideEnabled: { default: 0,    min: 0,    max: 1,    label: "Override readiness gate",   step: 1,    unit: "bool",  category: "common", group: "Live readiness", help: "MASTER KAPCSOLÓ: ha ON, a readiness 7-gate-je bypass-olva van, és a PAPER_MODE=false-szel beállított live-állás közvetlenül érvénybe lép. Telegram alarm fut session-enként 1× hogy ne maradjon véletlenül bekapcsolva. Csak tudatos kockázatra használd." },
   // ─── Weather trader knobs ──────────────────────────────────────
   weatherEdgeThreshold:   { default: 0.12, min: 0.02, max: 0.40, label: "Edge threshold (net)",          step: 0.005, unit: "frac", category: "weather", group: "Risk & sizing", help: "A weather predikció és a Polymarket-ár közti |edge| minimum, amitől entry-zünk. Alacsonyabb mint a crypto-é mert a hőmérséklet predikció pontosabb." },
   weatherConfidenceMin:   { default: 0.65, min: 0.30, max: 0.95, label: "Min model confidence",          step: 0.01,  unit: "frac", category: "weather", group: "Risk & sizing", help: "A 31-tagú GFS ensemble vagy a single-run forecast confidence-e (mennyire egységes a tagok jóslata). Alatta skippeljük a piacot." },
@@ -105,6 +114,23 @@ const SCHEMA: Record<string, FieldSpec> = {
   bonferroniAlpha:           { default: 0.05, min: 0.01, max: 0.20, label: "Bonferroni familywise α",       step: 0.005, unit: "frac", category: "common", group: "IC threshold (Bonferroni)", help: "A Calibration Health küszöbök familywise hibarátája. Per-signal α = familywise / signal_count. Magasabb = enyhébb live-readiness gate (több livr-szignál átmegy)." },
   bonferroniGoodMultiplier:  { default: 2.0,  min: 1.0,  max: 4.0,  label: "Bonferroni 'good' multiplier",  step: 0.1,   unit: "ratio", category: "common", group: "IC threshold (Bonferroni)", help: "A 'good' küszöb = z × SE × multiplier. Default 2.0 = két SE. Magasabb = szigorúbb 'good' status. A 'weak' küszöb mindig 1×, a 'noise' < 1×." },
   collinearityHighThreshold: { default: 0.7,  min: 0.5,  max: 0.95, label: "Collinearity high-pair |ρ|",    step: 0.05,  unit: "ratio", category: "common", group: "Signal collinearity", help: "Az Edge Tracker collinearity-mátrix highPairs listájába azok a párok kerülnek, ahol |ρ| > ez. Csak observability, NEM gate. Magasabb = csak az extrém kollineáris párok kerülnek figyelmeztetésbe." },
+  // ─── Signal IC calibration (Fázis 2) ───────────────────────────
+  // A signal-combiner statikus SIGNAL_ICS priorokkal indul (orderflow 0.09,
+  // vol_div 0.06, ...). Ezek tapasztalati prior-ok akadémiai irodalomból,
+  // NEM mért értékek a botra. A realized-IC feedback bekapcsolva: minden
+  // cron-tick záráskor a closedTrades-ből újraszámoljuk a per-signal IC-t,
+  // és Bayes-shrinkage-zel keverjük be a prior-okat:
+  //   effective_ic[s] = n_s/(n_s+k) × realized + k/(n_s+k) × prior
+  // Magas k = lassan reagál a realized adatokra (konzervatív), alacsony k =
+  // gyorsan a realized-re ugrik (kis sample-en zaj-szenzitív).
+  useRealizedIC:             { default: 0,    min: 0,    max: 1,    label: "Use realized IC (per-bot)",     step: 1,     unit: "bool", category: "common", group: "Signal calibration", help: "OFF = a signal-combiner a statikus akadémiai priorokat használja (orderflow 0.09, vol_div 0.06, stb.). ON = a closedTrades-ből számolt realized IC keveredik be Bayes-shrinkage-zel — kalibrálja a botot a saját live track-record-jához. Crypto + HL bot-on hat, ?category=cat paraméterrel a combiner-hívásban." },
+  calibrationShrinkageK:     { default: 30,   min: 5,    max: 100,  label: "Shrinkage K (prior weight)",    step: 5,     unit: "n",    category: "common", group: "Signal calibration", help: "Bayes-shrinkage konstans. Magasabb K = a prior lassabban olvad fel (n=30 trade-nél 50/50, n=200-nál ~87/13 a realized javára). Alacsonyabb K = gyorsabb realized-átállás, de zaj-szenzitív. 30 az 50-trade küszöbnél értelmes kezdő (50/50-nél nagyjából egyensúlyi)." },
+  // Time-decay half-life for realized IC computation. 0 = uniform weighting
+  // (uses ALL trades equally — current pre-2026-05-14 behavior). >0 enables
+  // exponential decay where weight halves every N trades, so recent trades
+  // count more. Protects against regime-shift drift (e.g. a strategy that
+  // was alpha in low-vol becomes noise in high-vol; uniform IC would lag).
+  icHalfLifeTrades:          { default: 0,    min: 0,    max: 500,  label: "IC half-life (recency decay)", step: 5,     unit: "n",    category: "common", group: "Signal calibration", help: "Hány trade alatt csökken a régi trade-ek súlya felére az IC-számításnál. 0 = uniform (minden trade egyformán számít). 50 = recent half-life ~ 50 trade (~3-7 nap a jelenlegi tempónál). 200 = lassú decay. Kevesebb mint 20 = túl agresszív, IC zaj-szenzitív lesz." },
   volSignalEnabled:          { default: 1,    min: 0,    max: 1,    label: "Black-Scholes vol_divergence ON", step: 1,   unit: "bool", category: "crypto", group: "Signal toggles", help: "Default ON (Tier 1 redesign): N(d₂) digital pricing aktív 5m/15m BTC piacokon. Kikapcsolva → getVolSignal mindig null-t ad, a 8-jelzéses combiner 7 jelre megy. Csak akkor kapcsold ki, ha a paper-validáció után az IC noise marad." },
   volStrikeFetchEnabled:     { default: 1,    min: 0,    max: 1,    label: "Strike-price fetch (Binance kline)", step: 1, unit: "bool", category: "crypto", group: "Signal toggles", help: "Default ON: a piac openedAt-jére fetcheli a BTC árat (Binance 1m kline) hogy K = S₀. Kikapcsolva → K = S fallback (ATM), fairYes ≈ 0.5 minden piacon → semleges signal. Latency-trade-off: 1 extra Binance call signal-onként." },
   // ─── Hyperliquid Perp knobs ─────────────────────────────────────

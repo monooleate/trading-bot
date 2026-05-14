@@ -123,12 +123,15 @@ async function runHyperliquidTraderInner(
         maxDrawdownPct:    readyOv.liveReadyMaxDrawdownPct,
       } as any,
     });
-    const force = shouldForcePaper(config.paperMode, liveReadiness);
+    const overrideEnabled = readyOv.liveReadyOverrideEnabled === 1;
+    const force = shouldForcePaper(config.paperMode, liveReadiness, overrideEnabled);
     if (force.forcePaper) {
       log("ERROR", true, { liveBlocked: true, category: "hyperliquid", reason: force.reason });
       const failed = liveReadiness.gates.filter((g) => g.applicable && !g.passed).map((g) => g.label);
       await alertLiveBlocked("hyperliquid", force.reason!, failed);
       config.paperMode = true;
+    } else if (force.overrideActive) {
+      log("ERROR", false, { liveOverride: true, category: "hyperliquid", reason: "OVERRIDE ACTIVE — readiness gate bypassed" });
     }
   } catch (err: any) {
     log("ERROR", true, { category: "hyperliquid", liveReadinessError: err?.message });
@@ -583,6 +586,32 @@ async function runHyperliquidTraderInner(
 
   await saveHlSession(session);
 
+  // Persist per-signal realized IC for the signal-combiner's optional
+  // blending path. Cheap; runs every tick so the Edge Tracker UI can
+  // always show fresh "calibrated vs prior" numbers even if `useRealizedIC`
+  // is off. Map HL's narrower ClosedTrade shape onto the generic one so
+  // computeRealizedICs sees `signalBreakdown` + `pnl` fields uniformly.
+  try {
+    const cal: any = await import("../shared/signal-calibration.mts");
+    const genericTrades = session.closedTrades.map((t: any) => ({
+      ...t,
+      direction: (t.side === "SHORT" ? "NO" : "YES") as "YES" | "NO",
+      category: "hyperliquid" as any,
+    }));
+    // Half-life from Settings (default null = uniform). When set, recent
+    // trades count more — protects against regime-shift drift.
+    let halfLifeTrades: number | null = null;
+    try {
+      const settingsMod: any = await import("../../trader-settings.mts");
+      const ov = (await settingsMod.loadRuntimeOverrides()) ?? {};
+      const hl = (ov as any).icHalfLifeTrades;
+      if (typeof hl === "number" && Number.isFinite(hl) && hl > 0) halfLifeTrades = hl;
+    } catch {}
+    await cal.persistCalibration("hyperliquid", genericTrades, { halfLifeTrades });
+  } catch (err: any) {
+    log("ERROR", config.paperMode, { calibration: "persist-failed", category: "hyperliquid", error: err?.message });
+  }
+
   return {
     ok: true,
     action: "run",
@@ -643,6 +672,8 @@ export async function getHlStatus(): Promise<any> {
         maxDrawdownPct:    readyOv.liveReadyMaxDrawdownPct,
       } as any,
     });
+    // Read-only status path: surface the override flag for UI consistency.
+    if (liveReadiness) liveReadiness.overrideActive = readyOv.liveReadyOverrideEnabled === 1;
   } catch {}
 
   // Surface the "current gate state" per open position so the UI can show

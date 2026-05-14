@@ -23,6 +23,26 @@ import {
   computeWinRateHeatmap,
   computePnlDistribution,
 } from "./edge-tracker/statistics.mts";
+import {
+  loadCalibration as loadSignalCalibration,
+  effectiveICs as computeEffectiveICs,
+  type CalibrationCategory,
+} from "./auto-trader/shared/signal-calibration.mts";
+
+// Static SIGNAL_ICS priors mirrored from signal-combiner.mts:29. Kept here
+// so the Edge Tracker can render "Realized vs Prior" without an HTTP
+// round-trip. If priors ever change in the combiner, update this map too
+// (it's a 9-line block — minimal duplication risk).
+const SIGNAL_ICS_PRIORS: Record<string, number> = {
+  vol_divergence: 0.06,
+  orderflow:      0.09,
+  apex_consensus: 0.08,
+  cond_prob:      0.07,
+  funding_rate:   0.05,
+  momentum:       0.06,
+  contrarian:     0.05,
+  pairs_spread:   0.07,
+};
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -84,12 +104,48 @@ interface SessionLike {
   positions?: any[];          // funding-arb shape uses positions[] with closedAt
 }
 
+// HL bot stores HlClosedTrade — different field names than the shared
+// ClosedTrade shape. Without normalization t.pnl is undefined, all summary
+// numbers go NaN→null in JSON, and the panel crashes on `null.toFixed()`.
+// LONG/SHORT direction is preserved (not mapped to YES/NO) so the IC and
+// calibration computations can stay venue-aware without losing the original
+// trade side. pnlPct is stored as a ratio (-0.0352) in the HL bot but as a
+// percent (-3.52) everywhere else — multiply by 100 to match.
+function isHlClosedTrade(t: any): boolean {
+  return t && typeof t === "object"
+    && (typeof t.coin === "string"
+        || typeof t.pnlUSDC === "number"
+        || typeof t.sizeCoins === "number");
+}
+
+function normalizeHlClosedTrade(t: any): ClosedTrade {
+  return {
+    market:        String(t.coin ?? ""),
+    direction:     t.direction as any,            // "LONG" | "SHORT" — handled downstream
+    entryPrice:    Number(t.entryPrice ?? 0),
+    exitPrice:     Number(t.exitPrice ?? 0),
+    shares:        Number(t.sizeCoins ?? 0),
+    pnl:           Number(t.pnlUSDC ?? 0),
+    pnlPct:        Number(t.pnlPct ?? 0) * 100,
+    openedAt:      t.openedAt,
+    closedAt:      t.closedAt,
+    category:      "hyperliquid" as any,
+    predictedProb: t.predictedProb,
+    edgeAtEntry:   t.edgeAtEntry,
+    signalBreakdown: t.signalBreakdown,
+  };
+}
+
 function tradesFromSession(s: SessionLike, fallbackCategory: string): ClosedTrade[] {
   const out: ClosedTrade[] = [];
   // Standard SessionState shape
   if (Array.isArray(s.closedTrades)) {
-    for (const t of s.closedTrades) {
-      out.push({ ...t, category: t.category ?? (fallbackCategory as any) });
+    for (const t of s.closedTrades as any[]) {
+      if (isHlClosedTrade(t)) {
+        out.push(normalizeHlClosedTrade(t));
+      } else {
+        out.push({ ...t, category: t.category ?? (fallbackCategory as any) });
+      }
     }
   }
   // Funding-arb session shape: positions[] with optional closedAt + realizedPnL
@@ -241,6 +297,35 @@ export default async function handler(req: Request, _ctx: Context) {
         predictedProb: t.predictedProb ?? 0,
       }));
 
+    // 7. Signal IC calibration view (crypto + hyperliquid only).
+    // Surfaces the persisted realized IC alongside priors and the
+    // shrinkage-blended effective IC, plus whether `useRealizedIC` is
+    // active. Used by the EdgeTrackerPanel "Calibrated vs Prior IC"
+    // card so the operator can decide whether to flip the toggle on.
+    let calibrationView: any = null;
+    if (category === "crypto" || category === "hyperliquid") {
+      try {
+        const record = await loadSignalCalibration(category as CalibrationCategory);
+        const settings: any = await import("./trader-settings.mts");
+        const ov = await settings.loadRuntimeOverrides();
+        const k = typeof ov.calibrationShrinkageK === "number" ? ov.calibrationShrinkageK : 30;
+        const useRealizedIC = ov.useRealizedIC === 1;
+        const effective = record
+          ? computeEffectiveICs(SIGNAL_ICS_PRIORS, record, k)
+          : { ...SIGNAL_ICS_PRIORS };
+        calibrationView = {
+          category,
+          useRealizedIC,
+          shrinkageK: k,
+          computedAt: record?.computedAt ?? null,
+          sampleSize: record?.sampleSize ?? 0,
+          priors:     SIGNAL_ICS_PRIORS,
+          realized:   record?.perSignal ?? {},
+          effective,
+        };
+      } catch { /* no calibration data — leave null */ }
+    }
+
     return new Response(
       JSON.stringify({
         ok: true,
@@ -257,6 +342,7 @@ export default async function handler(req: Request, _ctx: Context) {
         heatmap,
         distribution,
         trades: recentTrades,
+        calibrationView,
       }),
       { status: 200, headers: CORS },
     );

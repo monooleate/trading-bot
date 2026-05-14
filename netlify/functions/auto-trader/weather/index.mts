@@ -194,12 +194,15 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
         maxDrawdownPct:    readyOv.liveReadyMaxDrawdownPct,
       } as any,
     });
-    const force = shouldForcePaper(config.paperMode, liveReadiness);
+    const overrideEnabled = readyOv.liveReadyOverrideEnabled === 1;
+    const force = shouldForcePaper(config.paperMode, liveReadiness, overrideEnabled);
     if (force.forcePaper) {
       log("ERROR", true, { liveBlocked: true, category: "weather", reason: force.reason });
       const failed = liveReadiness.gates.filter((g) => g.applicable && !g.passed).map((g) => g.label);
       await alertLiveBlocked("weather", force.reason!, failed);
       config.paperMode = true;
+    } else if (force.overrideActive) {
+      log("ERROR", false, { liveOverride: true, category: "weather", reason: "OVERRIDE ACTIVE — readiness gate bypassed" });
     }
   } catch {}
 

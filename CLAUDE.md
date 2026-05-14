@@ -360,7 +360,7 @@ netlify deploy --prod --dir=dist
 
 ---
 
-## AKTUÁLIS ÁLLAPOT (2026-05-13)
+## AKTUÁLIS ÁLLAPOT (2026-05-14)
 
 **Élő deploy:** `mj-trading.netlify.app`. Paper mode, simVersion 3 (crypto), v2 (HL).
 
@@ -373,11 +373,21 @@ netlify deploy --prod --dir=dist
 | **HL Perp** | $200 → $200 | $0 | 0 closed | 0 open | Idle (paper) |
 | **F-Arb** | $200 → $200 (shared HL) | $0 | 0 closed | 0 open | Idle (paper) |
 
-### Mit fix utoljára (34. session, 2026-05-13)
+### Mit fix utoljára (36. session, 2026-05-14b)
+
+- **Live-readiness override + Realized-IC kalibráció**: két új Settings-mechanizmus.
+  - **Override**: új `liveReadyOverrideEnabled` (bool) knob, ami bypassolja a 4 bot 7-gate readiness-ellenőrzését — `PAPER_MODE=false` esetén közvetlenül live-ra megy. Új piros "OVERRIDE — LIVE" jelzés a LiveReadinessBadge-en + Telegram alarm session-enként 1× audit-célból.
+  - **Realized-IC**: új modul `auto-trader/shared/signal-calibration.mts` — minden cron-tick záráskor lementi a closedTrades per-signal Pearson IC-jét Blobs-ba (crypto + HL). A signal-combiner új `?category=` paramétert kap; ha `useRealizedIC=1` toggle ON, Bayes-shrinkage-zel keveri a realized IC-t a statikus priorokba: `effective_ic = n/(n+k) × realized + k/(n+k) × prior`, K alapból 30. Edge Tracker új "Signal IC calibration" kártyája mutatja a Prior / Realized / Effective oszlopokat. (changelog 2026-05-14b)
+
+### Mit fix korábban (35. session, 2026-05-14)
+
+- **Weather forecast-forrás upgrade-opciók dokumentálva** (doksi-only, kód nem érintve): a math/16-weather-bot.md §3.B új szekciója részletezi a 3 lehetséges upgrade-utat — (a) ECMWF közvetlen 51-tagú ensemble, (b) NOAA GFS GRIB2 közvetlen S3 pull, (c) kereskedelmi szolgáltatók. Master-plan 🟢 NICE-TO-HAVE 13. tételével keresztezve. A §3 táblázat alatt explicit megjegyzés: **mind a 4 jelenlegi forrás zéró-auth, egyetlen API-kulcs sem kell**. (changelog 2026-05-14)
+
+### Mit fix még korábban (34. session, 2026-05-13)
 
 - **Mobile UI optimalizálás + tap-to-tooltip rendszer**: a 100+ `title=` HTML hover-tooltip mostantól mobilon is működik (touch-tap-re custom popup `Base.astro`-ban inline JS-sel). Global `.tbl-scroll` wrapper class minden táblán (Apex/ArbMatrix/SignalCombiner/OrderFlow/VolDivergence/TradingPanel — 12 tábla). iOS auto-zoom megelőzése (input font-size ≥16px), notch/safe-area support, `theme-color` meta. Dashboard shell mobile breakpoints (`ec-header`, `ec-tabs`, `ec-card`). (changelog 2026-05-13)
 
-### Mit fix korábban (33. session, 2026-05-12)
+### Mit fix még korábban (33. session, 2026-05-12)
 
 - **CLAUDE.md karcsúsítva** (2028 → 410 sor, session history kivéve → `changelog/`)
 - **Settings preset rendszer**: Loose/Normal/Strict per-bot kapcsoló a Settings tabon, leiratokkal. 16 új knob (HL + F-Arb + Sports — eddig env-only)
@@ -388,13 +398,7 @@ netlify deploy --prod --dir=dist
 - **Weather audit**: 2 closed trade verified, mindkettő real Polymarket resolution-on zárt, PnL helyes
 - **Crypto bot diagnosztika**: a Combiner confidence gate (5%) blokkolt mindent — `Loose` preset 2%-ra állítja
 
-### Mit fix még korábban (32. session, 2026-05-11)
-
-- Tier 1 math fix: vol_divergence Black-Scholes N(d₂), collinearity matrix, Bonferroni IC threshold (`internal-docs/math/13-crypto-bot.md` §9)
-- Signal Combiner UI "Edge" javítva (50% deviation → valódi trade edge)
-- Tier 1 belső konstansok exposed Settings tabon (5 új field, defaults = bit-azonos viselkedés)
-- Roadmap SSOT-konszolidáció (6 fájl, scope-headers)
-- Sports bot mutex + bankroll fix
+> Régebbi session-ök (≤ 32. session, 2026-05-11 és korábban) — lásd `internal-docs/changelog/`.
 
 ### Legközelebbi prioritások
 
