@@ -23,7 +23,7 @@
 
 | # | Feladat | Owner | Acceptance criteria | Prio |
 |---|---------|-------|---------------------|------|
-| 1 | ~~Weather cron bekapcsolása~~ | ~~operator~~ | **Sprint 39a (commit `<TBD>`) — `weatherCronEnabled` default 0 → 1 javítva. Aszimmetria megszűnt (mind a 4 bot ALWAYS ON), nincs több operator-akció.** | ✅ |
+| 1 | ~~Weather cron bekapcsolása~~ | ~~operator~~ | **Sprint 39a (commit `507f9c4`) — `weatherCronEnabled` default 0 → 1 javítva. Aszimmetria megszűnt (mind a 4 bot ALWAYS ON), nincs több operator-akció.** | ✅ |
 | 2 | HL bot resume + monitoring | operator | A consecutiveLossLimit (3-as) miatti 1h pause feloldódott (`pausedUntil` < now()). Ha `session.stopped` → manuális Resume gomb. 24h-ban ≥1 HL trade nyíljon. | 🟠 |
 | 3 | Crypto Loose preset run-tovább | bot (passive) | Folyamatosan futnia kell Loose preseten. 20+ closed crypto trade halmozódjon fel a sprint végéig. | 🟠 |
 | 4 | Daily Coach mode check-in (RecommendationsCard) | operator | Naponta egyszer `/trade/<bot>/`-on átolvasni a RecommendationsCard-ot. "Why?" view → adatok ellenőrzése. Apply csak akkor, ha indokolt; dismiss a többit. | 🟡 |
