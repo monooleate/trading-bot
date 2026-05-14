@@ -73,7 +73,11 @@ export function getWeatherConfig(): WeatherConfig {
     applyCityOffset: process.env.WEATHER_APPLY_CITY_OFFSET === "true",
     forecastDays:    parseInt(process.env.WEATHER_FORECAST_DAYS     || "0", 10),
     useEnsemble:     useEnsembleEnv === "false" ? false : true,
-    cronEnabled:     process.env.WEATHER_CRON_ENABLED === "true",
+    // Default ON (2026-05-14d): paper mode-ban biztonságos, math validálva.
+    // A 4 bot közül csak ennek volt explicit cron-gate-je — most aszimmetria
+    // megszűnt, mind a 4 default-ban tüzel. Csak `WEATHER_CRON_ENABLED=false`
+    // env-var vagy Settings-knob OFF kapcsolja le (vészhelyzeti pause).
+    cronEnabled:     process.env.WEATHER_CRON_ENABLED === "false" ? false : true,
     // Market-consensus disagreement gate: skip when the bot's prediction
     // differs from the highest-priced bucket's centre by more than this
     // threshold (°C). Default 2.0°C → ~3.6°F → typically 1-2 buckets of drift
