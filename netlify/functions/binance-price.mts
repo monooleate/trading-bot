@@ -14,9 +14,10 @@
 import type { Context } from "@netlify/functions";
 import { getStore } from "@netlify/blobs";
 
-const BYBIT_API    = "https://api.bybit.com";
-const BINANCE_API  = "https://api.binance.com";
-const CACHE_TTL_MS = 15 * 1000;          // 15s — fresh enough, cheap enough
+const BYBIT_API     = "https://api.bybit.com";
+const BINANCE_API   = "https://api.binance.com";
+const COINBASE_API  = "https://api.exchange.coinbase.com";    // works from Netlify edges where Bybit + Binance are geo-blocked
+const CACHE_TTL_MS  = 15 * 1000;         // 15s — fresh enough, cheap enough
 
 const DEFAULT_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"];
 
@@ -95,6 +96,50 @@ async function fetchBinance(symbols: string[]): Promise<PriceTicker[]> {
   }).filter((t) => Number.isFinite(t.price));
 }
 
+// Map our Binance-style symbol (BTCUSDT) to Coinbase product (BTC-USD).
+// Coinbase quotes against USD, not USDT — the spot prices track within
+// fractions of a percent, which is fine for a "spot reference" widget.
+function symbolToCoinbase(symbol: string): string | null {
+  if (!symbol.endsWith("USDT") && !symbol.endsWith("USD")) return null;
+  const base = symbol.replace(/USDT?$/, "");
+  return `${base}-USD`;
+}
+
+async function fetchCoinbase(symbols: string[]): Promise<PriceTicker[]> {
+  // Coinbase Exchange `/products/<X>/stats` is per-symbol; parallelize.
+  // Returns: { open, high, low, last, volume, volume_30day } — `volume` is
+  // base-asset volume so we approximate USDT volume as `volume * last`.
+  const results = await Promise.allSettled(symbols.map(async (sym) => {
+    const product = symbolToCoinbase(sym);
+    if (!product) throw new Error(`bad symbol ${sym}`);
+    const res = await fetch(
+      `${COINBASE_API}/products/${product}/stats`,
+      { signal: AbortSignal.timeout(5000), headers: { "User-Agent": "edgecalc-price/1.0" } },
+    );
+    if (!res.ok) throw new Error(`Coinbase ${res.status} ${product}`);
+    const j = await res.json() as any;
+    const price = Number(j.last);
+    const open  = Number(j.open);
+    if (!Number.isFinite(price) || !Number.isFinite(open) || open <= 0) {
+      throw new Error(`bad payload ${product}`);
+    }
+    const pct = (price - open) / open;
+    const baseVol = Number(j.volume) || 0;
+    return {
+      symbol:       sym,                        // keep the original BTCUSDT shape so UI doesn't need to know about the swap
+      price,
+      change24h:    price - open,
+      changePct24h: pct,
+      high24h:      Number(j.high) || price,
+      low24h:       Number(j.low)  || price,
+      volume24h:    baseVol * price,            // approximate USD turnover
+    } as PriceTicker;
+  }));
+  return results
+    .filter((r): r is PromiseFulfilledResult<PriceTicker> => r.status === "fulfilled")
+    .map((r) => r.value);
+}
+
 export default async function handler(req: Request, _ctx: Context) {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
 
@@ -118,9 +163,15 @@ export default async function handler(req: Request, _ctx: Context) {
     } catch { /* fall through to fetch */ }
   }
 
-  // ─── Fetch (Bybit → Binance fallback) ──────────────────────────
+  // ─── Fetch (Bybit → Binance → Coinbase) ────────────────────────
+  // Bybit (403) and Binance (451) are both geo-blocked from several
+  // Netlify edge regions. Coinbase Exchange has no such restriction and
+  // serves as the reliable production fallback. Order kept as Bybit-
+  // first because *when* it works it returns a single batched payload
+  // (cheapest), but the chain doesn't surrender to a 4xx — it falls
+  // straight through to Coinbase.
   let tickers: PriceTicker[] = [];
-  let source: "bybit" | "binance" | "none" = "none";
+  let source: "bybit" | "binance" | "coinbase" | "none" = "none";
   let lastError: string | null = null;
   try {
     tickers = await fetchBybit(symbols);
@@ -134,6 +185,14 @@ export default async function handler(req: Request, _ctx: Context) {
       if (tickers.length > 0) source = "binance";
     } catch (e: any) {
       lastError = (lastError ? lastError + "; " : "") + `binance: ${e?.message ?? "fail"}`;
+    }
+  }
+  if (tickers.length === 0) {
+    try {
+      tickers = await fetchCoinbase(symbols);
+      if (tickers.length > 0) source = "coinbase";
+    } catch (e: any) {
+      lastError = (lastError ? lastError + "; " : "") + `coinbase: ${e?.message ?? "fail"}`;
     }
   }
 
