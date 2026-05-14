@@ -14,7 +14,7 @@
 > alapján készült. Claude Code-nak átadható, prioritásokkal ellátott
 > fejlesztési terv.
 >
-> **Utolsó státusz-frissítés:** 2026-05-14
+> **Utolsó státusz-frissítés:** 2026-05-14 (35. session — Coach-mode Recommendations)
 
 ---
 
@@ -42,6 +42,7 @@
 - HL Perp bot — directional perp trading paper-only (live SDK NPM install kell)
 - Funding-Arb bot — delta-neutral HL short + Binance spot long paper-only
 - Edge Tracker — 12. tab, IC + calibration health badges
+- **Coach-mode Recommendations** — per-bot Apply-able javaslatok closed trade history alapján (2026-05-14 §35 session)
 - 9 elemző tool (Scanner / EV / Swarm / Order Flow / Vol Harvest / Apex / Cond Prob / Signals / Arb Matrix)
 - Settings tab — Blobs runtime override 30+ env-paramater fölött
 - Auth + JWT cookie + admin password
@@ -498,8 +499,19 @@ amiket az audit talált meg:
 - ✅ **internal-docs/math/13-crypto-bot.md** — runtime walkthrough
 - ✅ **internal-docs/math/14-hl-directional.md** — HL implementation reference
 - ✅ **internal-docs/math/15-funding-arb.md** — F-Arb implementation reference
+- ✅ **internal-docs/math/17-recommendations-engine.md** — Coach-mode + time-decay IC (2026-05-14)
 - ✅ **internal-docs/changelog/CHANGELOG-YYYY-MM-DD.md** — minden non-trivial
   változás dokumentálva
+
+### Bot-pipeline feedback loop
+- ✅ **Coach-mode Recommendations engine** — per-bot Apply-able javaslatok closed
+  trade history alapján (2026-05-14 §35 session). 4 fő szabálycsoport:
+  realized-IC blend toggle, edge-bucket threshold tuning, confidence-min
+  tuning, drawdown attention. Apply-flow a meglévő trader-settings POST
+  endpoint-on, audit a Blobs versioning-jén keresztül.
+- ✅ **Time-decay IC** — exponenciális recency weighting a realized-IC
+  számolásnál (új `icHalfLifeTrades` knob, default 0 = uniform, ajánlott 50).
+  Regime-shift drift védelem.
 
 ---
 

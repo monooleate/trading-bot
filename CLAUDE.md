@@ -360,7 +360,7 @@ netlify deploy --prod --dir=dist
 
 ---
 
-## AKTUÁLIS ÁLLAPOT (2026-05-14)
+## AKTUÁLIS ÁLLAPOT (2026-05-14c)
 
 **Élő deploy:** `mj-trading.netlify.app`. Paper mode, simVersion 3 (crypto), v2 (HL).
 
@@ -368,12 +368,18 @@ netlify deploy --prod --dir=dist
 
 | Bot | Bankroll | PnL | Trades | Open | Megjegyzés |
 |-----|---------|-----|--------|------|-------|
-| **Crypto** | $250 → $250 | $0 | 0 closed | 0 open | Nem nyitott a v3 paper-resolver óta (combiner confidence gate túl szigorú — lásd 2026-05-12 session) |
+| **Crypto** | $250 → $242.88 | +$51.17 | 3 closed (2W/1L) | 4 open | Loose preset alatt nyitott. Mind a 3 trade real Polymarket resolution-on zárt — validált (lásd 35. session audit) |
 | **Weather** | $250 → $216.48 | -$5.10 | 2 closed (1W/1L) | 3 open | Mindkét closed trade real Polymarket resolution-on zárt — validált |
-| **HL Perp** | $200 → $200 | $0 | 0 closed | 0 open | Idle (paper) |
+| **HL Perp** | $200 → $199.44 | -$0.56 | 4 closed (1W/3L) | 0 open | 3 consecutive loss → 1h pause triggerelt (design intent) |
 | **F-Arb** | $200 → $200 (shared HL) | $0 | 0 closed | 0 open | Idle (paper) |
 
-### Mit fix utoljára (36. session, 2026-05-14b)
+### Mit fix utoljára (37. session, 2026-05-14c)
+
+- **Coach-mode Recommendations engine** (mind a 4 botra): per-bot Apply-able javaslat-lista a closed trade history alapján. Nem auto-tuning — operator-in-the-loop sanity check. Új RecommendationsCard a 4 TraderShell tetején; lista a `/recommendations-api?category=<cat>` endpoint-ról jön (auth-protected). Apply gomb a meglévő `trader-settings` POST-on keresztül módosít. 8 szabálycsoport: realized-IC toggle, per-signal noise warning, confidence-min tuning, edge-bucket reliability, F-Arb min-spread tuning, weather ensemble bekapcsolás, drawdown attention. Hard guardrail-ek (Kelly, sanity cap, session-loss-limit, liveReadyOverride) **soha nem javaslat-tárgyak**.
+- **Time-decay IC**: új `icHalfLifeTrades` Settings knob (default 0 = uniform, ajánlott 50). Exponenciális recency weighting a realized-IC Pearson korrelációra → regime-shift drift védelem. Új `weightedPearsonCorrelation` helper az `edge-tracker/statistics.mts`-ben.
+- **Weather signal-calibration**: a `persistCalibration` mostantól weather-re is fut (synthetic `forecast_edge` signal) — eddig csak crypto + HL volt. (changelog 2026-05-14c · részletes spec: `internal-docs/math/17-recommendations-engine.md`)
+
+### Mit fix korábban (36. session, 2026-05-14b)
 
 - **Live-readiness override + Realized-IC kalibráció**: két új Settings-mechanizmus.
   - **Override**: új `liveReadyOverrideEnabled` (bool) knob, ami bypassolja a 4 bot 7-gate readiness-ellenőrzését — `PAPER_MODE=false` esetén közvetlenül live-ra megy. Új piros "OVERRIDE — LIVE" jelzés a LiveReadinessBadge-en + Telegram alarm session-enként 1× audit-célból.
@@ -387,18 +393,7 @@ netlify deploy --prod --dir=dist
 
 - **Mobile UI optimalizálás + tap-to-tooltip rendszer**: a 100+ `title=` HTML hover-tooltip mostantól mobilon is működik (touch-tap-re custom popup `Base.astro`-ban inline JS-sel). Global `.tbl-scroll` wrapper class minden táblán (Apex/ArbMatrix/SignalCombiner/OrderFlow/VolDivergence/TradingPanel — 12 tábla). iOS auto-zoom megelőzése (input font-size ≥16px), notch/safe-area support, `theme-color` meta. Dashboard shell mobile breakpoints (`ec-header`, `ec-tabs`, `ec-card`). (changelog 2026-05-13)
 
-### Mit fix még korábban (33. session, 2026-05-12)
-
-- **CLAUDE.md karcsúsítva** (2028 → 410 sor, session history kivéve → `changelog/`)
-- **Settings preset rendszer**: Loose/Normal/Strict per-bot kapcsoló a Settings tabon, leiratokkal. 16 új knob (HL + F-Arb + Sports — eddig env-only)
-- **Live-gate snapshot open pozíciókon**: a "Why?" panel mostantól nemcsak a frozen entry-decision-t mutatja, hanem a current gate-állapotot is (narancs strip, `evaluatedAt`)
-- **Live-gate fix (mind a 4 bot)**: a Why? Live-Gates panel most a VALÓS jelenlegi gate-állapotot mutatja (crypto + weather loop megszűnt korai-skip-pelni "already open" stub-bal). UI filter dobja a "not evaluated" placeholdereket + open-position-uniqueness gate-eket — csak releváns gate-ek látszanak. Verdict frázis: *"MOST megnyitná"* / *"MOST NEM nyitná (N gate ✗)"*. (changelog §i)
-- **Open-position market scan (crypto + weather)**: `findBtcMarkets` új `includeSlugs` param a deep-OTM/ITM drift-elt nyitott pozíciók visszahozására. `scanList = [...topN, ...openPositionsBelowTopN]` mind a 2 bot-on. Max-open cap bypass already-open piacokon. (changelog §j)
-- **Sanity-cap + Combiner-trust gates (crypto + HL Perp + F-Arb)**: új védelem a 48% edge típusú model-error trade-ek ellen. Crypto: 12 → 14 gate (`Sanity cap ≤ 40%` + `Combiner trust WATCH + extrém edge`). HL: 10 → 12 gate (ugyanezek). F-Arb: 6 → 7 gate (`Spread ≤ 0.5%/h sanity cap`, feed-glitch védelem). Weather már tartalmazta — érintetlen. Becsült új-trade-impact: <5% mindenhol. **Settings UI**: 5 új knob (Sanity gates group), preset-bundle-ökben Loose/Normal/Strict variációk. (changelog §k)
-- **Weather audit**: 2 closed trade verified, mindkettő real Polymarket resolution-on zárt, PnL helyes
-- **Crypto bot diagnosztika**: a Combiner confidence gate (5%) blokkolt mindent — `Loose` preset 2%-ra állítja
-
-> Régebbi session-ök (≤ 32. session, 2026-05-11 és korábban) — lásd `internal-docs/changelog/`.
+> Régebbi session-ök (≤ 33. session, 2026-05-12 és korábban) — lásd `internal-docs/changelog/`.
 
 ### Legközelebbi prioritások
 

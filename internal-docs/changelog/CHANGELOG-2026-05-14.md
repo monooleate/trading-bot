@@ -436,3 +436,221 @@ synthetic `forecast_edge` signalt használja).
    combiner most ténylegesen használ.
 4. Shrinkage K hangolása: alapból 30 (N=30-nál 50/50). Gyorsabb adaptáció
    = kisebb K (pl. 10), konzervatívabb = nagyobb K (pl. 60).
+
+---
+
+# 2026-05-14 (c) — Coach-mode Recommendations engine (mind a 4 botra)
+
+## Kontextus
+
+A user előző session-ek alapján felvetette: "csináld mind a kettőt
+[🟢 read-only IC tracker + 🟡 Apply-able recommendations] az összes botra,
+nyilván a botokra az adott legjobb megoldásokkal". A 2026-05-14 (b) session
+már bevezette a realized-IC + Bayes-shrinkage pipeline-t crypto + HL-re.
+Ez a session-rész erre épít: **time-decay opció + per-bot recommendations
+engine + auth-protected API + Apply-able UI kártya**.
+
+A teljes specifikáció: [`internal-docs/math/17-recommendations-engine.md`](../math/17-recommendations-engine.md).
+
+## Mit változtattam
+
+### (k) Time-decay IC — `weightedPearsonCorrelation` + `halfLifeTrades` option
+
+`netlify/functions/edge-tracker/statistics.mts`:
+- Új `weightedPearsonCorrelation(xs, ys, ws)` export — weighted-mean alapú
+  Pearson két pass-os formula. Drops `ws[i] ≤ 0` és non-finite pair-eket.
+
+`netlify/functions/auto-trader/shared/signal-calibration.mts`:
+- `computeRealizedICs` új 2. paraméter: `options.halfLifeTrades` (default
+  null = uniform). >0 esetén exponenciális decay: `w_i = 0.5^((N-1-i)/H)`,
+  legújabb trade `w=1`, `H`-edik régebbi `w=0.5`.
+- Trade-ek kronologikus sort-olása `closedAt` szerint a súlyozás előtt.
+- `persistCalibration` 3. paramétere átadja az opciókat tovább.
+- `CalibrationCategory` típus bővítve `"weather"`-rel (a weather a
+  synthetic `forecast_edge` signalt persistálja).
+- `SIGNALS` array kibővítve `"forecast_edge"`-zsel (eddig kihagyva volt,
+  mert csak weather emitálta — most az engine uniformosan kezeli).
+
+`netlify/functions/auto-trader/weather/reconciler.mts`:
+- A `runWeatherReconciler` lezárt trade után meghívja a
+  `persistCalibration("weather", trades, {halfLifeTrades})`-t.
+- Honors operator Setting (`icHalfLifeTrades`) ugyanúgy mint crypto + HL.
+
+`netlify/functions/auto-trader/index.mts` (crypto) + `hyperliquid/index.mts`:
+- `persistCalibration("crypto"|"hyperliquid", trades, {halfLifeTrades})`
+  hívás — half-life olvasása a `trader-settings.loadRuntimeOverrides`-ból.
+
+### (l) Új SCHEMA knob — `icHalfLifeTrades` (common group)
+
+`netlify/functions/trader-settings.mts`:
+- Default: 0 (uniform — bit-azonos a pre-2026-05-14 viselkedéssel)
+- Range: [0, 500], step 5, unit `n`, label `"IC half-life (recency decay)"`
+- Group: "Signal calibration" (a `calibrationShrinkageK` és `useRealizedIC`
+  mellett)
+- Help-text magyarázza a recency-profile-okat (50 = ~3-7 nap recency,
+  200 = lassú decay, <20 = túl agresszív)
+
+### (m) Per-bot Recommendations engine
+
+`netlify/functions/auto-trader/shared/recommendations.mts` (új modul):
+
+**Public API:**
+- `generateRecommendations(category, args): Recommendation[]`
+- `Recommendation` interface: id, field (or null), currentValue,
+  suggestedValue, severity, confidence, title, reasoning, dataPoints,
+  applyLabel
+
+**Per-bot szabálykészletek (8 szabály összesen):**
+
+*Crypto + HL Perp (shared engine, paraméterezett field-map):*
+- `rec-use-realized-ic` (action) — Bonferroni-good IC esetén javasolja az
+  `useRealizedIC=1`-t
+- `rec-disable-realized-ic` (warn) — minden signal noise tartományban,
+  toggle vissza OFF-ra
+- `rec-signal-negative-<name>` (info, no Apply) — anti-prediktív signal
+  warning, statisztikailag szignifikáns
+- `rec-confidence-lower` / `rec-confidence-raise` — `combinerConfidenceMin`
+  tuning WR alapján (≥55% lower, <45% raise)
+- `rec-edge-threshold` — edge-bucket reliability (first profitable 5% bin)
+- `rec-drawdown-attention` (info) — drawdown ≥ 70% × sessionLossLimit
+
+*Weather:*
+- `rec-weather-edge-threshold` — ugyanaz mint crypto, de
+  `weatherEdgeThreshold` field-en
+- `rec-weather-ensemble-on` — ha `weatherUseEnsemble=OFF`, javasolja az
+  ON-t (a 31-tagú GFS ensemble strikt jobb mint a deterministic+hardcoded σ)
+- `rec-weather-confidence-raise` — WR<45% esetén
+  `weatherConfidenceMin` += 5%
+
+*F-Arb (rate-driven, no IC):*
+- `rec-farb-min-spread-raise` / `rec-farb-min-spread-lower` —
+  `frMinSpreadHourly` tuning WR alapján
+- `rec-farb-max-hold-lower` — átlag hold-idő < cap/2 esetén `frMaxHoldDays`
+  csökkentés
+
+**Hard guardrail-ek soha nem javaslat-tárgyak:** `maxKellyFraction`,
+`*MaxEdgeCap`, `sessionLossLimit`, `liveReadyOverrideEnabled` — operator-only.
+
+### (n) Recommendations API endpoint
+
+`netlify/functions/recommendations-api.mts` (új file):
+- `GET /.netlify/functions/recommendations-api?category=<cat>&halfLife=<N>&windowDays=<D>`
+- Auth-protected: anonymous → `rec-auth-required` placeholder, signed →
+  full list
+- Per-category Blobs reader: ugyanaz a `STORE_SPECS` map mint az
+  edge-tracker-ben
+- F-Arb shape-adapter: `ArbPosition[]` → `ClosedTrade` mapping
+- HL shape-adapter: `HlClosedTrade` → `ClosedTrade` (coin→market,
+  pnlUSDC→pnl, etc.)
+- Mellékhatás-mentes: csak olvas, nem ír Blobs-ot
+
+### (o) RecommendationsCard React komponens
+
+`src/components/shared/RecommendationsCard.tsx` (új file):
+- Fetch state, error handling, loading skeleton
+- Collapsible header (default open) — `📊 Coach mode — Recommendations`
+- Per-row: confidence-tag (low/medium/high), title, severity color (info
+  blue / warn orange / action green), current → suggested value
+- "Why?" toggle: expand reasoning + dataPoints (key:value pills)
+- Apply button: POST to `/trader-settings` with `{[field]: suggestedValue}`,
+  toast üzenet, auto-refresh
+- Dismiss button: csak React state (no Blobs persist)
+- Mobile-responsive: actions flex-wrap, `.tbl-scroll`-compatible
+
+### (p) Wire-up mind a 4 trader UI-ba
+
+- `src/components/trader/CryptoTrader.tsx` — `<RecommendationsCard category="crypto" />`
+- `src/components/trader/WeatherTrader.tsx` — `<RecommendationsCard category="weather" />`
+- `src/components/trader/HyperliquidTrader.tsx` — `<RecommendationsCard category="hyperliquid" />`
+- `src/components/trader/FundingArbPanel.tsx` — `<RecommendationsCard category="funding-arb" />`
+
+Mind a 4 helyen ugyanaz a pattern: Open Positions / Pending Positions
+kártyák ELŐTT renderelve, `refreshKey={healthRefresh}` köti össze a meglévő
+refresh ciklussal (Reset / új trade után újratöltődik).
+
+## Mit szándékosan kihagytam
+
+- ❌ **Autopilot mode** — operátor-in-the-loop a tudatos design (lásd
+  math/17 §1.4)
+- ❌ **Dismissed-state Blobs persistence** — dismiss csak az aktuális
+  nézetből rejti el, re-load után visszajön ha még érvényes. Tervezett
+  feature: ha overuse-t észlelünk, hozzáadható egy `dismissedRecs` Blobs
+  store.
+- ❌ **Sport bot integráció** — a `sports` bot stub szinten van, nincs
+  closed trade pipeline. Amikor (P4.2) implementálva lesz, akkor jön a
+  `recommendSports` adapter.
+- ❌ **Per-trade reliability diagram (Tier 2)** — még N=200+ paper trade
+  kell. A jelenlegi `rec-edge-threshold` szabály light-version → ez a
+  bridge a Tier 2 felé.
+- ❌ **Time-decay validation chart** — Edge Tracker UI még nem mutatja
+  vizuálisan a half-life hatását. A `CalibrationViewCard` (2026-05-14 (b))
+  ezt majd kibővítheti.
+
+## Build verifikáció
+
+- `npm run build` (Astro) — PASS, 1.89s, 10 page generated, zéró TS error
+- `npx tsc --noEmit` — zéró output (zéró error)
+
+## Fájlok érintve
+
+**Új backend (3):**
+- `netlify/functions/auto-trader/shared/recommendations.mts` — engine
+- `netlify/functions/recommendations-api.mts` — endpoint
+- `internal-docs/math/17-recommendations-engine.md` — math/spec doc
+
+**Új frontend (1):**
+- `src/components/shared/RecommendationsCard.tsx` — UI card
+
+**Módosított backend (5):**
+- `netlify/functions/edge-tracker/statistics.mts` — `weightedPearsonCorrelation`
+- `netlify/functions/auto-trader/shared/signal-calibration.mts` — halfLife option, weather support
+- `netlify/functions/auto-trader/index.mts` — crypto persist with halfLife
+- `netlify/functions/auto-trader/hyperliquid/index.mts` — HL persist with halfLife
+- `netlify/functions/auto-trader/weather/reconciler.mts` — weather persist hook
+- `netlify/functions/trader-settings.mts` — `icHalfLifeTrades` knob
+
+**Módosított frontend (4):**
+- `src/components/trader/CryptoTrader.tsx`
+- `src/components/trader/WeatherTrader.tsx`
+- `src/components/trader/HyperliquidTrader.tsx`
+- `src/components/trader/FundingArbPanel.tsx`
+
+**Módosított docs (3):**
+- `internal-docs/roadmap/master-plan.md` — Mi MŰKÖDIK + Doksi + Bot-pipeline
+  feedback loop szekciók
+- `CLAUDE.md` — 35. session AKTUÁLIS ÁLLAPOT entry
+- `internal-docs/changelog/CHANGELOG-2026-05-14.md` — ez a szekció
+
+## Operator playbook
+
+### "Csak ránézek a javaslatokra"
+
+1. `/trade/<bot>/` — RecommendationsCard a TraderShell tetején renderelődik
+2. Login a Settings tabon, ha még nincs (recommendations auth-protected)
+3. Várj N≥5 closed trade-re (jelenleg crypto=3, HL=4, weather=2, F-Arb=0)
+4. Megjelennek a javaslatok, "Why?" → adatok ellenőrzése
+
+### "Operatív tuning loop"
+
+1. Naponta egyszer ránézel a Coach mode kártyára mind a 4 botban
+2. "Why?" view-val verifikálod a statisztikákat (`tradeCount`, `winRate`,
+   `topSignal IC`, stb.)
+3. Apply-eled amit indokoltnak látsz, dismisszálod a többit
+4. A Settings tab "overrides" view-ban látod a recent változásokat (audit)
+
+### "Bekapcsolom a time-decay-t"
+
+1. Settings → Signal calibration → "IC half-life (recency decay)" → 50
+2. Mentés
+3. Várj egy cron tick-et (3 perc crypto, 5 perc weather)
+4. Edge Tracker → CalibrationViewCard (2026-05-14 (b)) — Effective oszlop
+   most a recent-weighted realized IC alapján számolódik
+5. Visszaállítás → 0 = uniform (bit-azonos a pre-change viselkedéssel)
+
+## Hivatkozások
+
+- Részletes spec: [`math/17-recommendations-engine.md`](../math/17-recommendations-engine.md)
+- Master-plan státusz: [`roadmap/master-plan.md` — Bot-pipeline feedback loop](../roadmap/master-plan.md)
+- Apply target: meglévő `netlify/functions/trader-settings.mts` POST endpoint
+- Előzmény: 2026-05-14 (b) "Live-readiness override + Realized-IC kalibráció"
+
