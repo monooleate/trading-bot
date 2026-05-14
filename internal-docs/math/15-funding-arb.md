@@ -148,15 +148,21 @@ a top 1-3 viable opportunity kerül entry-konfirmációra.
 
 ## 5. Entry decision gates (`funding-arb/index.mts`)
 
-A 5 gate sorrendben — a `EntryDecisionSnapshot.gates[]` ezeket építi:
+A 8 gate sorrendben — a `EntryDecisionSnapshot.gates[]` ezeket építi
+(`auto-trader/hyperliquid/funding-arb/index.mts:181-385`):
 
 | # | Gate | Forrás | Default | Bukás |
 |---|------|--------|---------|-------|
 | 1 | Spread ≥ küszöb | `opp.spread >= minSpreadHourly` | 0.0001/h | (arb-detector korábban filterezi) |
-| 2 | Open interest ≥ küszöb | `opp.openInterestUSD >= minOpenInterestUSD` | $5M | (arb-detector) |
-| 3 | Per-coin uniqueness | `!openCoinSet.has(opp.coin)` | – | A coinra már van nyitott pozíció |
-| 4 | Position count ≤ max | `openArbPositions(session).length < maxArbPositions` | 3 | "Capital cap reached" |
-| 5 | Capital cap (sizing) | `sizeUSDC >= minPositionUSDC AND headroom >= 0` | $50 min, 40% bankroll cap | "Size $X < min $50" |
+| 2 | Spread ≤ sanity cap | `opp.spread <= maxSpreadHourly` | 0.5%/h | "Spread sanity cap … likely feed glitch" |
+| 3 | Break-even hold ≤ max | `totalFees / spread <= maxHoldDays` | – | "Break-even hold Xd > max Yd" |
+| 4 | Open interest ≥ küszöb | `opp.openInterestUSD >= minOpenInterestUSD` | $5M | (arb-detector) |
+| 5 | Per-coin uniqueness | `!openCoinSet.has(opp.coin)` | – | A coinra már van nyitott pozíció |
+| 6 | **Coin-capacity (cross-position)** ✦ | `openCoinSet.has(coin) === false` (lockstep #5-tel) | – | "Már van nyitott F-Arb pozíció <COIN>-n" |
+| 7 | Pozíció szám < max | `openArbPositions(session).length < maxArbPositions` | 3 | "Max arb positions reached" |
+| 8 | Capital cap (sizing) | `sizeUSDC >= minPositionUSDC AND headroom >= 0` | $50 min, 40% bankroll cap | "Size $X < min $50" |
+
+✦ Új gate a 2026-05-14e cross-position consistency sweep-ből — lásd §10 F9. Lockstep a #5 "Per-coin uniqueness" gate-tel; informational defense-in-depth, expliciten kommunikálja az F-Arb sajátos kapacitás-szemantikáját (1 HL-short + 1 Binance-long páros / coin).
 
 ### Sizing képlet
 

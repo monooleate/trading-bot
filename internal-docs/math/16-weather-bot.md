@@ -62,7 +62,7 @@ A Polymarket napi-max hőmérsékleti piacai **negRisk események**: egy `(váro
 │         - computeEnsemble() → ensembleMaxC + confidence              │
 │         - correctForecast() → METAR-rounding (°F-egész)              │
 │      c. matchBucket(predictedMaxC, outcomes, σ) → BucketMatch        │
-│      d. makeWeatherDecision(forecast, match, modelLag, ...) → 6 gate │
+│      d. makeWeatherDecision(forecast, match, modelLag, ...) → 8 gate │
 │      e. ha shouldTrade: placeBuyOrder() (paper or live)              │
 │      f. addOpenPosition() → session blob, weatherMeta + entryDecision│
 │   6. saveSession()                                                   │
@@ -307,7 +307,7 @@ const isUpperTail = /\bor\s+(higher|above|more)\b/i.test(label);
 
 ## 7. Decision engine — gate-ek
 
-A `makeWeatherDecision()` 7 gate-en keresztül engedi át a trade-et. Mind a 7 megjelenik a UI "Why?" popoverében (pass/fail + actual + required + hint).
+A `makeWeatherDecision()` 8 gate-en keresztül engedi át a trade-et. Mind a 8 megjelenik a UI "Why?" popoverében (pass/fail + actual + required + hint).
 
 | # | Gate | Default küszöb | Mit néz | Bukás reason |
 |---|------|----------------|---------|--------------|
@@ -315,9 +315,12 @@ A `makeWeatherDecision()` 7 gate-en keresztül engedi át a trade-et. Mind a 7 m
 | 2 | Idő settlementig ≥ küszöb | `exitBeforeMin = 45 min` | `(endDate - now) / 60_000` | Túl közeli endDate — nincs idő reagálni |
 | 3 | Forecast model frissesség | `nearBoundary = next run < 15 min` | `detectModelLag()` | Modell-határ — várjuk az új run-t |
 | 4 | Net edge ≥ küszöb | `edgeThreshold = 0.12` | `\|prob - price\| - feePct` | Edge alacsony, no-trade |
-| 4b | Sanity cap (gross ≤ cap) | `maxEdgeCap = 0.40` | `\|prob - price\|` | "Too good to be true" — modell-hiba |
-| 5 | Market disagreement ≤ küszöb | `marketDisagreeMaxC = 2.0°C` | `\|predTempC − marketModalTempC\|` | A bot túl messzire jósol a market modális bucketjétől — valószínűbb modellhiba mint alfa |
-| 6 | Kelly méret ≤ cap | `KELLY_CAP = 0.15` | `clamp(Kelly, 0, 0.15)` | Strukturálisan nem bukhat el (clamp), de a UI ezzel mutatja a sizing-ot |
+| 5 | Sanity cap (gross ≤ cap) | `maxEdgeCap = 0.40` | `\|prob - price\|` | "Too good to be true" — modell-hiba |
+| 6 | Market disagreement ≤ küszöb | `marketDisagreeMaxC = 2.0°C` | `\|predTempC − marketModalTempC\|` | A bot túl messzire jósol a market modális bucketjétől — valószínűbb modellhiba mint alfa |
+| 7 | Kelly méret ≤ cap | `KELLY_CAP = 0.15` | `clamp(Kelly, 0, 0.15)` | Strukturálisan nem bukhat el (clamp), de a UI ezzel mutatja a sizing-ot |
+| 8 | **Monotonicitás (egyéb nyitott pozíciók)** ✦ | csak YES kandidátus | `Σ predictedProb(YES nyitott pozíciók ugyanazon city::date) + cand ≤ 1.0` | "Σ P(YES) > 100% — modell-ellentmondás" |
+
+✦ Új gate a 2026-05-14e cross-position consistency sweep-ből — lásd §13.8. Polymarket weather event = negRisk csoport (bucket-ek kölcsönösen kizárók), ezért Σ YES ≤ 1.0 matematikailag kötelező. NO kandidátusoknál pass (egy NO implicit lefedi az összes többi bucket-et).
 
 ### Az 5-ös market-disagreement gate (2026-05-11 óta)
 
