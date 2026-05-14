@@ -615,6 +615,16 @@ simVersionExpected: null,
 
 **Javítás:** Polymarket settle után is futtassuk a `fetchMetarDailyMax()`-t **csak a DEB feedback-hez** (PnL-t a Polymarket határozza meg).
 
+### 13.8 ✅ JAVÍTVA (2026-05-14e) — Cross-position outcome-sum gate
+
+**Hely:** `weather/decision-engine.mts` — új `Monotonicitás (egyéb nyitott pozíciók)` gate (WEATHER_GATE_LABELS[7]).
+
+**Probléma:** A weather decision-engine **per-trade** értékelte a forecast vs bucket edge-et, de a már nyitott YES pozíciókat nem nézte. Polymarket weather event = negRisk csoport ahol a bucket-ek **kölcsönösen kizárók**, ezért `Σ predictedProb(YES pozíciók egy (city, date) csoporton) ≤ 1.0` matematikailag kötelező. Ha a bot mondjuk Shanghai 2026-05-15-re először nyit YES @ 21°C bucket-en `predProb=0.40`, majd egy következő tick-en YES @ 22°C bucket-en `predProb=0.40`, majd YES @ 23°C bucket-en `predProb=0.40` → `Σ = 1.20 > 1.0` az ensemble előrejelzés szerint, ami **modell-ellentmondás** (a 3 esemény egymást kizárja, a model szerint mindhárom 40%+ valószínűséggel megy).
+
+**Fix**: új gate, csak YES kandidátusokon fut, group-key `${forecast.city}::${forecast.date}`. Számolja Σ `predictedProb` a már nyitott YES weather-pozíciók ugyanezen csoportján, majd hozzáadja a kandidátus `match.probability`-jét. Ha `> 1.0 + 1e-6` → block, hint mutatja a részleteket. NO oldali kandidátusok pass-olnak (egy NO implicit lefedi az összes többi bucket-et, nem akkumulál).
+
+**Trigger / kontextus**: a 2026-05-14 paper session a Crypto bot 78K/80K monotonicitás-incidense után az 5-bot cross-position-consistency sweep része. A weather-bot esetén nem volt élő példa, de a strukturális kockázat ugyanaz mint a crypto bot-é — defense-in-depth a teljes lineup-on.
+
 ---
 
 ## 14. Tesztelési protokoll

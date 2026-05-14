@@ -107,6 +107,11 @@ async function runSportsTrader(
       bankroll: session.bankrollCurrent,
       openCount: session.openPositions.length,
       config,
+      // Cross-position outcome-sum gate (2026-05-14e). Passing the full
+      // openPositions array lets the engine block any new YES that would
+      // push Σ P(YES) within the same eventSlug over 1.0 (no betting on
+      // every outcome of one game).
+      openPositions: session.openPositions,
     });
 
     if (!decision.shouldTrade) {
@@ -176,6 +181,7 @@ async function runSportsTrader(
       marketPriceAtEntry: decision.direction === "YES" ? m.yesPrice : m.noPrice,
       predictedProb:      decision.direction === "YES" ? predicted : 1 - predicted,
       entryDecision,
+      eventSlug:          m.eventSlug,
     };
     session = addOpenPosition(session, position);
 

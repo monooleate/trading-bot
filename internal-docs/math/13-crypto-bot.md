@@ -1034,6 +1034,52 @@ Az alábbi 6 hiba 2026-05-10-ben került javításra ugyanazon a napon. A status
 | **E** | Live `handleBuyLifecycle` `shares = size / placement_price`-t használ, nem a tényleges fill price-t — partial fill / better-than-limit fill esetén a session state pontatlan. | ✅ FIXED | Új `execution.mts:fetchOrderFillDetail(orderId)` → `getOrder` → `size_matched` + `price`. `handleBuyLifecycle` live FILLED ágban most ezt használja, fallback a placement értékekre ha az API nem ad jó adatot. Defensive field-name spelling: `size_matched ?? sizeMatched ?? executedSize ?? filledSize`. |
 | **F** | `getMomentumSignal` ugyanazon slug `?slug=` lekéréssel vette a "past price"-t → ugyanazt az aktuális ár-t kapta vissza. A `Math.abs(...) < 0.001` branch elsült, "distance proxy"-ra esett — effektíven a market polaritását mérte, nem momentum-ot. | ✅ FIXED | `signal-combiner.mts:getMomentumSignal` átírva. Új `momentum-snapshots` Blobs store, per-slug `{ ts, yes }` snapshot. Minden hívás: olvas snapshot, ha age ∈ [60s, 1h] → real Rcum vs snapshot, ha túl friss/régi → neutral 0.5. Snapshot mindig frissítve a current value-ra. A combiner 3min cache miatt 3-15 min look-back ablakot ad. |
 
+### 2026-05-14e — Cross-market consistency gate (monotonicity)
+
+**Trigger**: az élő paper session 2026-05-14-én demonstrálta hogy a
+decision-engine **per-trade** értékel, a már nyitott pozíciókat nem
+nézi. A bot nyitotta `bitcoin-above-78k-on-may-14` NO @ pred=52% és
+`bitcoin-above-80k-on-may-14` YES @ pred=53% pozíciókat — `{>80K} ⊂
+{>78K}` matematikailag, ezért `P(>78K) ≥ P(>80K)` invariáns. A 52% <
+53% **monotonicitás-sértés**, és a $79K körüli zóna mindkét pozíciónak
+loser.
+
+**Fix**: új non-short-circuit gate `Monotonicitás (egyéb nyitott
+pozíciók)` a `CRYPTO_GATE_LABELS[14]` pozícióban. A `makeDecision()`
+új opcionális paramétere `openPositions: Position[] = []` — az
+`auto-trader/index.mts` átadja a live `updatedSession.openPositions`-t.
+A gate logika:
+
+1. Parse-old a kandidátus slug-ot `parseBtcAboveSlug()`-gal — ha nem
+   illik a `(?:bitcoin|btc)-(?:be-)?above-(\d+(?:\.\d+)?)k(?:-on-(.+))?`
+   mintára, `n/a (nem BTC-above-K piac)` és pass.
+2. Gyűjtsd ki az openPositions BTC-above-K elemeit + parseolt
+   `predictedProb`-jukat (ami a model YES-prob a belépéskor).
+3. A `findMonotonicityViolation()` shared helper csoportosít
+   `closingKey` szerint és ellenőrzi:
+   - `K_new > K_existing && predNew > predExisting` → violation
+   - `K_new < K_existing && predNew < predExisting` → violation
+   - Equal K-knál nincs monotonicitás-kérdés (pass).
+
+A predicted-YES probability mindig a model finalProb (függetlenül attól
+hogy a bot YES vagy NO oldalt választott a piacon — a model belief
+attribútuma a YES-prob, nem a side-é).
+
+**Reprodukció**: a `shared/cross-position-gates.test.mts` lefedi a
+2026-05-14 inputot:
+
+```ts
+findMonotonicityViolation(
+  { K: 80, closingKey: "may-14", predictedYesProb: 0.53 },
+  [{ K: 78, closingKey: "may-14", predictedYesProb: 0.52, slug: "..." }],
+) !== null;  // PASS — violation flagged
+```
+
+A test 6 case-t fed le: live-incident, reverse-direction, consistent
+monotonic, different closingKey, equal K, empty list.
+
+---
+
 ### Maradó (post-fix) limitációk
 
 - **Cooldown map in-memory**: `decision-engine.mts:cooldownMap` egy

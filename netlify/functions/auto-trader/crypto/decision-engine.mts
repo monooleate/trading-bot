@@ -1,5 +1,10 @@
-import type { TradeDecision, TraderConfig, AggregatedSignal, MarketInfo, DecisionGate } from "../shared/types.mts";
+import type { TradeDecision, TraderConfig, AggregatedSignal, MarketInfo, DecisionGate, Position } from "../shared/types.mts";
 import { getBtcExitConfig } from "../shared/config.mts";
+import {
+  parseBtcAboveSlug,
+  findMonotonicityViolation,
+  type MonotonicityExisting,
+} from "../shared/cross-position-gates.mts";
 import { getStore } from "@netlify/blobs";
 
 type BtcExitCfg = ReturnType<typeof getBtcExitConfig>;
@@ -98,6 +103,9 @@ export async function setCooldown(slug: string, cooldownSeconds: number = 300): 
 // And the floor itself moved from an implicit silent pad to an explicit
 // "Kelly méret ≥ minimum" gate, so under-conviction signals now show up
 // as gate failures in the UI instead of being padded into real trades.
+//
+// 2026-05-14e — added Monotonicitás gate (cross-position consistency), so
+// the current count is 15. See CHANGELOG-2026-05-14e.md for context.
 export const CRYPTO_GATE_LABELS = [
   "Session loss limit",
   "Aktív signal források",
@@ -113,12 +121,19 @@ export const CRYPTO_GATE_LABELS = [
   "Sanity cap (gross edge ≤ cap)",
   "Kelly méret ≥ minimum",
   "Kelly méret ≤ cap",
+  // Cross-position consistency (2026-05-14e). Blocks an entry whose
+  // predicted-YES probability contradicts an already-open BTC-above-K
+  // position at the same resolution time (monotonicity P(>K1) ≥ P(>K2)
+  // for K1 ≤ K2). Live-mode trigger: 78K-NO @ 52% + 80K-YES @ 53% on
+  // 2026-05-14 — both lost at $79,272.
+  "Monotonicitás (egyéb nyitott pozíciók)",
 ] as const;
 
 // Build a fully-padded gate list for early-exit code paths (no signal data
 // available yet). Caller passes the gates that DID get evaluated; the rest
 // are filled with `passed: false, actual: "not evaluated"` so Y stays
-// stable at 9 across every row in the UI.
+// stable across every row in the UI. Y is `CRYPTO_GATE_LABELS.length`
+// (currently 15 — 14 audit/risk gates + 1 cross-position monotonicity).
 export function padCryptoGates(evaluated: DecisionGate[]): DecisionGate[] {
   const have = new Set(evaluated.map((g) => g.label));
   const out  = [...evaluated];
@@ -159,6 +174,7 @@ export function makeDecision(
   sessionLoss: number,
   config: TraderConfig,
   btcExit?: BtcExitCfg,
+  openPositions: Position[] = [],
 ): TradeDecision {
   const { finalProb } = signal;
   const marketPrice = market.currentPrice;
@@ -430,6 +446,69 @@ export function makeDecision(
     required: `≤ ${(config.maxKellyFraction * 100).toFixed(1)}%`,
     hint: "¼-Kelly + intézményi 8% hard cap a bankroll-ra.",
   });
+
+  // 13. Cross-position monotonicity (2026-05-14e). For BTC-above-K threshold
+  // markets resolving at the same time, the bot's model probability must
+  // respect P(>K1) ≥ P(>K2) when K1 ≤ K2. Without this, the engine can
+  // open NO @ 78K (predY=52%) AND YES @ 80K (predY=53%) on the same tick —
+  // both lose if BTC settles between 78K and 80K. The candidate's
+  // predicted-YES probability is `finalProb` (regardless of which side
+  // the bot ultimately took). We compare to each open position's stored
+  // `predictedProb` (which is also the model's YES-prob at entry).
+  //
+  // Soft pass: when the candidate or none of the existing positions
+  // parse as BTC-above-K markets, the gate reports "n/a" and passes.
+  const candParsed = parseBtcAboveSlug(market.slug);
+  if (candParsed) {
+    const existing: MonotonicityExisting[] = [];
+    for (const p of openPositions) {
+      const parsed = parseBtcAboveSlug(p.market);
+      if (!parsed) continue;
+      const pp = typeof p.predictedProb === "number" && Number.isFinite(p.predictedProb)
+        ? p.predictedProb
+        : null;
+      if (pp === null) continue;
+      existing.push({
+        K: parsed.K,
+        closingKey: parsed.closingKey,
+        predictedYesProb: pp,
+        slug: p.market,
+      });
+    }
+    const violation = findMonotonicityViolation(
+      { K: candParsed.K, closingKey: candParsed.closingKey, predictedYesProb: finalProb },
+      existing,
+    );
+    const sameGroup = existing.filter((e) => e.closingKey === candParsed.closingKey);
+    gates.push({
+      label: "Monotonicitás (egyéb nyitott pozíciók)",
+      passed: !violation,
+      actual: violation
+        ? `P(>${candParsed.K}K)=${(finalProb * 100).toFixed(0)}% vs P(>${violation.K}K)=${(violation.predictedYesProb * 100).toFixed(0)}% — ellentmondás`
+        : sameGroup.length === 0
+          ? "n/a (nincs azonos closingTime-ű BTC-above pozíció)"
+          : `OK — konzisztens ${sameGroup.length} nyitott pozícióval`,
+      required: candParsed.K > 0
+        ? `K_new > K_open ⇒ predNew ≤ predOpen (és fordítva)`
+        : "monotonicity",
+      hint: "BTC-above-K piacok: ha K_új > K_meglévő ugyanazon resolution-time-on, akkor P(>K_új) ≤ P(>K_meglévő). 78K-NO@52% + 80K-YES@53% típusú ellentmondás blokkolása.",
+    });
+    if (violation) {
+      reasons.push(
+        `Cross-position monotonicity: P(>${candParsed.K}K)=${(finalProb * 100).toFixed(0)}% ` +
+        `${candParsed.K > violation.K ? ">" : "<"} P(>${violation.K}K)=${(violation.predictedYesProb * 100).toFixed(0)}% ` +
+        `— ellentmond a nyitott ${violation.slug} pozícióval`,
+      );
+    }
+  } else {
+    gates.push({
+      label: "Monotonicitás (egyéb nyitott pozíciók)",
+      passed: true,
+      actual: "n/a (nem BTC-above-K piac)",
+      required: "—",
+      hint: "Csak BTC-above-K threshold-piacokra értelmezett (slug: `bitcoin-above-(\\d+)k-on-...`).",
+    });
+  }
 
   const allPassed = gates.every((g) => g.passed);
 

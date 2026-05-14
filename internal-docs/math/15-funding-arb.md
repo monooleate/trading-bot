@@ -336,6 +336,7 @@ A divergencia paper → live:
 | F2/F3 | 🟠 → ✅ | Cross-venue slippage paper-ben nincs modellezve | ✅ Paper most 0.5% HL entry + 1.0% HL close + 0.05% Binance one-way slippage-et könyvel (1.6% roundtrip) |
 | F7 | 🟠 → ✅ | Binance SELL `quantity.toFixed(5)` pair-onkénti lot precision | ✅ `exchangeInfo` cache (6h TTL) + step-rounding minden SELL-en |
 | F8 | 🟡 → ✅ | `totalFundingToday` string format fragile | ✅ Typed `{ date, amount }` object, migrációs fallback a régi blobokról |
+| F9 | 🟢 → ✅ | Coin-capacity csak implicit a "Per-coin uniqueness" gate-en | ✅ Új explicit `Coin-capacity (cross-position)` gate (ARB_GATE_LABELS[5], 2026-05-14e). F-Arb pozíció = 1 HL-short + 1 Binance-long; coin-szintű párhuzamos pozíció = redundáns kapacitás + korrelált exit-risk. Lockstep a meglévő uniqueness gate-tel — informational defense-in-depth. |
 
 ### F2/F3 — RESOLVED (2026-05-10 follow-up)
 

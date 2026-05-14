@@ -361,7 +361,7 @@ netlify deploy --prod --dir=dist
 
 ---
 
-## AKTUÁLIS ÁLLAPOT (2026-05-14d)
+## AKTUÁLIS ÁLLAPOT (2026-05-14e)
 
 **Élő deploy:** `mj-trading.netlify.app`. Paper mode, simVersion 3 (crypto), v2 (HL).
 
@@ -374,7 +374,17 @@ netlify deploy --prod --dir=dist
 | **HL Perp** | $200 → $199.44 | -$0.56 | 4 closed (1W/3L) | 0 open | 3 consecutive loss → 1h pause triggerelt (design intent) |
 | **F-Arb** | $200 → $200 (shared HL) | $0 | 0 closed | 0 open | Idle (paper) |
 
-### Mit fix utoljára (38. session, 2026-05-14d)
+### Mit fix utoljára (39. session, 2026-05-14e)
+
+- **Cross-market consistency gate — mind az 5 botra**: új shared helper (`auto-trader/shared/cross-position-gates.mts`) + bot-specifikus gate-ek a decision-engine non-short-circuit gate-listák végén. Trigger: 2026-05-14 paper session — a Crypto bot nyitott egy `bitcoin-above-78k-on-may-14` NO @ pred=52% pozíciót, majd egymás után egy `bitcoin-above-80k-on-may-14` YES @ pred=53% pozíciót. Matematikailag `P(>78K) ≥ P(>80K)` kötelező (monotonicitás), a model 52% < 53% ellentmondás → BTC $79K körüli zóna mindkét pozíciónak loser. Az új gate ezt blokkolja.
+  - **Crypto**: új `Monotonicitás (egyéb nyitott pozíciók)` gate (CRYPTO_GATE_LABELS[14]). Slug parser `bitcoin-above-(\d+)k-on-(.+)$`. Ha K_new > K_old (azonos closingKey) és pred_new > pred_old → blokk (és fordítva).
+  - **Weather**: új `Monotonicitás (egyéb nyitott pozíciók)` gate (WEATHER_GATE_LABELS[7]). NegRisk bucket-ek kölcsönösen kizárók → Σ P(YES) ≤ 100% ugyanazon (city, date) csoporton. Csak YES kandidátusokon fut.
+  - **HL Perp**: új `Directional-consistency (no LONG+SHORT same coin)` gate (HL_GATE_LABELS[7]). A meglévő "Coin nincs már nyitva" gate stricter; az új gate explicit LONG+SHORT-pár ellenőrzés (unleveraged + 2× fee → strict negatív EV) defense-in-depth.
+  - **F-Arb**: új `Coin-capacity (cross-position)` gate (ARB_GATE_LABELS[5]). A meglévő "Per-coin uniqueness" mellé layered — F-Arb pozíció = 1 HL-short + 1 Binance-long, coin-szintű duplikáció = redundáns kapacitás + korrelált exit-risk.
+  - **Sports**: új `Outcome-sum (cross-position)` gate. SportsPosition kapott `eventSlug?: string` mezőt (backward compat). Ha YES kandidátus, Σ P(YES) ugyanazon eventSlug-on + new candidate ≤ 1.0 — különben 3 YES = garantált fee-veszteség.
+  - Új tsx test suite (`shared/cross-position-gates.test.mts`) ellenőrzi a parsert + violation-finder-t a 2026-05-14 incident reprodukálással. `npm run build` + `npx tsc --noEmit` tisztán átmegy. (changelog 2026-05-14e)
+
+### Mit fix korábban (38. session, 2026-05-14d)
 
 - **Edge Tracker — Tier-1 metric expansion (mind az 5 kategórián automatikusan)**: a `computeSummary` 9 új mezővel bővült — **Profit Factor, Sortino, Expectancy, Payoff Ratio, longest/current Win-Loss streak, EV-gap (Σactual − ΣEV)**, valamint **Sharpe 95% bootstrap CI** (200 resample, determinisztikus LCG-seed) és **Max DD duration**. A SummaryCards mostantól két soros (6+6 kártya), az extended sor `surface2` háttéren válik el. Új `UnderwaterDrawdownChart` (area-fill loss-color) közvetlenül a CumulativePnlChart alatt — running underwater curve + worst-DD annotation + DD duration text. A `CumulativePoint` is bővült `drawdown` + `peak` mezővel, így a frontendnek elég egyetlen response-objektum. Direction-aware EV (LONG/SHORT/YES/NO), HL-perp esetén `tradeEv → t.pnl` (binary collapse) hogy az EV-gap ne hazudjon perp piacokon. **Minden bot (crypto/weather/HL/F-arb/sports) automatikusan kap minden új metrikát** a meglévő `CategoryDashboard /trade/{category}/edge-tracker` routingon át — nincs per-bot kód-duplikáció. (changelog 2026-05-14d)
 - **CryptoPriceTicker — live spot reference a 3 crypto trader oldalon**: új shared komponens (`src/components/shared/CryptoPriceTicker.tsx`) + új Netlify Function (`binance-price.mts`, Bybit primary / Binance fallback, 15s Blobs cache). A Crypto bot oldalán BTC (Polymarket BTC short-markets reference), HL Perp + F-Arb oldalon BTC/ETH/SOL. UX best practices: 30s frontend poll (cache-koherens), `visibilitychange` → tab-hidden pause, "stale" badge ha >2.5× pollMs nincs friss válasz, ár-flash up/down színes background-villanás max 800ms-ig, mobil horizontal scroll-snap (≤640px). Auto-fill grid (NEM auto-fit) — single-coin Crypto-n a kártya ~180px marad. Desktop verified: BTC card 206px wide; mobile verified (375×812): BTC 158px + scroll-snap row működik (rowScrollW=490 > rowClientW=295 HL-en, BTC fully in view). (changelog 2026-05-14d)

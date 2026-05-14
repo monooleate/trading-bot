@@ -210,6 +210,13 @@ async function runHyperliquidTraderInner(
     "Open pozíciók < max",
     "Consecutive losses < limit",
     "Coin nincs már nyitva",
+    // Cross-position directional consistency (2026-05-14e). The "Coin
+    // nincs már nyitva" gate above is the stronger constraint today
+    // (1 position max per coin), so this gate only fires if/when the
+    // stronger gate is ever relaxed to allow LONG+LONG averaging. Layered
+    // defense — and it surfaces the LONG/SHORT-pair logic explicitly in
+    // the UI for operator clarity.
+    "Directional-consistency (no LONG+SHORT same coin)",
     "Aktív signal források ≥ 3",
     "Resolution risk ≠ SKIP",
     "Net edge ≥ küszöb",
@@ -329,10 +336,43 @@ async function runHyperliquidTraderInner(
         required: "no duplicate",
         hint: "Egy coinra max 1 nyitott perp pozíció.",
       });
+
+      // Cross-position directional consistency (2026-05-14e). A LONG and
+      // a SHORT on the same coin = effectively un-leveraged net zero +
+      // double the fees, so expected value is strictly negative. The
+      // upstream "Coin nincs már nyitva" gate already prevents this in
+      // the current single-position-per-coin regime; this gate adds an
+      // explicit directional check so the diagnostic is loud and any
+      // future relaxation that allows LONG+LONG averaging still keeps
+      // the no-pair-against-itself guarantee.
+      const conflictingDir = session.openPositions.find(
+        (p) => p.coin === coin && p.direction !== signal.direction,
+      );
+      const directionalOk = !conflictingDir;
+      coinGates.push({
+        label: HL_GATE_LABELS[7],
+        passed: directionalOk,
+        actual: conflictingDir
+          ? `nyitott ${conflictingDir.direction}-${coin} vs javasolt ${signal.direction}`
+          : `signal ${signal.direction} (no ellentétes-direction nyitott pozíció)`,
+        required: "no LONG+SHORT same coin",
+        hint: "LONG+SHORT ugyanazon coin-on = unleveraged + 2× fee → strict negatív EV. Ne nyiss önmagad ellen.",
+      });
+      if (!directionalOk) {
+        results.push({
+          coin, action: "skip",
+          reason: `Directional conflict: ${conflictingDir!.direction}-${coin} már nyitva, ${signal.direction} blokk`,
+          direction: signal.direction, edge: signal.edge,
+          predictedProb: signal.finalProb, marketPrice: signal.marketPrice,
+          gates: snapGates(),
+        });
+        continue;
+      }
+
       const minActiveSignalsHl = config.minActiveSignals ?? 3;
       const activeSignalsOk = signal.activeSignals >= minActiveSignalsHl;
       coinGates.push({
-        label: HL_GATE_LABELS[7],
+        label: HL_GATE_LABELS[8],
         passed: activeSignalsOk,
         actual: `${signal.activeSignals}/8`,
         required: `≥ ${minActiveSignalsHl}`,
@@ -340,7 +380,7 @@ async function runHyperliquidTraderInner(
       });
       const resolutionOk = signal.resolutionCategory !== "SKIP";
       coinGates.push({
-        label: HL_GATE_LABELS[8],
+        label: HL_GATE_LABELS[9],
         passed: resolutionOk,
         actual: signal.resolutionCategory ?? "OK",
         required: "≠ SKIP",
@@ -352,7 +392,7 @@ async function runHyperliquidTraderInner(
       const netEdgePre = signal.edge - config.roundtripFeePct;
       const netEdgeOk = netEdgePre >= threshold;
       coinGates.push({
-        label: HL_GATE_LABELS[9],
+        label: HL_GATE_LABELS[10],
         passed: netEdgeOk,
         actual: `${netEdgePre >= 0 ? "+" : ""}${(netEdgePre * 100).toFixed(2)}% (gross ${(signal.edge * 100).toFixed(2)}% − fees ${(config.roundtripFeePct * 100).toFixed(2)}%)`,
         required: `≥ ${(threshold * 100).toFixed(1)}%`,
@@ -367,7 +407,7 @@ async function runHyperliquidTraderInner(
       const maxEdgeCapHl = config.maxEdgeCap ?? 0.40;
       const sanityOkHl = signal.edge <= maxEdgeCapHl;
       coinGates.push({
-        label: HL_GATE_LABELS[10],
+        label: HL_GATE_LABELS[11],
         passed: sanityOkHl,
         actual: `${(signal.edge * 100).toFixed(2)}%`,
         required: `≤ ${(maxEdgeCapHl * 100).toFixed(0)}%`,
@@ -383,7 +423,7 @@ async function runHyperliquidTraderInner(
       const isExtremeHl = signal.edge > watchThreshHl;
       const trustOkHl   = !(isWatchHl && isExtremeHl);
       coinGates.push({
-        label: HL_GATE_LABELS[11],
+        label: HL_GATE_LABELS[12],
         passed: trustOkHl,
         actual: `${recHl || "n/a"} @ ${(signal.edge * 100).toFixed(1)}% gross edge`,
         required: isWatchHl
@@ -427,7 +467,7 @@ async function runHyperliquidTraderInner(
       // Gate 13 — HL price available
       const hlPrice = await getCurrentPrice(coin, config.paperMode);
       coinGates.push({
-        label: HL_GATE_LABELS[12],
+        label: HL_GATE_LABELS[13],
         passed: !!hlPrice,
         actual: hlPrice ? `$${hlPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : "nincs adat",
         required: "elérhető",
@@ -461,7 +501,7 @@ async function runHyperliquidTraderInner(
       });
       const sizeOk = sized.sizeCoins > 0;
       coinGates.push({
-        label: HL_GATE_LABELS[13],
+        label: HL_GATE_LABELS[14],
         passed: sizeOk,
         actual: sizeOk
           ? `${sized.sizeCoins.toFixed(4)} ${coin} ($${sized.sizeUSDC.toFixed(0)} · ${sized.leverageUsed}× lev)`

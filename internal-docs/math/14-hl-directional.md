@@ -340,6 +340,7 @@ slight upper bound a live PnL-en.
 | §9.A | 🔴 → ✅ | Live exit / reconcile / settlement nincs | ✅ Új `live-resolver.mts` — `clearinghouseState` + `userFillsByTime` per cron tick |
 | F2/F3 | 🟠 → ✅ | Paper slippage nincs modellezve | ✅ SL=0.1%, timeout=0.05% adverse paper slippage |
 | §9.B | 🟡 → ✅ | TP leg failure paper-ben silent (live-ban entry+SL marad) | ✅ `placeHlEntry` most TP fail-on cancel-eli az entry-t (és nem placeolja az SL-t), tükrözve az SL fail meglévő rollback-jét |
+| H6 | 🟡 → ✅ | Directional-consistency csak implicit (a "Coin nincs már nyitva" gate stricter) | ✅ Új explicit gate `Directional-consistency (no LONG+SHORT same coin)` (HL_GATE_LABELS[7], 2026-05-14e). LONG+SHORT párral nyitás → unleveraged + 2× fee → strict negatív EV. Layered the existing same-coin gate fölött defense-in-depth okból: ha valaha relaxáljuk a "max 1 / coin" megszorítást LONG+LONG averaging miatt, a direction-pair-blokk megmarad. |
 
 ### §9.A — RESOLVED (2026-05-10 follow-up)
 

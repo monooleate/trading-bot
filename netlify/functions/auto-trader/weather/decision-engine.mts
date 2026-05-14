@@ -1,7 +1,7 @@
 import type { BucketMatch } from "./bucket-matcher.mts";
 import type { ModelLagResult } from "./model-lag-detector.mts";
 import type { ForecastResult } from "./forecast-engine.mts";
-import type { DecisionGate } from "../shared/types.mts";
+import type { DecisionGate, Position } from "../shared/types.mts";
 
 export interface WeatherConfig {
   edgeThreshold: number;      // 0.12 = 12%
@@ -123,7 +123,7 @@ const KELLY_CAP = 0.15;
 
 // Canonical labels for weather-bot gates. Used by the engine when fully
 // evaluating + by the runner to pad early-exit rows so every scan row
-// reports Y=7 on the unified "X/Y gates" chip.
+// reports the same Y on the unified "X/Y gates" chip.
 export const WEATHER_GATE_LABELS = [
   "Forecast confidence ≥ küszöb",
   "Idő a settlementig ≥ küszöb",
@@ -132,6 +132,12 @@ export const WEATHER_GATE_LABELS = [
   "Sanity cap (gross edge ≤ cap)",
   "Market disagreement ≤ küszöb",
   "Kelly méret ≤ cap",
+  // Cross-position consistency (2026-05-14e). Blocks an entry that would
+  // push the sum of YES-side predicted probabilities over 1.0 on the same
+  // (city, date) negRisk event. Bucket-markets in one event are mutually
+  // exclusive, so Σ P(YES) > 1 is a model contradiction — both bets can't
+  // be right.
+  "Monotonicitás (egyéb nyitott pozíciók)",
 ] as const;
 
 export function padWeatherGates(evaluated: DecisionGate[]): DecisionGate[] {
@@ -161,8 +167,13 @@ export function makeWeatherDecision(params: {
   // returns "not evaluated" (passed=true) so behaviour degrades gracefully.
   marketModalTempC?: number | null;
   marketModalLabel?: string | null;
+  // Already-open weather positions in the session — fed into the
+  // cross-position consistency gate (2026-05-14e). Defaults to empty
+  // so existing callers keep working until they pass the array.
+  openPositions?: Position[];
 }): WeatherTradeDecision {
   const { forecast, match, modelLag, timeToResolutionMin, bankrollUSDC, config, marketModalTempC, marketModalLabel } = params;
+  const openPositions: Position[] = params.openPositions ?? [];
 
   const gates: DecisionGate[] = [];
   const reasons: string[] = [];
@@ -284,6 +295,59 @@ export function makeWeatherDecision(params: {
     required: `≤ ${(KELLY_CAP * 100).toFixed(1)}%`,
     hint: "¼-Kelly × confidence + 15% hard cap, plus a maxPositionUSD floor.",
   });
+
+  // 8. Cross-position consistency (2026-05-14e). Polymarket weather events
+  // are negRisk groups: all sub-buckets in one (city, date) event are
+  // mutually exclusive, so Σ P(YES) across our YES positions in that group
+  // must be ≤ 1.0. The bot's own model is the source of truth here —
+  // `predictedProb` on each open position is the YES-side prob the
+  // forecast assigned at entry. Block any new YES that would push the
+  // running sum over 1.0.
+  //
+  // Soft pass: gate only applies to YES candidates. NO positions are
+  // safe (P(NO) = 1 − P(YES_bucket), but they don't accumulate). For YES
+  // candidates with no same-group open positions, the gate reports "n/a".
+  const cityDateKey = `${forecast.city}::${forecast.date}`;
+  if (direction === "YES") {
+    let sumExisting = 0;
+    let countSameGroup = 0;
+    for (const p of openPositions) {
+      if (p.category !== "weather") continue;
+      if (p.direction !== "YES") continue;
+      const meta = p.weatherMeta;
+      const pp = typeof p.predictedProb === "number" && Number.isFinite(p.predictedProb)
+        ? p.predictedProb
+        : null;
+      if (!meta || pp === null) continue;
+      if (`${meta.city}::${meta.date}` !== cityDateKey) continue;
+      sumExisting += pp;
+      countSameGroup += 1;
+    }
+    const candProb = match.probability;
+    const projected = sumExisting + candProb;
+    const consistent = projected <= 1.0 + 1e-6;
+    gates.push({
+      label: "Monotonicitás (egyéb nyitott pozíciók)",
+      passed: consistent,
+      actual: countSameGroup === 0
+        ? `n/a (nincs YES pozíció ${forecast.city} ${forecast.date}-re)`
+        : `Σ P(YES) ${forecast.city} ${forecast.date}: ${(sumExisting * 100).toFixed(0)}% + ${(candProb * 100).toFixed(0)}% = ${(projected * 100).toFixed(0)}%`,
+      required: "Σ P(YES) ≤ 100%",
+      hint: "Egy negRisk weather event bucket-jei kölcsönösen kizárják egymást — Σ P(YES) > 100% modell-ellentmondás.",
+    });
+    if (!consistent) reasons.push(
+      `Cross-position monotonicity: Σ P(YES) ${(sumExisting * 100).toFixed(0)}% + ${(candProb * 100).toFixed(0)}% = ${(projected * 100).toFixed(0)}% > 100% ` +
+      `(${forecast.city} ${forecast.date})`,
+    );
+  } else {
+    gates.push({
+      label: "Monotonicitás (egyéb nyitott pozíciók)",
+      passed: true,
+      actual: "n/a (NO oldal, bucket-ek kizárása nem akkumulál)",
+      required: "—",
+      hint: "Csak YES-oldal kandidátusoknál értelmezett. NO oldali pozíciók nem összegződnek bucket-szétdaraboláson.",
+    });
+  }
 
   const allPassed = gates.every((g) => g.passed);
 

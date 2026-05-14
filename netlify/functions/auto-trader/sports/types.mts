@@ -42,6 +42,14 @@ export interface SportsPosition {
   marketPriceAtEntry:  number;
   predictedProb:       number;     // bot's fair-value estimate
   entryDecision:       EntryDecisionSnapshot;
+  // Polymarket event-slug — groups markets that belong to the same game
+  // (moneyline + draw outcomes for a single match). Powers the
+  // cross-position outcome-sum gate (2026-05-14e): Σ P(YES) within one
+  // eventSlug across all open YES positions + new candidate must ≤ 1.0.
+  // Optional for backward compat with positions opened before the field
+  // was introduced — those positions are skipped in the sum, degrading
+  // gracefully to "no constraint".
+  eventSlug?:          string;
 }
 
 export interface SportsClosedTrade {

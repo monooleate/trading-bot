@@ -10,7 +10,7 @@
 // This produces a NO bet when YES is above the high threshold, and a
 // YES bet when YES is below the low threshold.
 
-import type { SportsMarket, SportsTradeDecision } from "./types.mts";
+import type { SportsMarket, SportsPosition, SportsTradeDecision } from "./types.mts";
 import type { SportsConfig } from "./config.mts";
 import type { DecisionGate } from "../shared/types.mts";
 
@@ -29,10 +29,16 @@ export interface DecideInput {
   bankroll:     number;
   openCount:    number;
   config:       SportsConfig;
+  // Cross-position consistency: live open YES positions on the same event
+  // (same `eventSlug`). The outcome-sum gate uses these to block any new
+  // YES candidate whose predicted-prob would push Σ P(YES) over 1.0 — three
+  // YES outcomes on a single match guarantees fee-loss.
+  openPositions?: SportsPosition[];
 }
 
 export function makeSportsDecision(input: DecideInput): SportsTradeDecision {
   const { market, bankroll, openCount, config } = input;
+  const openPositions: SportsPosition[] = input.openPositions ?? [];
   const yp = market.yesPrice;
   const gates: DecisionGate[] = [];
 
@@ -106,6 +112,47 @@ export function makeSportsDecision(input: DecideInput): SportsTradeDecision {
     actual:   `$${cappedSize.toFixed(2)}`,
     required: `>= $${config.minPositionUSDC}`,
   });
+
+  // Gate 6: Cross-position outcome-sum (2026-05-14e). On a single match
+  // (eventSlug) the outcomes (home/away/draw) are mutually exclusive, so
+  // Σ predictedProb across YES positions must be ≤ 1.0 — otherwise the
+  // bot would book a guaranteed fee loss by betting YES on every outcome.
+  // Only applies to YES candidates; NO positions don't accumulate the same
+  // way (one NO covers all other outcomes implicitly).
+  //
+  // Graceful degradation: when the candidate has no eventSlug (very old
+  // market record) or all existing positions predate the eventSlug field,
+  // the gate reports "n/a" and passes.
+  if (direction === "YES" && market.eventSlug) {
+    let sumExisting = 0;
+    let countSame = 0;
+    for (const p of openPositions) {
+      if (p.direction !== "YES") continue;
+      if (!p.eventSlug || p.eventSlug !== market.eventSlug) continue;
+      if (typeof p.predictedProb !== "number" || !Number.isFinite(p.predictedProb)) continue;
+      sumExisting += p.predictedProb;
+      countSame += 1;
+    }
+    const projected = sumExisting + predicted;
+    const outcomeOk = projected <= 1.0 + 1e-6;
+    gates.push({
+      label:    "Outcome-sum (cross-position)",
+      passed:   outcomeOk,
+      actual:   countSame === 0
+        ? `n/a (nincs azonos eventSlug YES pozíció)`
+        : `Σ P(YES) ${(sumExisting * 100).toFixed(0)}% + ${(predicted * 100).toFixed(0)}% = ${(projected * 100).toFixed(0)}%`,
+      required: `Σ P(YES) ≤ 100% (event: ${market.eventSlug})`,
+      hint:     "Egy meccsen az outcome-ok kölcsönösen kizárják egymást — Σ P(YES) > 100% garantált fee-veszteség.",
+    });
+  } else {
+    gates.push({
+      label:    "Outcome-sum (cross-position)",
+      passed:   true,
+      actual:   direction === "NO" ? "n/a (NO oldal)" : "n/a (nincs eventSlug)",
+      required: "—",
+      hint:     "Csak YES oldali kandidátusoknál értelmezett. NO oldali pozíciók implicit lefedik az összes többi outcome-ot.",
+    });
+  }
 
   const allPassed = gates.every((g) => g.passed);
   const firstFail = gates.find((g) => !g.passed);

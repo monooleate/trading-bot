@@ -572,6 +572,10 @@ async function runCryptoTrader(
         updatedSession.sessionLoss,
         config,
         btcExit,
+        // Cross-position monotonicity gate (2026-05-14e): pass current
+        // open positions so the engine can block a contradictory candidate
+        // (e.g. NO @ 78K + YES @ 80K with non-monotonic predProbs).
+        updatedSession.openPositions,
       );
 
       // Common per-market context surfaced in the response so the UI can

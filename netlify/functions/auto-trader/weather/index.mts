@@ -387,6 +387,10 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
         config,
         marketModalTempC: marketModal?.tempC ?? null,
         marketModalLabel: marketModal?.label ?? null,
+        // Cross-position consistency gate (2026-05-14e) — pass the live
+        // YES-side weather positions so the engine can block any new
+        // YES that would push the same (city, date) Σ P(YES) over 100%.
+        openPositions: updatedSession.openPositions,
       });
 
       // Common per-row context — `evaluatedAt` is the per-row scan timestamp,

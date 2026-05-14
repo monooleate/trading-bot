@@ -184,6 +184,14 @@ async function runFundingArbInner(): Promise<any> {
       "Break-even hold ≤ max",
       "Open interest ≥ küszöb",
       "Per-coin uniqueness",
+      // Cross-position consistency (2026-05-14e). Mirrors the existing
+      // per-coin uniqueness check but framed explicitly as the "coin-
+      // capacity" gate from the cross-market-consistency spec: an F-Arb
+      // entry on a coin we already hold offers no diversification and
+      // doubles the correlated exit risk. Layered with the upstream
+      // uniqueness check so both fail together — informational, but
+      // names the constraint loudly in the UI.
+      "Coin-capacity (cross-position)",
       "Pozíció szám < max",
       "Capital cap (sizing)",
     ] as const;
@@ -273,31 +281,48 @@ async function runFundingArbInner(): Promise<any> {
         hint: "Egy coinra max 1 nyitott arb pozíció.",
       });
 
-      // Gate 6 — Position-count cap
+      // Gate 6 — Coin-capacity (cross-position consistency). Same predicate
+      // as the upstream uniqueness gate, surfaced under its own label so the
+      // cross-position layer is visible in the UI. Will always pass/fail in
+      // lockstep with gate 5 today; kept separate so future per-coin sizing
+      // tweaks (e.g. allow 2× BTC during regime shifts) can relax one
+      // without dropping the other.
+      const capacityCount = openCoinSet.has(coin) ? 1 : 0;
+      const capacityOk = capacityCount === 0;
+      coinGates.push({
+        label: ARB_GATE_LABELS[5],
+        passed: capacityOk,
+        actual: capacityOk ? `${coin} kapacitás szabad` : `már van nyitott F-Arb pozíció ${coin}-n`,
+        required: "0 nyitott F-Arb pozíció ezen a coin-on",
+        hint: "F-Arb pozíció = 1 HL-short + 1 Binance-long. Több coin-szintű párhuzamos pozíció = redundáns kapacitás + korrelált exit-risk.",
+      });
+
+      // Gate 7 — Position-count cap
       const posCount = openArbPositions(session).length;
       const posOk = posCount < config.maxArbPositions;
       coinGates.push({
-        label: ARB_GATE_LABELS[5],
+        label: ARB_GATE_LABELS[6],
         passed: posOk,
         actual: `${posCount}`,
         required: `< ${config.maxArbPositions}`,
         hint: "Egyszerre legfeljebb N arb pozíció.",
       });
 
-      // Coin must pass gates 1–6 to be opening-eligible. Sanity cap is also
-      // a hard fail (don't trade hallucinated spreads).
+      // Coin must pass gates 1–7 (incl. new coin-capacity cross-check) to
+      // be opening-eligible. Sanity cap is also a hard fail (don't trade
+      // hallucinated spreads).
       const isViable = viableCoinSet.has(coin);
-      const eligible = isViable && uniqOk && posOk && spreadSaneOk;
+      const eligible = isViable && uniqOk && capacityOk && posOk && spreadSaneOk;
 
       if (!eligible) {
         // Build a row reason — prefer the detector's wording, then the
         // session-level fail.
         let reason = opp.reason || "not viable";
         if (!spreadSaneOk) reason = `Spread sanity cap: ${(opp.spread * 100).toFixed(4)}%/h > ${(maxSpreadHourly * 100).toFixed(3)}%/h — likely feed glitch`;
-        else if (!uniqOk) reason = `Already have open arb position on ${coin}`;
+        else if (!uniqOk || !capacityOk) reason = `Already have open arb position on ${coin}`;
         else if (!posOk) reason = `Max arb positions (${config.maxArbPositions}) reached`;
-        // Fill gate 7 as not-evaluated (no sizing attempted).
-        coinGates.push(arbNotEval(ARB_GATE_LABELS[6], "Sizing only happens on viable+open-eligible rows."));
+        // Fill capital-cap gate as not-evaluated (no sizing attempted).
+        coinGates.push(arbNotEval(ARB_GATE_LABELS[7], "Sizing only happens on viable+open-eligible rows."));
         results.push({
           coin, action: "skip", reason,
           spreadHourly:    parseFloat((opp.spread * 100).toFixed(4)),
@@ -308,12 +333,12 @@ async function runFundingArbInner(): Promise<any> {
         continue;
       }
 
-      // Gate 6 — Capital cap + sizing.
+      // Gate 8 — Capital cap + sizing.
       const used = deployedCapital(session);
       const headroom = maxCapital - used;
       if (headroom <= 0) {
         coinGates.push({
-          label: ARB_GATE_LABELS[6],
+          label: ARB_GATE_LABELS[7],
           passed: false,
           actual: `headroom $${headroom.toFixed(0)}`,
           required: `headroom ≥ $${config.minPositionUSDC} · ≤ ${(config.maxCapitalPct * 100).toFixed(0)}% bankroll`,
@@ -339,7 +364,7 @@ async function runFundingArbInner(): Promise<any> {
       const sizeUSDC = Math.min(headroom * 0.5, oiCap);
       if (sizeUSDC < config.minPositionUSDC) {
         coinGates.push({
-          label: ARB_GATE_LABELS[6],
+          label: ARB_GATE_LABELS[7],
           passed: false,
           actual: `$${sizeUSDC.toFixed(2)} (headroom $${headroom.toFixed(0)})`,
           required: `≥ $${config.minPositionUSDC} · ≤ ${(config.maxCapitalPct * 100).toFixed(0)}% bankroll`,
@@ -355,7 +380,7 @@ async function runFundingArbInner(): Promise<any> {
         continue;
       }
       coinGates.push({
-        label: ARB_GATE_LABELS[6],
+        label: ARB_GATE_LABELS[7],
         passed: true,
         actual: `$${sizeUSDC.toFixed(2)} (${bankroll > 0 ? ((sizeUSDC / bankroll) * 100).toFixed(1) : "0"}% of bankroll)`,
         required: `≥ $${config.minPositionUSDC} · ≤ ${(config.maxCapitalPct * 100).toFixed(0)}% bankroll`,
