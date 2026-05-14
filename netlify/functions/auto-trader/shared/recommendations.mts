@@ -110,9 +110,15 @@ interface EngineArgs {
 // ── Crypto / HL Perp share the same 8-signal pipeline, just different
 //    Settings field names. The engine is parameterised so both call into
 //    the same shape with their own field map.
+//
+// Note: `combinerConfidenceMin` is crypto-only — the HL decision-engine
+// doesn't have a finalProb-near-0.5 gate (only `signal.edge` vs
+// `hlEdgeThresholdPaper`). Passing it through HL would mis-target the
+// crypto bot's gate on Apply. Encoded as null in HL_FIELDS so the rule
+// is silently skipped for HL.
 interface PredictionFieldMap {
   edgeThreshold:         string;
-  combinerConfidenceMin: string;
+  combinerConfidenceMin: string | null;
   minActiveSignals:      string;
   maxOpenPositions:      string;
   cooldownSeconds:       string;
@@ -130,7 +136,7 @@ const CRYPTO_FIELDS: PredictionFieldMap = {
 
 const HL_FIELDS: PredictionFieldMap = {
   edgeThreshold:         "hlEdgeThresholdPaper",
-  combinerConfidenceMin: "combinerConfidenceMin",  // shared across crypto + HL
+  combinerConfidenceMin: null,  // HL decision-engine has no finalProb-near-0.5 gate
   minActiveSignals:      "hlMinActiveSignals",
   maxOpenPositions:      "hlMaxOpenPositions",
   cooldownSeconds:       "hlCooldownSeconds",
@@ -259,16 +265,17 @@ function recommendPrediction(
     }
   }
 
-  // R2: combinerConfidenceMin tuning
-  if (n >= MIN_TRADES_FOR_WR_RECS) {
-    const cur = args.effective[fields.combinerConfidenceMin] ?? 0.05;
+  // R2: combinerConfidenceMin tuning — crypto-only (HL has no finalProb gate).
+  if (n >= MIN_TRADES_FOR_WR_RECS && fields.combinerConfidenceMin !== null) {
+    const confField = fields.combinerConfidenceMin;
+    const cur = args.effective[confField] ?? 0.05;
     const summary = computeSummary(trades, args.session.bankrollStart || 100);
     if (n >= 30 && summary.winRate >= 0.55 && cur >= 0.05) {
       const suggested = Math.max(0.02, round(cur - 0.02, 3));
       if (suggested < cur) {
         recs.push({
           id:             "rec-confidence-lower",
-          field:          fields.combinerConfidenceMin,
+          field:          confField,
           currentValue:   round(cur, 3),
           suggestedValue: suggested,
           severity:       "action",
@@ -291,7 +298,7 @@ function recommendPrediction(
       if (suggested > cur) {
         recs.push({
           id:             "rec-confidence-raise",
-          field:          fields.combinerConfidenceMin,
+          field:          confField,
           currentValue:   round(cur, 3),
           suggestedValue: suggested,
           severity:       "warn",
@@ -311,8 +318,11 @@ function recommendPrediction(
         });
       }
     }
+  }
 
-    // R3: edgeThreshold tuning — only if explicit edgeAtEntry data
+  // R3: edgeThreshold tuning — applies to BOTH crypto and HL (each with
+  // their own field). Only requires `edgeAtEntry` data on closed trades.
+  {
     const tradesWithEdge = trades.filter((t) =>
       typeof t.edgeAtEntry === "number" && Number.isFinite(t.edgeAtEntry),
     );

@@ -129,15 +129,17 @@ Minden bot saját adapter-en megy (`recommendPrediction`, `recommendWeather`, `r
 
 ### 3.1 Crypto + HL Perp (8-signal pipeline)
 
-| Szabály ID | Trigger | Suggested action | Severity | Min N |
-|------------|---------|------------------|----------|-------|
-| `rec-use-realized-ic` | maxAbsIC ≥ Bonferroni-good küszöb ÉS `useRealizedIC=OFF` | `useRealizedIC` → 1 | action | 20 |
-| `rec-disable-realized-ic` | minden signal noise tartományban ÉS `useRealizedIC=ON` | `useRealizedIC` → 0 | warn | 20 |
-| `rec-signal-negative-<name>` | per-signal IC < 0 statisztikailag szignifikáns | info (no Apply) | info | 20 |
-| `rec-confidence-lower` | n ≥ 30, WR ≥ 55%, current ≥ 0.05 | `combinerConfidenceMin` -= 0.02 | action | 15 |
-| `rec-confidence-raise` | n ≥ 30, WR < 45% | `combinerConfidenceMin` += 0.03 | warn | 15 |
-| `rec-edge-threshold` | First-profitable-bucket eltér ≥ 3% az aktuálistól | `edgeThreshold` ← first profitable | info/warn | 15 |
-| `rec-drawdown-attention` | maxDrawdown ≥ 70% × sessionLossLimit | info (no Apply) | warn/info | 10 |
+| Szabály ID | Trigger | Suggested action | Severity | Min N | Crypto | HL |
+|------------|---------|------------------|----------|-------|--------|-----|
+| `rec-use-realized-ic` | maxAbsIC ≥ Bonferroni-good küszöb ÉS `useRealizedIC=OFF` | `useRealizedIC` → 1 | action | 20 | ✓ | ✓ |
+| `rec-disable-realized-ic` | minden signal noise tartományban ÉS `useRealizedIC=ON` | `useRealizedIC` → 0 | warn | 20 | ✓ | ✓ |
+| `rec-signal-negative-<name>` | per-signal IC < 0 statisztikailag szignifikáns | info (no Apply) | info | 20 | ✓ | ✓ |
+| `rec-confidence-lower` | n ≥ 30, WR ≥ 55%, current ≥ 0.05 | `combinerConfidenceMin` -= 0.02 | action | 15 | ✓ | ❌ |
+| `rec-confidence-raise` | n ≥ 30, WR < 45% | `combinerConfidenceMin` += 0.03 | warn | 15 | ✓ | ❌ |
+| `rec-edge-threshold` | First-profitable-bucket eltér ≥ 3% az aktuálistól | `edgeThreshold` (crypto) / `hlEdgeThresholdPaper` (HL) | info/warn | 15 | ✓ | ✓ |
+| `rec-drawdown-attention` | maxDrawdown ≥ 70% × sessionLossLimit | info (no Apply) | warn/info | 10 | ✓ | ✓ |
+
+> **Megjegyzés:** A `combinerConfidenceMin` knob CSAK a **crypto** bot decision-engine-jét érinti (Gate 3 a finalProb-near-0.5 noise-szűrőre). A HL bot decision-engine-jében nincs ilyen gate — `signal.edge` közvetlenül az `hlEdgeThresholdPaper`-rel hasonlítódik. Ezért a `rec-confidence-lower` / `rec-confidence-raise` szabályok **HL kategórián csendben skip-pelnek**: a `HL_FIELDS.combinerConfidenceMin = null` mapping miatt nem generálódik javaslat.
 
 ### 3.2 Weather (forecast_edge single-signal)
 
