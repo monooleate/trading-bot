@@ -272,17 +272,29 @@ export async function findWeatherMarketsDetailed(): Promise<FindResult> {
       continue;
     }
 
-    // Aggregate sub-markets into buckets
-    const outcomes = parseBucketsFromEvent(evt);
-    if (outcomes.length === 0) {
-      dropped.push({ slug, title, reason: "no-buckets", vol24h: vol });
-      continue;
-    }
-
-    // Event end date = max of sub-market endDates (fallback to evt.endDate)
+    // Expired-window check — done BEFORE bucket parsing so already-closed
+    // weather events surface as "expired" in the diagnostic log instead of
+    // "no-buckets". Without this gate the bucket parser would filter out
+    // every sub-market via its own `m.endDate < Date.now()` line and the
+    // empty result would be reported as a coverage/schema gap, which is
+    // misleading: the buckets exist, they're just past resolution time.
+    // Polymarket leaves `evt.closed === false` for a few hours after
+    // endDate while the UMA oracle confirms — that race is precisely what
+    // this gate handles.
     const endDate = evt.endDate || evt.markets?.[0]?.endDate || "";
     if (endDate && new Date(endDate).getTime() < Date.now()) {
       dropped.push({ slug, title, reason: "expired", vol24h: vol });
+      continue;
+    }
+
+    // Aggregate sub-markets into buckets
+    const outcomes = parseBucketsFromEvent(evt);
+    if (outcomes.length === 0) {
+      // Reach here only if the event is still within the trading window
+      // (passed the expired gate above) but the bucket parser couldn't
+      // extract any active sub-market — typically a schema change at
+      // Polymarket or all sub-markets were `closed: true` mid-day.
+      dropped.push({ slug, title, reason: "no-buckets", vol24h: vol });
       continue;
     }
 
