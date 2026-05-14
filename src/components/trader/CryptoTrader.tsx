@@ -22,6 +22,7 @@ import {
 } from "../shared/TraderResults";
 import { useTradeExport } from "../shared/useTradeExport";
 import type { LiveReadinessReport } from "../shared/LiveReadinessBadge";
+import RecommendationsCard from "../shared/RecommendationsCard";
 
 // Crypto Auto-Trader (BTC short markets, 5m / 15m up-down). All chrome —
 // header, badges, status pills, stats grid, controls — comes from
@@ -280,6 +281,8 @@ export default function CryptoTrader({ bankroll }: { bankroll?: number }) {
       onExportTrades={exportTrades}
       exportingTrades={exporting}
     >
+      <RecommendationsCard category="crypto" refreshKey={healthRefresh} />
+
       {openDetails.length > 0 && (
         <OpenPositionsCard
           title={`${openDetails.length} open position${openDetails.length > 1 ? "s" : ""} (still in trading window)`}

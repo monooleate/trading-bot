@@ -18,6 +18,7 @@ import {
 } from "../shared/TraderResults";
 import { useTradeExport } from "../shared/useTradeExport";
 import type { LiveReadinessReport } from "../shared/LiveReadinessBadge";
+import RecommendationsCard from "../shared/RecommendationsCard";
 
 // Hyperliquid Perp Trader (BTC / ETH / SOL on Hyperliquid testnet by default).
 // Mirrors the rest of the bots through TraderShell and the shared cards.
@@ -170,6 +171,8 @@ export default function HyperliquidTrader({ bankroll }: { bankroll?: number }) {
       onExportTrades={exportTrades}
       exportingTrades={exporting}
     >
+      <RecommendationsCard category="hyperliquid" refreshKey={healthRefresh} />
+
       {openDetails.length > 0 && (
         <OpenPositionsCard
           title={`${openDetails.length} open perp position${openDetails.length > 1 ? "s" : ""}`}

@@ -21,6 +21,7 @@ import {
 } from "../shared/TraderResults";
 import { useTradeExport } from "../shared/useTradeExport";
 import type { LiveReadinessReport } from "../shared/LiveReadinessBadge";
+import RecommendationsCard from "../shared/RecommendationsCard";
 
 // Bucket-aware unit helpers. Polymarket weather markets ship bucket labels
 // either in °F (US cities like Austin/NYC) or °C (most international). The
@@ -187,6 +188,8 @@ export default function WeatherTrader({ bankroll }: { bankroll?: number }) {
       onExportTrades={exportTrades}
       exportingTrades={exporting}
     >
+      <RecommendationsCard category="weather" refreshKey={healthRefresh} />
+
       {openDetails.length > 0 && (
         <OpenPositionsCard
           title={`${openDetails.length} open weather position${openDetails.length > 1 ? "s" : ""} (still in trading window)`}

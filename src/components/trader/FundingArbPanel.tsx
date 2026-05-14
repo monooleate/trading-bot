@@ -20,6 +20,7 @@ import {
 } from "../shared/TraderResults";
 import { useTradeExport } from "../shared/useTradeExport";
 import type { LiveReadinessReport } from "../shared/LiveReadinessBadge";
+import RecommendationsCard from "../shared/RecommendationsCard";
 
 // Funding-Rate Arbitrage layer (delta-neutral: short HL perp + long Binance
 // spot). Same TraderShell + reusable cards as the rest of the auto-traders;
@@ -209,6 +210,8 @@ export default function FundingArbPanel({ bankroll }: { bankroll?: number }) {
       onExportTrades={exportTrades}
       exportingTrades={exporting}
     >
+      <RecommendationsCard category="funding-arb" refreshKey={healthRefresh} />
+
       <OpenPositionsCard title="Open Positions" rows={openRows} />
       <OpportunitiesCard title="Top Spreads (last scan)" rows={oppRows} />
 
