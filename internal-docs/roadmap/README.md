@@ -14,6 +14,7 @@ csak hivatkozás vagy 1-soros összefoglaló legyen.
 | Téma | SSOT fájl | Mit NE keress máshol |
 |------|-----------|----------------------|
 | **Implementáció-státusz** (P1.x, Cn., plan-on kívül megvalósult) | [`master-plan.md`](./master-plan.md) | `new-strategies.md` §8-ban van az "extra-roadmap" lista, de hivatalos status tracker a master-plan |
+| **Sprint-szintű operatív feladatok** (active / next / backlog táblák, owner, acceptance criteria, time-boxed) | [`sprints.md`](./sprints.md) | A `master-plan.md` státusz-tracker (✅/⚠️/❌), NEM sprint-tracker |
 | **Stratégia-katalógus** (#1-#37 ötlet specifikációja) | [`new-strategies.md`](./new-strategies.md) | A `master-plan.md` csak hivatkozik rájuk |
 | **VPS action plan** (EdgeCalc-specifikus 7-fázisos lépéssor) | [`hetzner-migration.md`](./hetzner-migration.md) | A `migration-strangler-fig.md` az absztrakt 9-fázis, NEM action plan |
 | **VPS fizikai layout** (OS, port, stack, deploy script, monitoring) | [`hetzner-infrastructure.md`](./hetzner-infrastructure.md) | A `hetzner-migration.md` csak env+Postgres séma részeket említ |
@@ -28,35 +29,40 @@ csak hivatkozás vagy 1-soros összefoglaló legyen.
 
 ## Olvasási sorrend (új session beszállásnál)
 
-### 1. `master-plan.md` — Mit kell összességében megépíteni
+### 1. `sprints.md` — Mit csinálok ezen a héten / sprint-ben
+Active sprint (most futó feladatok owner+acceptance criteria-val) + next
+sprint candidates + backlog. **Operatív gyors válasz**: "mi az első dolog
+amit ma csinálok?" → ide nézz először.
+
+### 2. `master-plan.md` — Mit kell összességében megépíteni
 A teljes rendszer architektúra (Netlify signal réteg + Hetzner execution
 réteg + Polymarket + Hyperliquid execution targets), prioritások P1.x →
 P3.x sorrendben + **friss státusz-jelölőkkel (✅/⚠️/❌/📋)**.
 
-**Ez a tényleges állapot SSOT-je.**
+**Ez a tényleges állapot SSOT-je.** A `sprints.md` hivatkozik vissza ide a részletekért.
 
-### 2. `new-strategies.md` — 37 stratégia rangsorolva
+### 3. `new-strategies.md` — 37 stratégia rangsorolva
 Top 11 most-soon (0-6 hónap), 19 mid-term (6-12 hónap), 7 long-term, és
 anti-roadmap (mit ne csinálj). **Minden ötlet implementáció-státusz
 jelölővel** (✅ megvalósult / 🟡 részben / ❌ nem / 🔵 nem tervezett, de
 megvalósult). A §8 listázza azt, ami **nem szerepelt** az eredeti
 roadmap-ban, de a kódban megvan.
 
-### 3. `hetzner-migration.md` — Konkrét action plan a következő sessionnek
+### 4. `hetzner-migration.md` — Konkrét action plan a következő sessionnek
 EdgeCalc-specifikus 7-fázisos lépéssor (VPS setup → HL execution port →
 funding-arb port → divergence WS → LP refresh → webhook bridge → Telegram
 bot). Minden fázishoz fájllista + Bun + PM2 parancsok + Postgres séma.
 
-### 4. `hetzner-infrastructure.md` — Mit építünk fizikailag
+### 5. `hetzner-infrastructure.md` — Mit építünk fizikailag
 Hetzner CCX23 VPS layout, OS hardening, Postgres + Redis + Caddy + PM2
 stack, port allokáció, deploy script, monitoring, DR. **A "ground truth"
 arra, hogy mi fut a gépen.**
 
-### 5. `migration-strangler-fig.md` — Strangler Fig pattern, absztrakt 9-fázis
+### 6. `migration-strangler-fig.md` — Strangler Fig pattern, absztrakt 9-fázis
 A Netlify Functions 1:1 mapping-je VPS process-ekre. **Háttér-koncepció,
 NEM friss action plan** — a `hetzner-migration.md` a végrehajtható.
 
-### 6. `risk-coordinator-considerations.md` — Mit *NEM* építünk és miért
+### 7. `risk-coordinator-considerations.md` — Mit *NEM* építünk és miért
 A pilléres modell mellett döntöttünk (saját bankroll, saját kill switch
 pillérenként), nem koordinált portfolio. **No-build referencia.**
 
@@ -89,8 +95,11 @@ pillérenként), nem koordinált portfolio. **No-build referencia.**
 - **Új signal / új stratégia** → `new-strategies.md` (új #N tétel a Top 11
   / Mid / Long-term valamelyikébe, Score-számolással). Csak akkor kerül a
   `master-plan.md`-be, ha live-mode előtt prioritás.
-- **Új live-mode bug / TODO** → `master-plan.md` "MI VAN MÉG HÁTRA"
-  szekció (P1-P4 prioritás-bekérdezés).
+- **Új live-mode bug / TODO (státusz-tracker)** → `master-plan.md` "MI VAN MÉG HÁTRA"
+  szekció (P1-P4 prioritás-bekérdezés, ✅/⚠️/❌ jelölés).
+- **Új sprint-szintű operatív feladat (time-boxed, owner-rel)** → `sprints.md`
+  active sprint táblába (ha most kell), next sprint candidates közé (ha sorba), vagy
+  backlog (B-szám) szekcióba (ha precondition-blocked). Acceptance criteria kötelező.
 - **Új VPS-process / Hetzner-feladat** → `hetzner-migration.md` 7-fázisú
   action plan-be (új sor + acceptance criteria).
 - **Új fizikai-layout-döntés** (Postgres séma, port, monitoring stack)
@@ -98,6 +107,13 @@ pillérenként), nem koordinált portfolio. **No-build referencia.**
 - **Új implementáció-státusz** (megvalósult P1.x, Cn.) → csak a
   `master-plan.md` státusz-jelölője változik, **soha máshol** ne jelöld
   a státuszt.
+
+**master-plan vs sprints különbség:**
+
+- `master-plan.md` "MI VAN MÉG HÁTRA" = **státusz-tracker** (P1.x → P4.x, ✅/⚠️/❌, prioritás-rangsor 🔴🟠🟡🟢).
+  Hosszú távú implementáció-státusz, nincs time-box.
+- `sprints.md` = **sprint-tracker** (active / next / backlog, owner, acceptance criteria, time-box ~1 hét).
+  Operatív "mit csináljak ezen a héten" áttekintés. Ha egy feladat sprintbe kerül, hivatkozik a `master-plan.md` P-számára (vagy a `new-strategies.md` #-számára), nem duplikálja a részleteket.
 
 ---
 

@@ -33,7 +33,8 @@ Az [`internal-docs/roadmap/README.md`](./internal-docs/roadmap/README.md) az SSO
 | Ötlet típusa | Hová kerüljön |
 |--------------|---------------|
 | **Új signal / új trade-stratégia** | `internal-docs/roadmap/new-strategies.md` — új #N tétel a Top 11 / Mid / Long sorrend szerint, Score-számolással |
-| **Új live-mode bug / TODO** | `internal-docs/roadmap/master-plan.md` "MI VAN MÉG HÁTRA" szekció (🔴/🟠/🟡/🟢 prioritás) |
+| **Új live-mode bug / TODO (státusz-tracker)** | `internal-docs/roadmap/master-plan.md` "MI VAN MÉG HÁTRA" szekció (🔴/🟠/🟡/🟢 prioritás) |
+| **Sprint-szintű operatív feladat (time-boxed, owner-rel)** | `internal-docs/roadmap/sprints.md` — active / next / backlog táblák |
 | **Új VPS-process / Hetzner-feladat** | `internal-docs/roadmap/hetzner-migration.md` 7-fázisú action plan-be |
 | **Új fizikai-layout-döntés** (Postgres séma, port, monitoring) | `internal-docs/roadmap/hetzner-infrastructure.md` |
 | **Új env-vár / secret** | `internal-docs/current-state/env-vars.md` (NEM a roadmap-ban) |
@@ -360,7 +361,7 @@ netlify deploy --prod --dir=dist
 
 ---
 
-## AKTUÁLIS ÁLLAPOT (2026-05-14c)
+## AKTUÁLIS ÁLLAPOT (2026-05-14d)
 
 **Élő deploy:** `mj-trading.netlify.app`. Paper mode, simVersion 3 (crypto), v2 (HL).
 
@@ -373,23 +374,27 @@ netlify deploy --prod --dir=dist
 | **HL Perp** | $200 → $199.44 | -$0.56 | 4 closed (1W/3L) | 0 open | 3 consecutive loss → 1h pause triggerelt (design intent) |
 | **F-Arb** | $200 → $200 (shared HL) | $0 | 0 closed | 0 open | Idle (paper) |
 
-### Mit fix utoljára (37. session, 2026-05-14c)
+### Mit fix utoljára (38. session, 2026-05-14d)
+
+- **Edge Tracker — Tier-1 metric expansion (mind az 5 kategórián automatikusan)**: a `computeSummary` 9 új mezővel bővült — **Profit Factor, Sortino, Expectancy, Payoff Ratio, longest/current Win-Loss streak, EV-gap (Σactual − ΣEV)**, valamint **Sharpe 95% bootstrap CI** (200 resample, determinisztikus LCG-seed) és **Max DD duration**. A SummaryCards mostantól két soros (6+6 kártya), az extended sor `surface2` háttéren válik el. Új `UnderwaterDrawdownChart` (area-fill loss-color) közvetlenül a CumulativePnlChart alatt — running underwater curve + worst-DD annotation + DD duration text. A `CumulativePoint` is bővült `drawdown` + `peak` mezővel, így a frontendnek elég egyetlen response-objektum. Direction-aware EV (LONG/SHORT/YES/NO), HL-perp esetén `tradeEv → t.pnl` (binary collapse) hogy az EV-gap ne hazudjon perp piacokon. **Minden bot (crypto/weather/HL/F-arb/sports) automatikusan kap minden új metrikát** a meglévő `CategoryDashboard /trade/{category}/edge-tracker` routingon át — nincs per-bot kód-duplikáció. (changelog 2026-05-14d)
+
+### Mit fix korábban (37. session, 2026-05-14c)
 
 - **Coach-mode Recommendations engine** (mind a 4 botra): per-bot Apply-able javaslat-lista a closed trade history alapján. Nem auto-tuning — operator-in-the-loop sanity check. Új RecommendationsCard a 4 TraderShell tetején; lista a `/recommendations-api?category=<cat>` endpoint-ról jön (auth-protected). Apply gomb a meglévő `trader-settings` POST-on keresztül módosít. 8 szabálycsoport: realized-IC toggle, per-signal noise warning, confidence-min tuning, edge-bucket reliability, F-Arb min-spread tuning, weather ensemble bekapcsolás, drawdown attention. Hard guardrail-ek (Kelly, sanity cap, session-loss-limit, liveReadyOverride) **soha nem javaslat-tárgyak**.
 - **Time-decay IC**: új `icHalfLifeTrades` Settings knob (default 0 = uniform, ajánlott 50). Exponenciális recency weighting a realized-IC Pearson korrelációra → regime-shift drift védelem. Új `weightedPearsonCorrelation` helper az `edge-tracker/statistics.mts`-ben.
 - **Weather signal-calibration**: a `persistCalibration` mostantól weather-re is fut (synthetic `forecast_edge` signal) — eddig csak crypto + HL volt. (changelog 2026-05-14c · részletes spec: `internal-docs/math/17-recommendations-engine.md`)
 
-### Mit fix korábban (36. session, 2026-05-14b)
+### Mit fix még korábban (36. session, 2026-05-14b)
 
 - **Live-readiness override + Realized-IC kalibráció**: két új Settings-mechanizmus.
   - **Override**: új `liveReadyOverrideEnabled` (bool) knob, ami bypassolja a 4 bot 7-gate readiness-ellenőrzését — `PAPER_MODE=false` esetén közvetlenül live-ra megy. Új piros "OVERRIDE — LIVE" jelzés a LiveReadinessBadge-en + Telegram alarm session-enként 1× audit-célból.
   - **Realized-IC**: új modul `auto-trader/shared/signal-calibration.mts` — minden cron-tick záráskor lementi a closedTrades per-signal Pearson IC-jét Blobs-ba (crypto + HL). A signal-combiner új `?category=` paramétert kap; ha `useRealizedIC=1` toggle ON, Bayes-shrinkage-zel keveri a realized IC-t a statikus priorokba: `effective_ic = n/(n+k) × realized + k/(n+k) × prior`, K alapból 30. Edge Tracker új "Signal IC calibration" kártyája mutatja a Prior / Realized / Effective oszlopokat. (changelog 2026-05-14b)
 
-### Mit fix korábban (35. session, 2026-05-14)
+### Mit fix régebben (35. session, 2026-05-14)
 
 - **Weather forecast-forrás upgrade-opciók dokumentálva** (doksi-only, kód nem érintve): a math/16-weather-bot.md §3.B új szekciója részletezi a 3 lehetséges upgrade-utat — (a) ECMWF közvetlen 51-tagú ensemble, (b) NOAA GFS GRIB2 közvetlen S3 pull, (c) kereskedelmi szolgáltatók. Master-plan 🟢 NICE-TO-HAVE 13. tételével keresztezve. A §3 táblázat alatt explicit megjegyzés: **mind a 4 jelenlegi forrás zéró-auth, egyetlen API-kulcs sem kell**. (changelog 2026-05-14)
 
-### Mit fix még korábban (34. session, 2026-05-13)
+### Mit fix legrégebben (34. session, 2026-05-13)
 
 - **Mobile UI optimalizálás + tap-to-tooltip rendszer**: a 100+ `title=` HTML hover-tooltip mostantól mobilon is működik (touch-tap-re custom popup `Base.astro`-ban inline JS-sel). Global `.tbl-scroll` wrapper class minden táblán (Apex/ArbMatrix/SignalCombiner/OrderFlow/VolDivergence/TradingPanel — 12 tábla). iOS auto-zoom megelőzése (input font-size ≥16px), notch/safe-area support, `theme-color` meta. Dashboard shell mobile breakpoints (`ec-header`, `ec-tabs`, `ec-card`). (changelog 2026-05-13)
 
