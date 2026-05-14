@@ -20,6 +20,7 @@ import { useTradeExport } from "../shared/useTradeExport";
 import type { LiveReadinessReport } from "../shared/LiveReadinessBadge";
 import RecommendationsCard from "../shared/RecommendationsCard";
 import CryptoPriceTicker from "../shared/CryptoPriceTicker";
+import { hyperliquidTradeUrl } from "../shared/marketLinks";
 
 // Hyperliquid Perp Trader (BTC / ETH / SOL on Hyperliquid testnet by default).
 // Mirrors the rest of the bots through TraderShell and the shared cards.
@@ -195,6 +196,9 @@ export default function HyperliquidTrader({ bankroll }: { bankroll?: number }) {
           title={`${openDetails.length} open perp position${openDetails.length > 1 ? "s" : ""}`}
           rows={openDetails.map<OpenPositionRow>((p) => ({
             coin:       p.coin,
+            // HL paper positions live on testnet — testnet UI URL.
+            // Live positions land on the mainnet app.
+            link:       hyperliquidTradeUrl(p.coin, !!session?.paperMode),
             direction:  p.direction,
             entryText:  `@$${p.entryPrice.toFixed(2)}`,
             sizeText:   `$${p.sizeUSDC.toFixed(0)} · ${p.leverage}× lev`,
@@ -255,6 +259,7 @@ export default function HyperliquidTrader({ bankroll }: { bankroll?: number }) {
               <ScanResultRow
                 key={`${r.coin}-${i}`}
                 title={r.coin}
+                link={hyperliquidTradeUrl(r.coin, !!session?.paperMode)}
                 action={r.action}
                 chips={chips}
                 criteria={criteria}

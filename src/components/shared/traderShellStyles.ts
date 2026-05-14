@@ -182,6 +182,13 @@ export const traderShellCSS = `
   display: flex; align-items: center; gap: 6px;
 }
 .ts-row-title-prefix { color: var(--accent); flex-shrink: 0; }
+.ts-row-title-link {
+  color: var(--accent2); text-decoration: none; font-size: 0.7rem;
+  padding: 0 4px; border-radius: 3px; flex-shrink: 0;
+  transition: background 120ms ease;
+}
+.ts-row-title-link:hover { background: var(--surface2); color: var(--accent); }
+.ts-row-title-link:focus-visible { outline: 1px solid var(--accent2); outline-offset: 1px; }
 .ts-row-chips { display: flex; flex-wrap: wrap; gap: 4px; }
 .ts-chip {
   font-size: 0.6rem; padding: 1px 6px; border-radius: 3px;

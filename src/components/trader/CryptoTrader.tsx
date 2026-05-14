@@ -24,6 +24,7 @@ import { useTradeExport } from "../shared/useTradeExport";
 import type { LiveReadinessReport } from "../shared/LiveReadinessBadge";
 import RecommendationsCard from "../shared/RecommendationsCard";
 import CryptoPriceTicker from "../shared/CryptoPriceTicker";
+import { polymarketEventUrl } from "../shared/marketLinks";
 
 // Crypto Auto-Trader (BTC short markets, 5m / 15m up-down). All chrome —
 // header, badges, status pills, stats grid, controls — comes from
@@ -301,6 +302,7 @@ export default function CryptoTrader({ bankroll }: { bankroll?: number }) {
               : `ends in ${Math.floor(endsIn / 60_000)}m`;
             return {
               coin:      p.title || p.market,
+              link:      polymarketEventUrl(p.market),
               direction: p.direction,
               entryText: `@${(p.avgEntry * 100).toFixed(0)}¢`,
               sizeText:  `$${p.size.toFixed(2)}`,
@@ -325,6 +327,7 @@ export default function CryptoTrader({ bankroll }: { bankroll?: number }) {
           title={`${pending.count} pending paper position${pending.count > 1 ? "s" : ""} past endDate — awaiting Polymarket resolution`}
           positions={pending.positions.map<PendingPositionLite>((p) => ({
             primary: p.title || p.market,
+            link: polymarketEventUrl(p.market),
             // Surfaces the per-position diagnostic so the operator can tell
             // a stuck "missing conditionId (legacy)" from a normal "UMA
             // window — typical 5–15 min".
@@ -479,6 +482,7 @@ export default function CryptoTrader({ bankroll }: { bankroll?: number }) {
                 key={`${r.market}-${i}`}
                 title={r.title || r.market}
                 titleTip={r.market}
+                link={polymarketEventUrl(r.market)}
                 action={r.action}
                 chips={chips}
                 signals={signals}

@@ -22,6 +22,7 @@ import { useTradeExport } from "../shared/useTradeExport";
 import type { LiveReadinessReport } from "../shared/LiveReadinessBadge";
 import RecommendationsCard from "../shared/RecommendationsCard";
 import CryptoPriceTicker from "../shared/CryptoPriceTicker";
+import { hyperliquidTradeUrl } from "../shared/marketLinks";
 
 // Funding-Rate Arbitrage layer (delta-neutral: short HL perp + long Binance
 // spot). Same TraderShell + reusable cards as the rest of the auto-traders;
@@ -163,6 +164,10 @@ export default function FundingArbPanel({ bankroll }: { bankroll?: number }) {
 
   const openRows: OpenPositionRow[] = (session?.openDetails ?? []).map((p) => ({
     coin:       p.coin,
+    // F-Arb pozíció = SHORT HL perp + LONG Binance spot. A HL perp leg az
+    // ami a botban élő pozíció (a Binance leg passive hedge), így a venue
+    // link a HL trade page-re mutat. Paper-mode = testnet UI.
+    link:       hyperliquidTradeUrl(p.coin, !!session?.paperMode),
     sizeText:   `$${p.sizeUSDC.toFixed(0)}`,
     spreadText: `${p.spreadEntry.toFixed(4)}%/h`,
     pnlText:    `${p.accumulatedFunding >= 0 ? "+" : ""}$${p.accumulatedFunding.toFixed(2)}`,
@@ -245,6 +250,7 @@ export default function FundingArbPanel({ bankroll }: { bankroll?: number }) {
               <ScanResultRow
                 key={`${r.coin}-${i}`}
                 title={r.coin}
+                link={hyperliquidTradeUrl(r.coin, !!session?.paperMode)}
                 action={r.action}
                 chips={chips}
                 criteria={criteria}

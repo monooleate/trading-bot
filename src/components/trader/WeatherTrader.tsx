@@ -6,6 +6,7 @@ import TraderShell, {
   type TraderStat,
   type TraderAlert,
 } from "../shared/TraderShell";
+import { polymarketEventUrl } from "../shared/marketLinks";
 import {
   ScanResultsCard,
   ScanResultRow,
@@ -201,6 +202,7 @@ export default function WeatherTrader({ bankroll }: { bankroll?: number }) {
               : `settles in ${Math.floor(reconcileIn / 60_000)}m`;
             return {
               coin:      `${p.city.charAt(0).toUpperCase() + p.city.slice(1)} · ${p.bucket}`,
+              link:      polymarketEventUrl(p.market),
               direction: p.direction,
               entryText: `@${(p.avgEntry * 100).toFixed(0)}¢`,
               sizeText:  `$${p.size.toFixed(2)}`,
@@ -342,6 +344,7 @@ export default function WeatherTrader({ bankroll }: { bankroll?: number }) {
             const msUntil = new Date(p.reconcileAfter).getTime() - Date.now();
             return {
               primary: p.city,
+              link: polymarketEventUrl(p.market),
               secondary: p.date,
               bucket: p.bucket,
               direction: p.direction,
@@ -421,6 +424,7 @@ export default function WeatherTrader({ bankroll }: { bankroll?: number }) {
                 key={`${r.market || r.slug || "row"}-${i}`}
                 title={r.title || r.market || r.slug || "—"}
                 titleTip={r.market || r.slug}
+                link={polymarketEventUrl(r.market || r.slug)}
                 prefix={r.city ? r.city.charAt(0).toUpperCase() + r.city.slice(1) : undefined}
                 action={r.action}
                 chips={chips}

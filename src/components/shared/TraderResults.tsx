@@ -157,6 +157,10 @@ export interface ScanRowProps {
   prefix?: string;
   /** Native tooltip on the title (full id, slug, etc.) */
   titleTip?: string;
+  /** Optional "open on venue" deep-link rendered after the title as a small
+   *  ↗ icon. Use the helpers in `./marketLinks.ts` to build this — Polymarket
+   *  for crypto/weather/sports, Hyperliquid for HL Perp + F-Arb perp-side. */
+  link?: string | null;
   action: ActionKind | string;
   /** Validation / context chips: market price, model %, edge, direction… */
   chips?: ResultChip[];
@@ -205,6 +209,18 @@ export function ScanResultRow(p: ScanRowProps) {
         <div className="ts-row-title" title={p.titleTip || p.title}>
           {p.prefix && <span className="ts-row-title-prefix">{p.prefix}</span>}
           {p.title}
+          {p.link && (
+            <a
+              href={p.link}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="ts-row-title-link"
+              title="Megnyitás a venue oldalán (új fülön)"
+              onClick={(e) => e.stopPropagation()}
+            >
+              ↗
+            </a>
+          )}
         </div>
         {p.chips && p.chips.length > 0 && (
           <div className="ts-row-chips">
@@ -495,6 +511,9 @@ export interface PendingPositionLite {
   primary: string;
   /** Secondary meta line (date, slug). */
   secondary?: string;
+  /** Optional "open on venue" deep-link rendered as a ↗ icon next to the
+   *  primary text. Built via helpers in `./marketLinks.ts`. */
+  link?: string | null;
   /** Optional bucket / band chip. */
   bucket?: string;
   /** YES / NO direction chip, or LONG / SHORT. */
@@ -527,7 +546,21 @@ export function PendingPositionsCard(p: PendingPositionsCardProps) {
           key={i}
           className={`ts-pending-row${pos.isReady ? " ts-ready" : ""}`}
         >
-          <span className="ts-pending-key">{pos.primary}</span>
+          <span className="ts-pending-key">
+            {pos.primary}
+            {pos.link && (
+              <a
+                href={pos.link}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="ts-row-title-link"
+                title="Megnyitás a venue oldalán (új fülön)"
+                onClick={(e) => e.stopPropagation()}
+              >
+                ↗
+              </a>
+            )}
+          </span>
           {pos.secondary && <span className="ts-pending-meta">{pos.secondary}</span>}
           {pos.bucket && <span className="ts-pending-bucket">{pos.bucket}</span>}
           {pos.direction && (
@@ -625,6 +658,10 @@ export interface LiveGateSnapshot {
 export interface OpenPositionRow {
   /** Primary key — coin / city / market title. */
   coin: string;
+  /** Optional "open on venue" deep-link rendered as a ↗ icon next to the
+   *  coin / title. Polymarket for crypto/weather/sports, Hyperliquid for
+   *  HL Perp + F-Arb perp-side. Use helpers in `./marketLinks.ts`. */
+  link?: string | null;
   /** Optional direction chip rendered after the coin. */
   direction?: "YES" | "NO" | "LONG" | "SHORT";
   /** Optional entry price chip ("@$54.32" / "@54¢"). */
@@ -940,7 +977,21 @@ export function OpenPositionsCard({
         const r_ = r.rationale ?? null;
         const summaryNode = (
           <>
-            <span className="ts-pos-coin">{r.coin}</span>
+            <span className="ts-pos-coin">
+              {r.coin}
+              {r.link && (
+                <a
+                  href={r.link}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="ts-row-title-link"
+                  title="Megnyitás a venue oldalán (új fülön)"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  ↗
+                </a>
+              )}
+            </span>
             {r.direction && (
               <span
                 className={

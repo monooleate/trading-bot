@@ -15,6 +15,7 @@ import {
   type OpenPositionRow,
   type OpenPositionRationale,
 } from "../shared/TraderResults";
+import { polymarketEventUrl } from "../shared/marketLinks";
 import { useTradeExport } from "../shared/useTradeExport";
 import type { LiveReadinessReport } from "../shared/LiveReadinessBadge";
 
@@ -132,6 +133,7 @@ export default function SportsTrader({ bankroll }: { bankroll?: number }) {
     const qShort = p.title.length > 60 ? p.title.slice(0, 57) + "…" : p.title;
     return {
       coin:       qShort,
+      link:       polymarketEventUrl(p.market),
       direction:  p.direction,
       sizeText:   `$${p.size.toFixed(2)}`,
       entryText:  `${(p.avgEntry * 100).toFixed(1)}¢`,
@@ -197,6 +199,8 @@ export default function SportsTrader({ bankroll }: { bankroll?: number }) {
               <ScanResultRow
                 key={`${r.market}-${i}`}
                 title={r.question || r.market}
+                titleTip={r.market}
+                link={polymarketEventUrl(r.market)}
                 action={r.action}
                 chips={chips}
                 criteria={criteria}
