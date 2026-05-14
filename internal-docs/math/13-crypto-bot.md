@@ -329,7 +329,7 @@ Itt **bukik** a példában — `netEdge < edgeThreshold`. A `noResult` early-ret
 {
   shouldTrade: false, direction: "YES", positionSizeUSDC: 0, edge: 0.084,
   reason: "Net edge 8.4% < threshold 15.0%",
-  gates: [...]   ← első 6 gate, a 6. failed=true
+  gates: [...]   ← teljes 15 gate lista, "Net edge ≥ küszöb" sora failed=true
 }
 ```
 
@@ -377,7 +377,7 @@ entryDecision = {
   feePct: 0.036, direction: "YES", kellyRaw: 0.04, kellyCapped: 0.04, kellyCap: 0.08,
   positionSizeUSDC: 6, entryPrice: 0.51, activeSignals: 8,
   signalBreakdown: { ... }, obImbalance: { ratio: 2.1, direction: "UP" },
-  gates: [...8 gate...], reason: "..."
+  gates: [...15 gate...], reason: "..."
 }
 
 paperPosition = {
@@ -1141,7 +1141,7 @@ netlify/functions/auto-trader/
 ├── crypto/
 │   ├── btc-market-finder.mts          ← Gamma /events?tag_id=21 + filterek
 │   ├── signal-aggregator.mts          ← /signal-combiner + Binance OB enrichment
-│   ├── decision-engine.mts            ← 8 gate, Kelly, edge, direction
+│   ├── decision-engine.mts            ← 15 gate, Kelly, edge, direction, monotonicity (cross-position)
 │   ├── execution.mts                  ← clob-client BUY/SELL + fetchOrderFillDetail (audit-fix #E)
 │   ├── order-lifecycle.mts            ← TP/SL checkExitConditions + handleSellLifecycle (live, audit-fix #A)
 │   ├── live-price.mts                 ← CLOB /midpoint fetcher a live early-exit pass-hez

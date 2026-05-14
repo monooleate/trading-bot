@@ -417,7 +417,7 @@ Polymarket esetén `yesResolvedPrice ∈ {0, 1}` és `noResolvedPrice = 1 - yesR
 |--------|-------|------|------------|
 | Market-keresés | Gamma /events | Gamma /events | ✅ |
 | Forecast | Open-Meteo + NOAA + opc. ENS | Open-Meteo + NOAA + opc. ENS | ✅ |
-| Decision-engine 6 gate | ugyanaz | ugyanaz | ✅ |
+| Decision-engine 8 gate | ugyanaz | ugyanaz | ✅ |
 | `placeBuyOrder` | instant FILLED, `sizeUSDC / price` shares | CLOB createAndPostOrder | **❌** lásd 13.2 |
 | Slippage | `entryPrice = marketPrice + 0.01` | tényleges fill price | ⚠️ idealizált |
 | Settlement | Polymarket → METAR fallback | UMA → on-chain redeem | ⚠️ paper más útvonalon |
@@ -669,7 +669,7 @@ Eseti:
 ## Hivatkozások
 
 - `netlify/functions/auto-trader/weather/forecast-engine.mts` – ensemble core
-- `netlify/functions/auto-trader/weather/decision-engine.mts` – 6 gate
+- `netlify/functions/auto-trader/weather/decision-engine.mts` – 8 gate (incl. monotonicity)
 - `netlify/functions/auto-trader/weather/bucket-matcher.mts` – Gauss PDF allokáció
 - `netlify/functions/auto-trader/weather/reconciler.mts` – Polymarket + METAR settle
 - `netlify/functions/auto-trader/weather/metar-simulator.mts` – °F-egész round
