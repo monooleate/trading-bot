@@ -361,7 +361,7 @@ netlify deploy --prod --dir=dist
 
 ---
 
-## AKTUÁLIS ÁLLAPOT (2026-05-14e)
+## AKTUÁLIS ÁLLAPOT (2026-05-14f)
 
 **Élő deploy:** `mj-trading.netlify.app`. Paper mode, simVersion 3 (crypto), v2 (HL).
 
@@ -374,7 +374,14 @@ netlify deploy --prod --dir=dist
 | **HL Perp** | $200 → $199.44 | -$0.56 | 4 closed (1W/3L) | 0 open | 3 consecutive loss → 1h pause triggerelt (design intent) |
 | **F-Arb** | $200 → $200 (shared HL) | $0 | 0 closed | 0 open | Idle (paper) |
 
-### Mit fix utoljára (39. session, 2026-05-14e)
+### Mit fix utoljára (40. session, 2026-05-14f)
+
+- **HL Perp consecutive-loss pause UX + Settings**: két UX-hiányosság a HL pause-rendszerben fixelve.
+  - **Inline action a pause/stopped alerten**: a `TraderAlert` interface kapott egy opcionális `action: { label, onClick, disabled?, title? }` mezőt. A HL pause alert most `Cancel pause` gombbal renderelődik, a stopped alert pedig `Resume`-mal. Az operátornak már nem kell külön gombot keresnie a kontroll-panelen — a warning mellett azonnali action. `display: flex; gap: 12px` layout, gomb a tone-color öröklődéssel (`border: 1px solid currentColor`).
+  - **Új Settings knob `hlConsecutiveLossPauseHours`**: korábban env-only (`HL_CONSEC_LOSS_PAUSE_HOURS=1`), most Settings-tunable. Default 1h, range 0.0833h (~5 perc tesztre) — 24h. A 3 HL preset is bővült (loose 0.5h, normál 1h, szigorú 2h). A `getEffectiveHlConfig()` korábban kihagyta a `consecutiveLossPauseHours` override-ot — most már olvassa a Blobs-ot.
+  - Hatás: az operátor 1 kattintással törli a pause-t (vagy a Settings-ben átállítja az időt rövidebbre tesztre). A többi 4 bot változatlan — az `action?` field opcionális. (changelog 2026-05-14f)
+
+### Mit fix korábban (39. session, 2026-05-14e)
 
 - **Cross-market consistency gate — mind az 5 botra**: új shared helper (`auto-trader/shared/cross-position-gates.mts`) + bot-specifikus gate-ek a decision-engine non-short-circuit gate-listák végén. Trigger: 2026-05-14 paper session — a Crypto bot nyitott egy `bitcoin-above-78k-on-may-14` NO @ pred=52% pozíciót, majd egymás után egy `bitcoin-above-80k-on-may-14` YES @ pred=53% pozíciót. Matematikailag `P(>78K) ≥ P(>80K)` kötelező (monotonicitás), a model 52% < 53% ellentmondás → BTC $79K körüli zóna mindkét pozíciónak loser. Az új gate ezt blokkolja.
   - **Crypto**: új `Monotonicitás (egyéb nyitott pozíciók)` gate (CRYPTO_GATE_LABELS[14]). Slug parser `bitcoin-above-(\d+)k-on-(.+)$`. Ha K_new > K_old (azonos closingKey) és pred_new > pred_old → blokk (és fordítva).

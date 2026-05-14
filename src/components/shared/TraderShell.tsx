@@ -34,6 +34,17 @@ export interface TraderStat {
 export interface TraderAlert {
   tone: "danger" | "warn" | "info";
   text: string;
+  /** Optional inline action button rendered at the right of the alert.
+   *  Use case: the HL pause alert renders a "Cancel pause" button right
+   *  on the warning, so the operator doesn't have to scan for the generic
+   *  Resume control. Disable via `disabled: true` while a parent action is
+   *  in-flight to avoid double-clicks. */
+  action?: {
+    label: string;
+    onClick: () => void;
+    disabled?: boolean;
+    title?: string;
+  };
 }
 
 export interface TraderControl {
@@ -227,7 +238,18 @@ export default function TraderShell({
         <div className="ts-alerts">
           {alerts.map((a, i) => (
             <div key={i} className={`ts-alert ts-alert-${a.tone}`}>
-              {a.text}
+              <span className="ts-alert-text">{a.text}</span>
+              {a.action && (
+                <button
+                  type="button"
+                  className="ts-alert-action"
+                  onClick={a.action.onClick}
+                  disabled={a.action.disabled}
+                  title={a.action.title}
+                >
+                  {a.action.label}
+                </button>
+              )}
             </div>
           ))}
         </div>

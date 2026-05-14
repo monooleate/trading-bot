@@ -77,6 +77,7 @@ export async function getEffectiveHlConfig(): Promise<HlTraderConfig> {
       cooldownSeconds:           ov.hlCooldownSeconds         ?? env.cooldownSeconds,
       maxOpenPositions:          ov.hlMaxOpenPositions        ?? env.maxOpenPositions,
       consecutiveLossLimit:      ov.hlConsecutiveLossLimit    ?? env.consecutiveLossLimit,
+      consecutiveLossPauseHours: ov.hlConsecutiveLossPauseHours ?? env.consecutiveLossPauseHours,
       volGateRvPct:              ov.hlVolGateRvPct            ?? env.volGateRvPct,
       minActiveSignals:          ov.hlMinActiveSignals        ?? env.minActiveSignals,
       maxEdgeCap:                ov.hlMaxEdgeCap                ?? env.maxEdgeCap,

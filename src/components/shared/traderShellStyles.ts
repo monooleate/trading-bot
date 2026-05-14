@@ -68,11 +68,24 @@ export const traderShellCSS = `
 .ts-alerts { display: flex; flex-direction: column; gap: 6px; margin-bottom: 1rem; }
 .ts-alert {
   font-family: var(--mono); font-size: 0.72rem;
-  padding: 0.5rem 0.75rem; border-radius: 6px; text-align: center;
+  padding: 0.5rem 0.75rem; border-radius: 6px;
+  display: flex; align-items: center; justify-content: center; gap: 0.75rem;
+  flex-wrap: wrap;
 }
+.ts-alert-text { text-align: center; }
 .ts-alert-danger { background: var(--danger); color: #fff; }
 .ts-alert-warn   { background: var(--warn); color: var(--bg); }
 .ts-alert-info   { background: var(--surface); color: var(--accent2); border: 1px solid var(--accent2); }
+.ts-alert-action {
+  font-family: var(--mono); font-size: 0.7rem; font-weight: 600;
+  padding: 0.25rem 0.6rem; border-radius: 4px;
+  background: rgba(0, 0, 0, 0.25); color: inherit; border: 1px solid currentColor;
+  cursor: pointer; transition: background 120ms ease;
+}
+.ts-alert-action:hover:not(:disabled) { background: rgba(0, 0, 0, 0.40); }
+.ts-alert-action:disabled { opacity: 0.5; cursor: not-allowed; }
+.ts-alert-info .ts-alert-action { background: var(--surface2); border-color: var(--accent2); }
+.ts-alert-info .ts-alert-action:hover:not(:disabled) { background: var(--accent2); color: var(--bg); }
 
 /* ─── Controls ─────────────────────────────────────────── */
 .ts-controls { display: flex; gap: 0.5rem; margin-bottom: 1.25rem; flex-wrap: wrap; }

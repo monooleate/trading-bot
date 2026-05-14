@@ -119,10 +119,25 @@ export default function HyperliquidTrader({ bankroll }: { bankroll?: number }) {
     alerts.push({
       tone: "warn",
       text: `Paused until ${new Date(session.pausedUntil).toLocaleTimeString()} (consecutive losses cooldown)`,
+      action: {
+        label: "Cancel pause",
+        onClick: () => doAction("resume"),
+        disabled: isRunning,
+        title: "Manuálisan törli a consecutive-loss pause-t és újra engedélyezi a HL bot futását. Az anti-revenge guard idejét a Settings → Consecutive loss pause állítja.",
+      },
     });
   }
   if (session?.stopped) {
-    alerts.push({ tone: "danger", text: `Stopped: ${session.stoppedReason || "unknown"}` });
+    alerts.push({
+      tone: "danger",
+      text: `Stopped: ${session.stoppedReason || "unknown"}`,
+      action: {
+        label: "Resume",
+        onClick: () => doAction("resume"),
+        disabled: isRunning,
+        title: "Törli a manual-stop flag-et és újraindítja a botot a következő tickre.",
+      },
+    });
   }
 
   const isCooldownOrStopped = !!(session?.stopped || session?.pausedUntil);
