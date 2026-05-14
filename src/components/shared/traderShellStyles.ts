@@ -200,7 +200,13 @@ export const traderShellCSS = `
 
 .ts-crit-popover {
   position: absolute;
-  bottom: calc(100% + 8px); left: 0;
+  /* 2026-05-14e bug fix: a popover most a chip-hez tapad (bottom: 100%) és
+     ::before pseudo-bridge kitölti a 8px-es vizuális rést a popover és a
+     chip között. Korábbi verzió (bottom: calc(100% + 8px)) ott hagyott egy
+     "halott" gap-et, amibe a kurzor beesett :hover-ből → popover eltűnt
+     mielőtt elérted volna. */
+  bottom: 100%; left: 0;
+  margin-bottom: 8px;
   z-index: 50;
   min-width: 280px; max-width: 360px;
   background: var(--bg);
@@ -212,6 +218,23 @@ export const traderShellCSS = `
   transform: translateY(4px);
   transition: opacity 0.12s ease-out, transform 0.12s ease-out, visibility 0s linear 0.12s;
   pointer-events: none;
+  /* Off-screen védelem: ha a chip a viewport tetején van és a popover
+     felfelé nem férne ki, a max-height + scroll megakadályozza hogy
+     teljesen láthatatlan legyen. */
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+}
+/* Invisible hover-bridge: a popover alá lóg egy 10px magas zóna ami
+   átfedi a margin-bottom: 8px vizuális gap-et és a chip felső szélét.
+   Így a kurzor út a chip→popover között soha nem hagyja el a hover-target
+   bounding box-ot. */
+.ts-crit-popover::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  height: 10px;
 }
 .ts-crit:hover .ts-crit-popover,
 .ts-crit:focus .ts-crit-popover,
