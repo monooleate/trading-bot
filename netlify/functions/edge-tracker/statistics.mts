@@ -123,8 +123,19 @@ export interface SummaryStats {
   avgPnlPerTrade: number;
   avgEdgeAtEntry: number;
   sharpeRatio: number;
-  maxDrawdown: number;           // absolute USD
+  sharpeCiLo: number;             // 95% bootstrap CI lower (200 resamples, deterministic LCG)
+  sharpeCiHi: number;             // 95% bootstrap CI upper — wide band on small N flags "not yet meaningful"
+  sortinoRatio: number;           // mean(returns) / std(negative returns) — downside-only Sharpe
+  profitFactor: number;           // Σwins / |Σlosses| — capped at 999 when no losses
+  expectancy: number;             // p×avgWin − q×avgLoss, in USD per trade
+  payoffRatio: number;            // avgWin / avgLoss
+  longestWinStreak: number;
+  longestLossStreak: number;
+  currentStreak: number;          // signed: +N winning, −N losing, 0 = no trades
+  evGap: number;                  // (Σactual − ΣEV) over the full window — leading indicator of edge-decay
+  maxDrawdown: number;            // absolute USD
   maxDrawdownPct: number;
+  maxDrawdownDuration: number;    // # trades from peak to the trade that broke the prior peak (or current)
   kellyOptimal: number;
   kellyUsed: number;              // estimated from avg position size
   kellyEfficiency: number;
@@ -132,12 +143,115 @@ export interface SummaryStats {
   isWellCalibrated: boolean;
 }
 
+// Deterministic LCG (Numerical Recipes constants). Used by the bootstrap CI
+// so a given trade list always produces the same CI band — avoids the chart
+// jittering on every panel refresh. Seeded from totalPnl + trade count, both
+// of which change exactly when new trades land.
+function lcgFactory(seed: number): () => number {
+  let state = (Math.floor(seed * 1e6) | 0) || 1;
+  return () => {
+    state = (Math.imul(state, 1664525) + 1013904223) | 0;
+    // map to [0, 1)
+    return ((state >>> 0) / 0x100000000);
+  };
+}
+
+/**
+ * Bootstrap percentile CI for the Sharpe ratio over the given per-trade
+ * returns. Returns [lo, hi] at the requested confidence (default 95%).
+ * Uses `samples` resamples with replacement; default 200 is a good
+ * speed/accuracy trade-off for the panel (sub-millisecond at N=200 trades).
+ *
+ * Deterministic for a given returns array — seeded LCG, see `lcgFactory`.
+ * Returns [0, 0] when fewer than 3 returns (CI undefined).
+ */
+function bootstrapSharpeCi(
+  returns: number[],
+  samples: number = 200,
+  confidence: number = 0.95,
+): [number, number] {
+  const n = returns.length;
+  if (n < 3) return [0, 0];
+  const rfPerTrade = 0.05 / 365;
+  const seed = returns.reduce((s, r) => s + r, 0) + n * 0.001;
+  const rand = lcgFactory(seed);
+  const sharpes: number[] = [];
+  for (let k = 0; k < samples; k++) {
+    let sum = 0;
+    let sumSq = 0;
+    for (let i = 0; i < n; i++) {
+      const r = returns[Math.floor(rand() * n)];
+      sum += r;
+      sumSq += r * r;
+    }
+    const m = sum / n;
+    const variance = sumSq / n - m * m;
+    const sd = variance > 0 ? Math.sqrt(variance * n / (n - 1)) : 0;
+    sharpes.push(sd > 0 ? (m - rfPerTrade) / sd : 0);
+  }
+  sharpes.sort((a, b) => a - b);
+  const tail = (1 - confidence) / 2;
+  const lo = sharpes[Math.floor(tail * samples)];
+  const hi = sharpes[Math.min(samples - 1, Math.floor((1 - tail) * samples))];
+  return [lo, hi];
+}
+
+/**
+ * Longest run of `predicate(t) === true` plus the signed current streak.
+ * `current` is positive when the last trade matched the predicate, negative
+ * when the opposite, zero when no trades. Used to compute win/loss streaks
+ * from the same trade list in a single pass.
+ */
+function streakStats(
+  trades: ClosedTrade[],
+  isWin: (t: ClosedTrade) => boolean,
+): { longestWin: number; longestLoss: number; current: number } {
+  let longestWin = 0;
+  let longestLoss = 0;
+  let runWin = 0;
+  let runLoss = 0;
+  for (const t of trades) {
+    if (isWin(t)) {
+      runWin += 1;
+      runLoss = 0;
+      if (runWin > longestWin) longestWin = runWin;
+    } else {
+      runLoss += 1;
+      runWin = 0;
+      if (runLoss > longestLoss) longestLoss = runLoss;
+    }
+  }
+  const current = runWin > 0 ? runWin : -runLoss;
+  return { longestWin, longestLoss, current };
+}
+
+/**
+ * Per-trade EV using the same direction-aware binary payout model as
+ * `computeCumulativePnl`. Returns 0 for non-binary venues (HL perp) where we
+ * collapse EV → actual to keep the chart readable — `evGap` correspondingly
+ * collapses to 0 for those, which is the right semantic ("no EV-model gap to
+ * report").
+ */
+function tradeEv(t: ClosedTrade): number {
+  const isBinary = t.entryPrice >= 0 && t.entryPrice <= 1;
+  if (!isBinary || t.predictedProb === undefined) return t.pnl;
+  const isYesLike = t.direction === "YES" || (t.direction as any) === "LONG";
+  const winProb = isYesLike ? t.predictedProb : 1 - t.predictedProb;
+  const winPayoff = t.shares * (1 - t.entryPrice);
+  const lossPayoff = -t.shares * t.entryPrice;
+  return winProb * winPayoff + (1 - winProb) * lossPayoff;
+}
+
 export function computeSummary(trades: ClosedTrade[], initialBankroll: number = 150): SummaryStats {
   if (trades.length === 0) {
     return {
       totalTrades: 0, wins: 0, losses: 0, winRate: 0,
       totalPnl: 0, totalPnlPct: 0, avgPnlPerTrade: 0, avgEdgeAtEntry: 0,
-      sharpeRatio: 0, maxDrawdown: 0, maxDrawdownPct: 0,
+      sharpeRatio: 0, sharpeCiLo: 0, sharpeCiHi: 0, sortinoRatio: 0,
+      profitFactor: 0, expectancy: 0, payoffRatio: 0,
+      longestWinStreak: 0, longestLossStreak: 0, currentStreak: 0,
+      evGap: 0,
+      maxDrawdown: 0, maxDrawdownPct: 0, maxDrawdownDuration: 0,
       kellyOptimal: 0, kellyUsed: 0, kellyEfficiency: 0,
       calibrationDeviation: 0, isWellCalibrated: false,
     };
@@ -159,23 +273,63 @@ export function computeSummary(trades: ClosedTrade[], initialBankroll: number = 
   const std = stdDev(returns);
   const rfPerTrade = 0.05 / 365;
   const sharpeRatio = std > 0 ? (avgReturn - rfPerTrade) / std : 0;
+  const [sharpeCiLo, sharpeCiHi] = bootstrapSharpeCi(returns, 200, 0.95);
 
-  // Max drawdown
+  // Sortino: downside-only standard deviation. Uses 0 as the MAR
+  // (minimum acceptable return) — i.e. the bot's own break-even, not a
+  // benchmark return. Returns 0 when no downside observations.
+  const downside = returns.filter((r) => r < 0);
+  const downsideStd = downside.length >= 2
+    ? Math.sqrt(downside.reduce((s, r) => s + r * r, 0) / downside.length)
+    : 0;
+  const sortinoRatio = downsideStd > 0 ? (avgReturn - rfPerTrade) / downsideStd : 0;
+
+  // Max drawdown — track magnitude AND duration (trades from peak to recovery).
+  // Duration semantic: number of trades since the peak that hasn't been
+  // re-broken yet. If the bot is currently at a peak, duration = 0.
   let peak = 0;
   let maxDD = 0;
   let cum = 0;
-  for (const t of trades) {
-    cum += t.pnl;
-    if (cum > peak) peak = cum;
+  let peakIdx = 0;
+  let maxDDDuration = 0;
+  for (let i = 0; i < trades.length; i++) {
+    cum += trades[i].pnl;
+    if (cum >= peak) {
+      peak = cum;
+      peakIdx = i;
+    }
     const dd = peak - cum;
-    if (dd > maxDD) maxDD = dd;
+    if (dd > maxDD) {
+      maxDD = dd;
+      maxDDDuration = i - peakIdx;
+    }
   }
 
-  // Kelly estimation
+  // Profit factor + expectancy + payoff ratio.
+  const grossWin = trades.filter((t) => t.pnl > 0).reduce((s, t) => s + t.pnl, 0);
+  const grossLoss = trades.filter((t) => t.pnl <= 0).reduce((s, t) => s + Math.abs(t.pnl), 0);
+  const profitFactor = grossLoss > 0
+    ? Math.min(999, grossWin / grossLoss)
+    : (grossWin > 0 ? 999 : 0);                    // cap at 999 when no losses to avoid Infinity in UI
+
   const winPnls = trades.filter((t) => t.pnl > 0).map((t) => t.pnl);
   const lossPnls = trades.filter((t) => t.pnl <= 0).map((t) => Math.abs(t.pnl));
   const avgWin = mean(winPnls);
   const avgLoss = mean(lossPnls);
+  const payoffRatio = avgLoss > 0 ? avgWin / avgLoss : (avgWin > 0 ? 999 : 0);
+  const expectancy = winRate * avgWin - (1 - winRate) * avgLoss;
+
+  // Streaks (chronological — trades are pre-sorted by caller).
+  const { longestWin, longestLoss, current } = streakStats(trades, (t) => t.pnl > 0);
+
+  // EV-gap: cumulative actual vs cumulative EV over the full window. Binary
+  // venues only — for HL perp `tradeEv` returns `t.pnl`, so the gap is 0.
+  // Positive gap = bot beats its own predicted EV (slippage/luck tailwind);
+  // negative gap = under-realizing (slippage/fees/regime drift).
+  const evCum = trades.reduce((s, t) => s + tradeEv(t), 0);
+  const evGap = totalPnl - evCum;
+
+  // Kelly estimation
   const b = avgLoss > 0 ? avgWin / avgLoss : 1;
   const p = winRate;
   const q = 1 - p;
@@ -202,8 +356,19 @@ export function computeSummary(trades: ClosedTrade[], initialBankroll: number = 
     avgPnlPerTrade: Math.round(avgPnlPerTrade * 100) / 100,
     avgEdgeAtEntry: Math.round(avgEdgeAtEntry * 1000) / 1000,
     sharpeRatio: Math.round(sharpeRatio * 100) / 100,
+    sharpeCiLo:   Math.round(sharpeCiLo * 100) / 100,
+    sharpeCiHi:   Math.round(sharpeCiHi * 100) / 100,
+    sortinoRatio: Math.round(sortinoRatio * 100) / 100,
+    profitFactor: Math.round(profitFactor * 100) / 100,
+    expectancy:   Math.round(expectancy * 100) / 100,
+    payoffRatio:  Math.round(payoffRatio * 100) / 100,
+    longestWinStreak:  longestWin,
+    longestLossStreak: longestLoss,
+    currentStreak:     current,
+    evGap:        Math.round(evGap * 100) / 100,
     maxDrawdown: Math.round(maxDD * 100) / 100,
     maxDrawdownPct: Math.round((maxDD / initialBankroll) * 1000) / 10,
+    maxDrawdownDuration: maxDDDuration,
     kellyOptimal: Math.round(kellyOptimal * 1000) / 1000,
     kellyUsed: Math.round(kellyUsed * 1000) / 1000,
     kellyEfficiency: Math.round(kellyEfficiency * 100) / 100,
@@ -220,6 +385,8 @@ export interface CumulativePoint {
   actual: number;
   random: number;       // expected PnL if random 50/50
   ev: number;           // expected value based on edge at entry
+  drawdown: number;     // running underwater curve: cum − runningPeak (≤ 0)
+  peak: number;         // running peak of actualCum at this index
 }
 
 export function computeCumulativePnl(trades: ClosedTrade[]): CumulativePoint[] {
@@ -227,10 +394,12 @@ export function computeCumulativePnl(trades: ClosedTrade[]): CumulativePoint[] {
   let actualCum = 0;
   let randomCum = 0;
   let evCum = 0;
+  let runningPeak = 0;          // running max of actualCum — underwater curve anchor
 
   for (let i = 0; i < trades.length; i++) {
     const t = trades[i];
     actualCum += t.pnl;
+    if (actualCum > runningPeak) runningPeak = actualCum;
 
     // The random/EV baselines below use the Polymarket-binary payout model
     // (entryPrice ∈ [0,1] is the YES probability, shares × (1−entryPrice)
@@ -283,6 +452,8 @@ export function computeCumulativePnl(trades: ClosedTrade[]): CumulativePoint[] {
       actual: Math.round(actualCum * 100) / 100,
       random: Math.round(randomCum * 100) / 100,
       ev: Math.round(evCum * 100) / 100,
+      drawdown: Math.round((actualCum - runningPeak) * 100) / 100, // ≤ 0
+      peak: Math.round(runningPeak * 100) / 100,
     });
   }
 

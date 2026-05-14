@@ -13,8 +13,19 @@ interface SummaryStats {
   avgPnlPerTrade: number;
   avgEdgeAtEntry: number;
   sharpeRatio: number;
+  sharpeCiLo: number;
+  sharpeCiHi: number;
+  sortinoRatio: number;
+  profitFactor: number;
+  expectancy: number;
+  payoffRatio: number;
+  longestWinStreak: number;
+  longestLossStreak: number;
+  currentStreak: number;
+  evGap: number;
   maxDrawdown: number;
   maxDrawdownPct: number;
+  maxDrawdownDuration: number;
   kellyOptimal: number;
   kellyUsed: number;
   kellyEfficiency: number;
@@ -25,6 +36,7 @@ interface SummaryStats {
 interface CumulativePoint {
   index: number; closedAt: string;
   actual: number; random: number; ev: number;
+  drawdown: number; peak: number;
 }
 
 interface CalibrationBucket {
@@ -182,6 +194,7 @@ export default function EdgeTrackerPanel({ defaultCategory = "all" }: Props) {
           <SummaryCards s={data.summary} />
           {data.calibrationView && <CalibrationViewCard view={data.calibrationView} />}
           <CumulativePnlChart points={data.cumulativePnl} />
+          <UnderwaterDrawdownChart points={data.cumulativePnl} maxDDDuration={data.summary.maxDrawdownDuration} />
           <div className="et-grid2">
             <CalibrationChart buckets={data.calibration} />
             <SignalICChart results={data.signalIC} />
@@ -252,22 +265,70 @@ function SummaryCards({ s }: { s: SummaryStats }) {
   const ddColor = s.maxDrawdownPct < 20 ? "ec-warn" : "ec-neg";
   const kColor = s.kellyEfficiency >= 0.8 && s.kellyEfficiency <= 1.2 ? "ec-pos" : "ec-warn";
 
+  // Extended metrics colors. All "0 at small N" cards stay muted instead of
+  // green, so the user doesn't read green into a meaningless number.
+  const pfColor = s.totalTrades < 10 ? "ec-muted" : s.profitFactor >= 1.5 ? "ec-pos" : s.profitFactor >= 1.0 ? "ec-warn" : "ec-neg";
+  const sortinoColor = s.totalTrades < 10 ? "ec-muted" : s.sortinoRatio >= 1.5 ? "ec-pos" : s.sortinoRatio >= 0.7 ? "ec-warn" : "ec-neg";
+  const expColor = s.totalTrades < 10 ? "ec-muted" : s.expectancy > 0 ? "ec-pos" : "ec-neg";
+  const payoffColor = s.totalTrades < 10 ? "ec-muted" : s.payoffRatio >= 1.5 ? "ec-pos" : s.payoffRatio >= 1.0 ? "ec-warn" : "ec-neg";
+  // EV-gap: positive = beating model; negative = under-realizing. Threshold
+  // in USD is bankroll-dependent — for the per-bot $150-200 bankroll, a
+  // $5+ gap either way is meaningful.
+  const evGapColor = Math.abs(s.evGap) < 2 ? "ec-muted" : s.evGap > 0 ? "ec-pos" : "ec-neg";
+  // Streak: signed integer, positive = winning, negative = losing
+  const streakColor = s.currentStreak > 0 ? "ec-pos" : s.currentStreak < 0 ? "ec-neg" : "ec-muted";
+
+  // Sharpe CI sub-text. Show CI in compact form. When CI brackets zero, flag
+  // it explicitly ("not yet significant").
+  const ciBracketsZero = s.sharpeCiLo <= 0 && s.sharpeCiHi >= 0;
+  const sharpeSub = s.totalTrades < 3
+    ? "per-trade risk-adj"
+    : ciBracketsZero
+      ? `95% CI [${s.sharpeCiLo.toFixed(2)}, ${s.sharpeCiHi.toFixed(2)}] — n.s.`
+      : `95% CI [${s.sharpeCiLo.toFixed(2)}, ${s.sharpeCiHi.toFixed(2)}]`;
+
+  const ddSub = s.maxDrawdownDuration > 0
+    ? `${s.maxDrawdownPct.toFixed(1)}% · ${s.maxDrawdownDuration}t deep`
+    : `${s.maxDrawdownPct.toFixed(1)}%`;
+
+  // EV gap: format $ with sign, sub explains direction in plain English.
+  const evGapValue = `${s.evGap >= 0 ? "+" : ""}$${s.evGap.toFixed(2)}`;
+  const evGapSub = s.evGap > 0 ? "actual > model" : s.evGap < 0 ? "actual < model" : "model parity";
+
   return (
-    <div className="et-kpi-grid">
-      <Card title="Total PnL" value={`${s.totalPnl >= 0 ? "+" : ""}$${s.totalPnl.toFixed(2)}`}
-            sub={`${s.totalPnlPct.toFixed(1)}% vs start`} color={pnlColor} />
-      <Card title="Win Rate" value={`${(s.winRate * 100).toFixed(1)}%`}
-            sub={`${s.wins}/${s.totalTrades}`} color={wrColor} />
-      <Card title="Sharpe" value={s.sharpeRatio.toFixed(2)}
-            sub="per-trade risk-adj" color={sharpColor} />
-      <Card title="Avg Edge" value={`${(s.avgEdgeAtEntry * 100).toFixed(1)}%`}
-            sub="at entry" color={edgeColor} />
-      <Card title="Max DD" value={`$${s.maxDrawdown.toFixed(2)}`}
-            sub={`${s.maxDrawdownPct.toFixed(1)}%`} color={ddColor} />
-      <Card title="Kelly Eff" value={`${s.kellyEfficiency.toFixed(2)}×`}
-            sub={`used ${(s.kellyUsed * 100).toFixed(1)}% / opt ${(s.kellyOptimal * 100).toFixed(1)}%`}
-            color={kColor} />
-    </div>
+    <>
+      <div className="et-kpi-grid">
+        <Card title="Total PnL" value={`${s.totalPnl >= 0 ? "+" : ""}$${s.totalPnl.toFixed(2)}`}
+              sub={`${s.totalPnlPct.toFixed(1)}% vs start`} color={pnlColor} />
+        <Card title="Win Rate" value={`${(s.winRate * 100).toFixed(1)}%`}
+              sub={`${s.wins}/${s.totalTrades}`} color={wrColor} />
+        <Card title="Sharpe" value={s.sharpeRatio.toFixed(2)}
+              sub={sharpeSub} color={sharpColor} />
+        <Card title="Avg Edge" value={`${(s.avgEdgeAtEntry * 100).toFixed(1)}%`}
+              sub="at entry" color={edgeColor} />
+        <Card title="Max DD" value={`$${s.maxDrawdown.toFixed(2)}`}
+              sub={ddSub} color={ddColor} />
+        <Card title="Kelly Eff" value={`${s.kellyEfficiency.toFixed(2)}×`}
+              sub={`used ${(s.kellyUsed * 100).toFixed(1)}% / opt ${(s.kellyOptimal * 100).toFixed(1)}%`}
+              color={kColor} />
+      </div>
+      <div className="et-kpi-grid et-kpi-grid-ext">
+        <Card title="Profit Factor" value={s.profitFactor >= 999 ? "∞" : s.profitFactor.toFixed(2)}
+              sub="Σwins / |Σlosses|" color={pfColor} />
+        <Card title="Sortino" value={s.sortinoRatio.toFixed(2)}
+              sub="downside-only Sharpe" color={sortinoColor} />
+        <Card title="Expectancy" value={`${s.expectancy >= 0 ? "+" : ""}$${s.expectancy.toFixed(2)}`}
+              sub="per trade" color={expColor} />
+        <Card title="Payoff" value={s.payoffRatio >= 999 ? "∞" : `${s.payoffRatio.toFixed(2)}×`}
+              sub="avgWin / avgLoss" color={payoffColor} />
+        <Card title="EV Gap" value={evGapValue}
+              sub={evGapSub} color={evGapColor} />
+        <Card title="Streak"
+              value={s.currentStreak === 0 ? "—" : `${s.currentStreak > 0 ? "+" : ""}${s.currentStreak}`}
+              sub={`max ${s.longestWinStreak}W / ${s.longestLossStreak}L`}
+              color={streakColor} />
+      </div>
+    </>
   );
 }
 
@@ -335,6 +396,97 @@ function CumulativePnlChart({ points }: { points: CumulativePoint[] }) {
         {/* X-axis labels */}
         <text x={PAD.l} y={H - 8} fill={COLORS.muted} fontSize={10} fontFamily="monospace">Trade 1</text>
         <text x={W - PAD.r} y={H - 8} fill={COLORS.muted} fontSize={10} textAnchor="end" fontFamily="monospace">
+          Trade {xMax}
+        </text>
+      </svg>
+    </div>
+  );
+}
+
+// ─── Chart 1b: Underwater Drawdown ──────────────────────
+// Running `actualCum − runningPeak` per trade. Always ≤ 0. The chart fills
+// the area below zero so drawdown periods are visually unmistakable, and
+// flat zero stretches mark "at peak" (the bot grinding higher).
+// Complements the Max DD scalar in SummaryCards by showing duration +
+// frequency of drawdowns, not just the worst one.
+
+function UnderwaterDrawdownChart({
+  points, maxDDDuration,
+}: { points: CumulativePoint[]; maxDDDuration: number }) {
+  if (points.length < 2) return <EmptyChart title="Drawdown (underwater curve)" />;
+
+  const W = 1000, H = 180, PAD = { t: 18, r: 20, b: 28, l: 55 };
+  const innerW = W - PAD.l - PAD.r, innerH = H - PAD.t - PAD.b;
+
+  const xMax = points.length;
+  const dds = points.map((p) => p.drawdown);
+  // Drawdowns are always ≤ 0. Floor stretches the y-axis a bit so the
+  // worst drawdown sits at ~95% of the chart height.
+  const yMin = Math.min(...dds, 0) * 1.05;
+  const yMax = 0;
+  const yRange = (yMax - yMin) || 1;
+
+  const x = (i: number) => PAD.l + (i / Math.max(1, xMax - 1)) * innerW;
+  const y = (v: number) => PAD.t + innerH - ((v - yMin) / yRange) * innerH;
+
+  // Build an area path from the underwater curve back to y=0 (top).
+  // First the lower edge along the data, then back along zero.
+  const top = y(0);
+  const dataPath = points.map((p, i) =>
+    `${i === 0 ? "M" : "L"} ${x(i).toFixed(1)} ${y(p.drawdown).toFixed(1)}`,
+  ).join(" ");
+  const areaPath = `${dataPath} L ${x(xMax - 1).toFixed(1)} ${top} L ${x(0).toFixed(1)} ${top} Z`;
+
+  // Find index of the worst drawdown to annotate it.
+  let worstIdx = 0;
+  let worstVal = 0;
+  for (let i = 0; i < points.length; i++) {
+    if (points[i].drawdown < worstVal) { worstVal = points[i].drawdown; worstIdx = i; }
+  }
+
+  const gridY = [yMin, yMin * 0.5, 0];
+
+  return (
+    <div className="et-chart">
+      <div className="et-chart-header">
+        <h3>Drawdown (underwater curve)</h3>
+        <span className="et-decay-slope">
+          worst ${Math.abs(worstVal).toFixed(2)} {maxDDDuration > 0 ? `· ${maxDDDuration} trades deep` : ""}
+        </span>
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} className="et-svg">
+        {gridY.map((gv, i) => (
+          <g key={i}>
+            <line x1={PAD.l} x2={W - PAD.r} y1={y(gv)} y2={y(gv)}
+                  stroke={COLORS.border} strokeWidth={0.5} />
+            <text x={PAD.l - 6} y={y(gv) + 3} fill={COLORS.muted} fontSize={10}
+                  textAnchor="end" fontFamily="monospace">
+              ${gv.toFixed(0)}
+            </text>
+          </g>
+        ))}
+        {/* Zero line — top of the chart */}
+        <line x1={PAD.l} x2={W - PAD.r} y1={top} y2={top}
+              stroke={COLORS.muted} strokeWidth={0.8} />
+        {/* Area fill */}
+        <path d={areaPath} fill={COLORS.loss} fillOpacity={0.18} stroke="none" />
+        {/* Outline */}
+        <path d={dataPath} fill="none" stroke={COLORS.loss} strokeWidth={1.5} />
+        {/* Worst-drawdown marker */}
+        {worstVal < 0 && (
+          <g>
+            <circle cx={x(worstIdx)} cy={y(worstVal)} r={3.5}
+                    fill={COLORS.loss} stroke={COLORS.surface} strokeWidth={1} />
+            <text x={x(worstIdx)} y={y(worstVal) + 14} fill={COLORS.loss}
+                  fontSize={10} textAnchor="middle" fontFamily="monospace">
+              ${worstVal.toFixed(2)}
+            </text>
+          </g>
+        )}
+        {/* X-axis labels */}
+        <text x={PAD.l} y={H - 8} fill={COLORS.muted} fontSize={10} fontFamily="monospace">Trade 1</text>
+        <text x={W - PAD.r} y={H - 8} fill={COLORS.muted} fontSize={10}
+              textAnchor="end" fontFamily="monospace">
           Trade {xMax}
         </text>
       </svg>
@@ -732,6 +884,8 @@ const styles = `
 
 
 .et-kpi-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; margin-bottom: 18px; }
+.et-kpi-grid-ext { margin-top: -8px; }
+.et-kpi-grid-ext .et-card { background: var(--surface2); }
 .et-card { background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 12px 10px; text-align: center; }
 .et-card-label { font-family: var(--mono); font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 4px; }
 .et-card-value { font-family: var(--mono); font-size: 20px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.1; }

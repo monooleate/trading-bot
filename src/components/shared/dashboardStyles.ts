@@ -18,7 +18,7 @@ export const dashboardCSS = `
 .ec-field input[type=range]{padding:5px 0;background:none;border:none;accent-color:var(--accent);cursor:pointer}
 .ec-big{font-family:var(--mono);font-size:30px;font-weight:700;letter-spacing:-.02em;line-height:1}
 .ec-big-lbl{font-family:var(--mono);font-size:10px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-top:3px}
-.ec-pos{color:var(--accent)}.ec-neg{color:var(--danger)}.ec-neu{color:var(--accent2)}.ec-warn{color:var(--warn)}
+.ec-pos{color:var(--accent)}.ec-neg{color:var(--danger)}.ec-neu{color:var(--accent2)}.ec-warn{color:var(--warn)}.ec-muted{color:var(--muted)}
 .ec-row{display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--border);font-family:var(--mono);font-size:12px}
 .ec-row:last-child{border-bottom:none}
 .ec-row .lbl{color:var(--muted);font-size:11px}
