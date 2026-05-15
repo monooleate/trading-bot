@@ -19,9 +19,9 @@ import { CORS, getTraderConfig, getEffectiveTraderConfig, getEffectiveBtcExitCon
 // abuse here is bounded — a `run` only fires the configured signal once
 // against the existing session; it cannot mutate config or unblock a
 // stopped session (those need `reset`/`resume`, which DO require auth).
-const PROTECTED_ACTIONS = new Set(["reset", "stop", "resume"]);
+const PROTECTED_ACTIONS = new Set(["reset", "stop", "resume", "topup"]);
 import { log, getLogBuffer, getLogBufferForCategory } from "./shared/logger.mts";
-import { alertTradeOpen, alertTradeClosed, alertSessionStop, alertError, alertCalibrationNoise, alertLiveBlocked } from "./shared/telegram.mts";
+import { alertTradeOpen, alertTradeClosed, alertSessionStop, alertError, alertCalibrationNoise, alertLiveBlocked, alertTopup } from "./shared/telegram.mts";
 import { computeLiveReadiness, shouldForcePaper, type LiveReadinessReport } from "./shared/live-readiness.mts";
 import { PAPER_SIM_VERSION } from "./crypto/session-manager.mts";
 import { findBtcMarkets } from "./crypto/btc-market-finder.mts";
@@ -40,6 +40,7 @@ import {
   stopSession,
   resumeSession,
   resetSession,
+  topupSession,
 } from "./crypto/session-manager.mts";
 import { computeCalibrationHealth } from "../edge-tracker/statistics.mts";
 import type { SessionState, MarketInfo, SignalBreakdown, Position, EntryDecisionSnapshot } from "./shared/types.mts";
@@ -52,6 +53,7 @@ import {
   hlReset,
   hlStop,
   hlResume,
+  hlTopup,
 } from "./hyperliquid/index.mts";
 import {
   runFundingArbLoop,
@@ -79,6 +81,10 @@ export default async function handler(req: Request, _ctx: Context) {
     // input value here so reset mints a session with that bankroll instead
     // of falling back to the per-bot DEFAULT_BANKROLL.
     let bankrollOverride: number | undefined;
+    // Sprint 42B (2026-05-15): topup amount (delta to add to bankrollStart
+    // + bankrollCurrent). Same clamping range as bankrollOverride to
+    // protect against typos that would mint a million-dollar topup.
+    let topupAmount: number | undefined;
     // Netlify scheduled functions POST a body with `next_run` (ISO timestamp
     // of the next scheduled invocation). Detecting it here lets the run-state
     // tag direct cron ticks as "cron" even though netlify.toml doesn't let us
@@ -94,6 +100,12 @@ export default async function handler(req: Request, _ctx: Context) {
           // Clamp into a sane range so a typo can't mint a million-dollar
           // session or a $0 one. Matches the min={10} on the dashboard input.
           bankrollOverride = Math.max(10, Math.min(1_000_000, body.bankroll));
+        }
+        // Sprint 42B (2026-05-15): topup delta. Same clamp [1, 1M] but
+        // min=1 (positive) to disallow zero / negative — the reset action
+        // exists for "0 bankroll" cases.
+        if (typeof body.amount === "number" && Number.isFinite(body.amount)) {
+          topupAmount = Math.max(1, Math.min(1_000_000, body.amount));
         }
         if (typeof body.next_run === "string" && body.next_run.length > 0) {
           isScheduledTick = true;
@@ -176,6 +188,11 @@ export default async function handler(req: Request, _ctx: Context) {
           case "reset":  return jsonResponse(await arbReset(bankrollOverride));
           case "stop":   return jsonResponse(await arbStop());
           case "resume": return jsonResponse(await arbResume());
+          // Sprint 42B (2026-05-15): F-Arb shares the HL bankroll, so its
+          // topup delegates to `hlTopup`. The arb session itself has no
+          // bankroll field — only HL does — so this is the structurally
+          // correct routing (mirrors how `arbReset` already cascades).
+          case "topup":  return jsonResponse(await hlTopup(topupAmount));
           default:       return jsonResponse({ ok: false, error: `Unknown action: ${action}` }, 400);
         }
       }
@@ -194,6 +211,7 @@ export default async function handler(req: Request, _ctx: Context) {
         case "reset":  return jsonResponse(await hlReset(bankrollOverride));
         case "stop":   return jsonResponse(await hlStop());
         case "resume": return jsonResponse(await hlResume());
+        case "topup":  return jsonResponse(await hlTopup(topupAmount));
         default:       return jsonResponse({ ok: false, error: `Unknown action: ${action}` }, 400);
       }
     }
@@ -235,6 +253,8 @@ export default async function handler(req: Request, _ctx: Context) {
         return await handleStop(config, cat);
       case "resume":
         return await handleResume(config, cat);
+      case "topup":
+        return await handleTopup(config, cat, topupAmount);
       case "reconcile":
         console.log("[DISPATCHER] reconcile case hit, cat=", cat);
         // Manual reconcile — force a settlement pass without waiting for the
@@ -1124,6 +1144,47 @@ async function handleResume(config: ReturnType<typeof getTraderConfig>, category
     action: "resumed",
     category,
     session: sessionSummary(resumed),
+  });
+}
+
+// ─── Topup bankroll ───────────────────────────────────────
+// Sprint 42B (2026-05-15): non-destructive bankroll injection. Preserves
+// closedTrades / tradeCount / sessionPnL / sessionLoss / openPositions /
+// realized signal-IC. Used for paper-mode "keep accumulating after
+// sessionLossLimit hit without losing the trade history" workflow + for
+// future live-mode capital infusion. Auth-gated like `reset`.
+//
+// The `amount` parameter is the delta to add (positive). If undefined or
+// not-finite, returns a 400 — the UI dialog enforces a positive amount.
+async function handleTopup(
+  config: ReturnType<typeof getTraderConfig>,
+  category: string = "crypto",
+  amount?: number,
+) {
+  if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0) {
+    return jsonResponse({ ok: false, error: "Topup amount must be a positive number" }, 400);
+  }
+  const session = await loadSession(config.paperMode, DEFAULT_BANKROLL, category);
+  const bankrollBefore = session.bankrollCurrent;
+  const topped = topupSession(session, amount);
+  await saveSession(topped, category);
+  // Telegram audit alert — fire-and-forget so a Telegram outage doesn't
+  // block the topup itself.
+  alertTopup(
+    config.paperMode,
+    category,
+    amount,
+    bankrollBefore,
+    topped.bankrollCurrent,
+    topped.bankrollStart,
+  ).catch(() => { /* swallow */ });
+  return jsonResponse({
+    ok: true,
+    action: "topup",
+    category,
+    amount,
+    bankrollBefore,
+    session: sessionSummary(topped),
   });
 }
 

@@ -12,7 +12,9 @@
 import {
   parseBtcAboveSlug,
   findMonotonicityViolation,
+  findOutcomeOverlapViolation,
   type MonotonicityExisting,
+  type OutcomeOverlapExisting,
 } from "./cross-position-gates.mts";
 
 interface Failure { test: string; message: string; }
@@ -112,6 +114,99 @@ function expect(cond: boolean, test: string, message: string) {
     [],
   );
   expect(empty === null, t, "No existing positions ⇒ no violation");
+}
+
+// ── Outcome-overlap violation detector ──────────────────────────────────
+{
+  const t = "findOutcomeOverlapViolation";
+
+  // 2026-05-15 live incident reproduction. Existing: NO @ 80K. Candidate:
+  // YES @ 82K. Predictions were strictly monotonic (0.4604 > 0.4557), so
+  // findMonotonicityViolation correctly returned null. But the side bets
+  // are mutually exclusive: NO@80K wins iff BTC ≤ $80K; YES@82K wins iff
+  // BTC > $82K. The (80K, 82K] band loses on BOTH. Must flag.
+  const noAt80: OutcomeOverlapExisting[] = [{
+    K: 80, closingKey: "may-15", direction: "NO",
+    slug: "bitcoin-above-80k-on-may-15",
+  }];
+  const viol = findOutcomeOverlapViolation(
+    { K: 82, closingKey: "may-15", direction: "YES" },
+    noAt80,
+  );
+  expect(viol !== null, t, "Pattern A: cand YES @ 82K vs existing NO @ 80K must be flagged");
+  expect(viol?.K === 80, t, `violation should point at 80K, got K=${viol?.K}`);
+
+  // Pattern B: candidate NO on lower K, existing YES on higher K.
+  // Existing YES @ 82K. Candidate NO @ 80K. NO@80K wins iff BTC ≤ 80K;
+  // YES@82K wins iff BTC > 82K. Same double-loss band.
+  const yesAt82: OutcomeOverlapExisting[] = [{
+    K: 82, closingKey: "may-15", direction: "YES",
+    slug: "bitcoin-above-82k-on-may-15",
+  }];
+  const viol2 = findOutcomeOverlapViolation(
+    { K: 80, closingKey: "may-15", direction: "NO" },
+    yesAt82,
+  );
+  expect(viol2 !== null, t, "Pattern B: cand NO @ 80K vs existing YES @ 82K must be flagged");
+  expect(viol2?.K === 82, t, `violation should point at 82K, got K=${viol2?.K}`);
+
+  // Consistent case 1: same direction. YES @ 80K + YES @ 82K both win when
+  // BTC > 82K — no contradiction, gate passes.
+  const yesAt80: OutcomeOverlapExisting[] = [{
+    K: 80, closingKey: "may-15", direction: "YES",
+    slug: "bitcoin-above-80k-on-may-15",
+  }];
+  const sameYes = findOutcomeOverlapViolation(
+    { K: 82, closingKey: "may-15", direction: "YES" },
+    yesAt80,
+  );
+  expect(sameYes === null, t, `YES@80K + cand YES@82K should NOT flag; got: ${JSON.stringify(sameYes)}`);
+
+  // Consistent case 2: same direction NO + NO — both win when BTC ≤ 78K.
+  const noAt78: OutcomeOverlapExisting[] = [{
+    K: 78, closingKey: "may-15", direction: "NO",
+    slug: "bitcoin-above-78k-on-may-15",
+  }];
+  const sameNo = findOutcomeOverlapViolation(
+    { K: 80, closingKey: "may-15", direction: "NO" },
+    noAt78,
+  );
+  expect(sameNo === null, t, `NO@78K + cand NO@80K should NOT flag; got: ${JSON.stringify(sameNo)}`);
+
+  // Consistent case 3: winning-zone overlap. YES @ 80K (wins if BTC > 80K)
+  // + candidate NO @ 82K (wins if BTC ≤ 82K). Both win in (80K, 82K] —
+  // an actual overlap, not a contradiction. Must NOT flag.
+  const overlap = findOutcomeOverlapViolation(
+    { K: 82, closingKey: "may-15", direction: "NO" },
+    yesAt80,
+  );
+  expect(overlap === null, t, `YES@80K + cand NO@82K (overlap zone) should NOT flag; got: ${JSON.stringify(overlap)}`);
+
+  // Different closingKey — must not cross-flag across resolution dates.
+  const otherDay: OutcomeOverlapExisting[] = [{
+    K: 80, closingKey: "may-14", direction: "NO",
+    slug: "bitcoin-above-80k-on-may-14",
+  }];
+  const crossDay = findOutcomeOverlapViolation(
+    { K: 82, closingKey: "may-15", direction: "YES" },
+    otherDay,
+  );
+  expect(crossDay === null, t, "Different closingKey groups must not cross-flag");
+
+  // Same K, opposite direction — covered by separate "no LONG+SHORT same
+  // market" intent. This helper deliberately skips it (cand.K === e.K).
+  const sameKopp = findOutcomeOverlapViolation(
+    { K: 80, closingKey: "may-15", direction: "YES" },
+    noAt80,
+  );
+  expect(sameKopp === null, t, "Same K + opposite side should be handled elsewhere, not here");
+
+  // Empty existing list — pass trivially.
+  const emptyOO = findOutcomeOverlapViolation(
+    { K: 80, closingKey: "may-15", direction: "YES" },
+    [],
+  );
+  expect(emptyOO === null, t, "No existing positions ⇒ no violation");
 }
 
 // ─── CLI report ───────────────────────────────────────────────────────────

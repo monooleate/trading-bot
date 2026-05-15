@@ -38,7 +38,9 @@ import {
   resetHlSession,
   applyConsecutiveLossPause,
   resumeHlSession,
+  topupHlSession,
 } from "./session-manager.mts";
+import { alertTopup } from "../shared/telegram.mts";
 import type {
   HlCoin,
   HlTraderConfig,
@@ -216,6 +218,12 @@ async function runHyperliquidTraderInner(
     // stronger gate is ever relaxed to allow LONG+LONG averaging. Layered
     // defense — and it surfaces the LONG/SHORT-pair logic explicitly in
     // the UI for operator clarity.
+    //
+    // Outcome-overlap coverage (2026-05-15): LONG+SHORT on the same coin
+    // IS the perp analog of crypto's NO+YES outcome-overlap — the two
+    // winning conditions (price ↑ vs ↓) are disjoint by definition. This
+    // gate already blocks that pattern, so no additional outcome-overlap
+    // gate is needed for HL Perp.
     "Directional-consistency (no LONG+SHORT same coin)",
     "Aktív signal források ≥ 3",
     "Resolution risk ≠ SKIP",
@@ -787,6 +795,39 @@ export async function hlResume(): Promise<any> {
   const resumed = resumeHlSession({ ...loaded, stopped: false, stoppedReason: null });
   await saveHlSession(resumed);
   return { ok: true, action: "resumed", category: "hyperliquid", session: summarize(resumed) };
+}
+
+// Sprint 42B (2026-05-15): non-destructive bankroll injection for HL. The
+// F-Arb dispatcher delegates to this too (F-Arb has no independent
+// bankroll, the funding-arb capital comes from the same HL perp account).
+// Preserves closedTrades, openPositions, consecutiveLosses, pausedUntil,
+// sessionPnL, sessionLoss, tradeCount, startedAt. Only bankrollStart +
+// bankrollCurrent grow.
+export async function hlTopup(amount?: number): Promise<any> {
+  if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0) {
+    return { ok: false, error: "Topup amount must be a positive number" };
+  }
+  const config = getHlConfig();
+  const loaded = await loadHlSession(config.paperMode);
+  const bankrollBefore = loaded.bankrollCurrent;
+  const topped = topupHlSession(loaded, amount);
+  await saveHlSession(topped);
+  alertTopup(
+    config.paperMode,
+    "hyperliquid",
+    amount,
+    bankrollBefore,
+    topped.bankrollCurrent,
+    topped.bankrollStart,
+  ).catch(() => { /* swallow */ });
+  return {
+    ok: true,
+    action: "topup",
+    category: "hyperliquid",
+    amount,
+    bankrollBefore,
+    session: summarize(topped),
+  };
 }
 
 function summarize(s: HlSessionState) {

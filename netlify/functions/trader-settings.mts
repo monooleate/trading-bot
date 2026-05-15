@@ -66,6 +66,13 @@ const SCHEMA: Record<string, FieldSpec> = {
   // combiner outputs (the 8 raw signals all default to 0.5 when absent;
   // their weighted average converges to 0.5 without real input).
   combinerConfidenceMin:{ default: 0.05,    min: 0.01,    max: 0.20,    label: "Combiner confidence min",      step: 0.005, unit: "frac", category: "crypto", group: "Risk & sizing", help: "Minimum |finalProb − 0.5| amitől a combiner outputot 'signal'-nek és nem zajnak vesszük. Megegyezik a signal-combiner saját recommend() WAIT-küszöbével (5%)." },
+  // Sprint 42A (2026-05-15): K-blind signal downweight on threshold (BTC-above-K)
+  // markets. 1.0 = no change (default); 0.5 halves momentum/contrarian/funding/pairs
+  // IC weight on `bitcoin-above-Nk-on-...` markets so the K-aware signals (vol_div,
+  // orderflow, apex, cond_prob) get proportionally more pull. Does NOT affect
+  // up-or-down or other directional markets — zero regression risk on existing
+  // bot trade types. See `sprints.md` "Hatás-elemzés" for impact math.
+  combinerKBlindDownweight:{ default: 1.0,  min: 0,       max: 1,       label: "K-blind signal downweight (threshold markets)", step: 0.05, unit: "frac", category: "crypto", group: "Signal toggles", help: "BTC-above-K threshold piacokon a 4 K-blind signal (momentum, contrarian, funding_rate, pairs_spread) IC-súlya × ez a szorzó. Default 1.0 = nincs változás. 0.5 = felére csökkenti a K-blind hozzájárulást → vol_divergence + per-market jelek dominálnak. Csak threshold piacokon hat, up-or-down + general piacokon nincs változás." },
   cryptoMaxOpenPositions:{ default: 5,      min: 1,       max: 20,      label: "Max open positions",           step: 1,     unit: "n",    category: "crypto", group: "Risk & sizing", help: "Egyszerre max ennyi nyitott crypto paper pozíció. Védi a bankroll-t a túlexpozíciótól ha sok piac van egyszerre nyitva. 5 default = $250 paper-en bőven elég." },
   cryptoMinActiveSignals:{ default: 2,      min: 1,       max: 8,       label: "Min active signals",           step: 1,     unit: "n",    category: "crypto", group: "Signal toggles", help: "Minimum hány signal-nak kell konvergálnia (8-ból). 2 = laza, 4 = óvatos, 6 = csak magas-konfidencia trade-ek." },
   // ─── Crypto sanity gates (2026-05-12 §k) ─────────────────────────
@@ -162,6 +169,7 @@ const SCHEMA: Record<string, FieldSpec> = {
   sportsEdgeThreshold:       { default: 0.10, min: 0.02,  max: 0.40,     label: "Edge threshold (net)",         step: 0.005, unit: "frac",  category: "sports", group: "Risk & sizing", help: "Pinnacle-derived true probability és Polymarket-ár közti minimum edge fee után." },
   sportsMaxPositionUSD:      { default: 20,   min: 2,     max: 200,      label: "Max position size",            step: 1,     unit: "USD",   category: "sports", group: "Risk & sizing", help: "Egy sports trade max USD értéke." },
   sportsMaxOpenPositions:    { default: 3,    min: 1,     max: 15,       label: "Max open positions",           step: 1,     unit: "n",     category: "sports", group: "Risk & sizing", help: "Egyszerre max ennyi nyitott sports pozíció. Default 3 — a hosszú-lejáratú piacok különben hetekig blokkolják a slot-okat." },
+  sportsSessionLossLimit:    { default: 30,   min: 5,     max: 500,      label: "Session loss limit",           step: 5,     unit: "USD",   category: "sports", group: "Risk & sizing", help: "Ha a session összesített VESZTESÉG-e (csak a vesztes trade-ek abszolút USD-je) eléri ezt → automatikus stop. Reset-tel indítható újra. A 'Session loss limit hit' alert ezt a küszöböt érte el." },
   sportsMinHoursToEnd:       { default: 2,    min: 0,     max: 72,       label: "Min hours to end-date",        step: 1,     unit: "h",     category: "sports", group: "Market filter", help: "Csak olyan piacokat fogad el, ahol legalább ennyi óra van a settlement-ig. Védi a botot az utolsó-pillanat liquidity-drop-tól." },
   sportsMaxHoursToEnd:       { default: 72,   min: 6,     max: 8760,     label: "Max hours to end-date",        step: 6,     unit: "h",     category: "sports", group: "Market filter", help: "Csak olyan piacokat fogad el, ahol nem több mint ennyi óra van a settlement-ig. Default 72h (3 nap) = a 3 open slot 3 napon belül felszabadul. Növeld ha hosszabb-lejáratú edge-eket akarsz (pl. season-long futures), csökkentsd ha csak match-day moneyline kell." },
 };
@@ -378,35 +386,38 @@ export const PRESETS: Record<string, CategoryPresets> = {
   sports: {
     loose: {
       label: "Lazább",
-      description: "Edge ≥5%, max pozíció $10, max 5 nap a settlement-ig, 5 open slot. Több paper trade a Pinnacle-edge validáláshoz.",
+      description: "Edge ≥5%, max pozíció $10, max 5 nap a settlement-ig, 5 open slot, session loss limit $50. Több paper trade a Pinnacle-edge validáláshoz.",
       values: {
         sportsEdgeThreshold:    0.05,
         sportsMaxPositionUSD:   10,
         sportsMaxOpenPositions: 5,
         sportsMinHoursToEnd:    2,
         sportsMaxHoursToEnd:    120,  // 5 days
+        sportsSessionLossLimit: 50,
       },
     },
     normal: {
       label: "Normál",
-      description: "Edge ≥10%, max pozíció $20, max 3 nap a settlement-ig, 3 open slot. Match-day moneyline-fókusz — gyors slot-forgás.",
+      description: "Edge ≥10%, max pozíció $20, max 3 nap a settlement-ig, 3 open slot, session loss limit $30. Match-day moneyline-fókusz — gyors slot-forgás.",
       values: {
         sportsEdgeThreshold:    0.10,
         sportsMaxPositionUSD:   20,
         sportsMaxOpenPositions: 3,
         sportsMinHoursToEnd:    2,
         sportsMaxHoursToEnd:    72,   // 3 days
+        sportsSessionLossLimit: 30,
       },
     },
     strict: {
       label: "Szigorú",
-      description: "Edge ≥18%, max pozíció $30, max 24 ó a settlement-ig, 2 open slot. Csak a same-day chalk fade-ek (NFL playoff longshot, NBA chalk lemmings).",
+      description: "Edge ≥18%, max pozíció $30, max 24 ó a settlement-ig, 2 open slot, session loss limit $20. Csak a same-day chalk fade-ek (NFL playoff longshot, NBA chalk lemmings).",
       values: {
         sportsEdgeThreshold:    0.18,
         sportsMaxPositionUSD:   30,
         sportsMaxOpenPositions: 2,
         sportsMinHoursToEnd:    2,
         sportsMaxHoursToEnd:    24,   // 1 day
+        sportsSessionLossLimit: 20,
       },
     },
   },

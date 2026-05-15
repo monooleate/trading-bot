@@ -3,7 +3,9 @@ import { getBtcExitConfig } from "../shared/config.mts";
 import {
   parseBtcAboveSlug,
   findMonotonicityViolation,
+  findOutcomeOverlapViolation,
   type MonotonicityExisting,
+  type OutcomeOverlapExisting,
 } from "../shared/cross-position-gates.mts";
 import { getStore } from "@netlify/blobs";
 
@@ -104,8 +106,13 @@ export async function setCooldown(slug: string, cooldownSeconds: number = 300): 
 // "Kelly méret ≥ minimum" gate, so under-conviction signals now show up
 // as gate failures in the UI instead of being padded into real trades.
 //
-// 2026-05-14e — added Monotonicitás gate (cross-position consistency), so
-// the current count is 15. See CHANGELOG-2026-05-14e.md for context.
+// 2026-05-14e — added Monotonicitás gate (cross-position consistency).
+// 2026-05-15  — added Outcome-overlap gate. Monotonicity checks the
+// model's probability coherence; outcome-overlap checks whether the side
+// bets have mutually exclusive winning conditions. Independent gates —
+// today's incident (NO@80K + YES@82K with strictly monotone preds
+// 0.4604 > 0.4557) cleared monotonicity but tripped outcome-overlap.
+// Current count is 16. See CHANGELOG-2026-05-15.md for context.
 export const CRYPTO_GATE_LABELS = [
   "Session loss limit",
   "Aktív signal források",
@@ -127,13 +134,20 @@ export const CRYPTO_GATE_LABELS = [
   // for K1 ≤ K2). Live-mode trigger: 78K-NO @ 52% + 80K-YES @ 53% on
   // 2026-05-14 — both lost at $79,272.
   "Monotonicitás (egyéb nyitott pozíciók)",
+  // Cross-position outcome-overlap (2026-05-15). Blocks NO @ K_lo + YES @
+  // K_hi (or YES @ K_lo + NO @ K_hi with K_hi < K_lo) on same closingTime:
+  // the winning zones are disjoint, and the (K_lo, K_hi] band is a
+  // guaranteed double-loss. Live-mode trigger: 80K-NO + 82K-YES on
+  // 2026-05-15 — predictions monotone (0.4604 > 0.4557), but bets
+  // contradictory.
+  "Outcome-overlap (NO+YES BTC párok)",
 ] as const;
 
 // Build a fully-padded gate list for early-exit code paths (no signal data
 // available yet). Caller passes the gates that DID get evaluated; the rest
 // are filled with `passed: false, actual: "not evaluated"` so Y stays
 // stable across every row in the UI. Y is `CRYPTO_GATE_LABELS.length`
-// (currently 15 — 14 audit/risk gates + 1 cross-position monotonicity).
+// (currently 16 — 14 audit/risk gates + 2 cross-position gates).
 export function padCryptoGates(evaluated: DecisionGate[]): DecisionGate[] {
   const have = new Set(evaluated.map((g) => g.label));
   const out  = [...evaluated];
@@ -507,6 +521,66 @@ export function makeDecision(
       actual: "n/a (nem BTC-above-K piac)",
       required: "—",
       hint: "Csak BTC-above-K threshold-piacokra értelmezett (slug: `bitcoin-above-(\\d+)k-on-...`).",
+    });
+  }
+
+  // 14. Cross-position outcome-overlap (2026-05-15). Distinct from #13:
+  // monotonicity reasons about model probabilities; this gate reasons about
+  // the side bets themselves. A NO @ K_lo wins iff BTC ≤ K_lo and a YES @
+  // K_hi wins iff BTC > K_hi. If K_hi > K_lo, the two winning zones are
+  // disjoint AND the (K_lo, K_hi] band loses on BOTH. The bot can therefore
+  // open a pair that's at most 1-winner-out-of-2, with a market-implied
+  // double-loss probability often > 50%. Today's incident: NO@80K + YES@82K
+  // with monotone preds 0.4604 > 0.4557 (gate #13 passed) — but P_market
+  // of the (80K, 82K] band ≈ 55%.
+  //
+  // Soft pass when the candidate is not a BTC-above-K market (same shape
+  // as gate #13).
+  if (candParsed) {
+    const overlapExisting: OutcomeOverlapExisting[] = [];
+    for (const p of openPositions) {
+      const parsed = parseBtcAboveSlug(p.market);
+      if (!parsed) continue;
+      if (p.direction !== "YES" && p.direction !== "NO") continue;
+      overlapExisting.push({
+        K: parsed.K,
+        closingKey: parsed.closingKey,
+        direction: p.direction,
+        slug: p.market,
+      });
+    }
+    const overlapViolation = findOutcomeOverlapViolation(
+      { K: candParsed.K, closingKey: candParsed.closingKey, direction },
+      overlapExisting,
+    );
+    const sameGroupOverlap = overlapExisting.filter((e) => e.closingKey === candParsed.closingKey);
+    const lowerK  = overlapViolation ? Math.min(candParsed.K, overlapViolation.K) : 0;
+    const higherK = overlapViolation ? Math.max(candParsed.K, overlapViolation.K) : 0;
+    gates.push({
+      label: "Outcome-overlap (NO+YES BTC párok)",
+      passed: !overlapViolation,
+      actual: overlapViolation
+        ? `${direction}@${candParsed.K}K vs ${overlapViolation.direction}@${overlapViolation.K}K — (${lowerK}K, ${higherK}K] sáv mindkét trade-en bukik`
+        : sameGroupOverlap.length === 0
+          ? "n/a (nincs azonos closingTime-ű BTC-above pozíció)"
+          : `OK — ${sameGroupOverlap.length} nyitott pozícióval konzisztens oldal-választás`,
+      required: "nincs NO@K_lo + YES@K_hi pár (K_hi > K_lo)",
+      hint: "BTC-above-K piacok: ha NO az alacsonyabb K-n és YES a magasabb K-n nyitva, a (K_lo, K_hi] tartomány mindkét pozíciót buktatja. Ez nem monotonicitás-hiba (predikciók lehetnek korrektek), hanem az oldal-választás ellentmondása.",
+    });
+    if (overlapViolation) {
+      reasons.push(
+        `Cross-position outcome-overlap: candidate ${direction}@${candParsed.K}K vs open ` +
+        `${overlapViolation.direction}@${overlapViolation.K}K (${overlapViolation.slug}) — ` +
+        `(${lowerK}K, ${higherK}K] sáv double-loss`,
+      );
+    }
+  } else {
+    gates.push({
+      label: "Outcome-overlap (NO+YES BTC párok)",
+      passed: true,
+      actual: "n/a (nem BTC-above-K piac)",
+      required: "—",
+      hint: "Csak BTC-above-K threshold-piacokra értelmezett.",
     });
   }
 

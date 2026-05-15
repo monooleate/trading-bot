@@ -280,6 +280,12 @@ export default function CryptoTrader({ bankroll }: { bankroll?: number }) {
         disabled: isRunning,
         categoryLabel: "Crypto Auto-Trader",
       }}
+      topup={{
+        onTopup: (amount) => run("topup", { amount }).then(() => refresh()),
+        currentBankroll: session?.bankrollCurrent,
+        disabled: isRunning,
+        categoryLabel: "Crypto Auto-Trader",
+      }}
       onExportTrades={exportTrades}
       exportingTrades={exporting}
     >
@@ -460,13 +466,14 @@ export default function CryptoTrader({ bankroll }: { bankroll?: number }) {
               : [];
 
             // Backend now ships a per-row `gates: DecisionGate[]` covering
-            // all 15 gates (CRYPTO_GATE_LABELS — 2026-05-11 audit + 2026-05-14e
-            // cross-position consistency): session-loss / active-signals /
-            // combiner-confidence / combiner-recommendation / combiner-trust /
-            // resolution-risk / cooldown / OI / entry-window / OB-imbalance /
-            // net-edge / sanity-cap / kelly-size-min / kelly-size-cap /
-            // monotonicity. The chip "X/Y gates" renders uniformly from the
-            // gates array length. Fallback to the lighter mapper for older
+            // all 16 gates (CRYPTO_GATE_LABELS — 2026-05-11 audit + 2026-05-14e
+            // monotonicity + 2026-05-15 outcome-overlap): session-loss /
+            // active-signals / combiner-confidence / combiner-recommendation /
+            // combiner-trust / resolution-risk / cooldown / OI / entry-window /
+            // OB-imbalance / net-edge / sanity-cap / kelly-size-min /
+            // kelly-size-cap / monotonicity / outcome-overlap. The chip "X/Y
+            // gates" renders uniformly from the gates array length. Fallback
+            // to the lighter mapper for older
             // payloads that pre-date the change.
             const criteria: CriteriaGate[] = Array.isArray((r as any).gates) && (r as any).gates.length > 0
               ? ((r as any).gates as CriteriaGate[])

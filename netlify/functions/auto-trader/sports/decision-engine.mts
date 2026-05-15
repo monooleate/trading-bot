@@ -120,6 +120,12 @@ export function makeSportsDecision(input: DecideInput): SportsTradeDecision {
   // Only applies to YES candidates; NO positions don't accumulate the same
   // way (one NO covers all other outcomes implicitly).
   //
+  // Outcome-overlap coverage (2026-05-15): the Σ P(YES) ≤ 1 invariant is
+  // the sports analog of crypto's outcome-overlap — three YES on disjoint
+  // outcomes of one match has the same "at most one wins" structure as
+  // crypto NO@K_lo + YES@K_hi. This gate already blocks the impossible
+  // joint, so no separate outcome-overlap gate is needed.
+  //
   // Graceful degradation: when the candidate has no eventSlug (very old
   // market record) or all existing positions predate the eventSlug field,
   // the gate reports "n/a" and passes.

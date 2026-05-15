@@ -137,6 +137,12 @@ export const WEATHER_GATE_LABELS = [
   // (city, date) negRisk event. Bucket-markets in one event are mutually
   // exclusive, so Σ P(YES) > 1 is a model contradiction — both bets can't
   // be right.
+  //
+  // Outcome-overlap coverage (2026-05-15): the Σ P(YES) ≤ 1 invariant
+  // structurally subsumes the crypto-style outcome-overlap pattern for
+  // weather buckets — two YES on disjoint buckets in the same negRisk
+  // group are already detected here (their summed predicted probs reveal
+  // the impossible joint), so no separate gate is needed.
   "Monotonicitás (egyéb nyitott pozíciók)",
 ] as const;
 

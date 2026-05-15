@@ -72,6 +72,7 @@ export async function getEffectiveSportsConfig(): Promise<SportsConfig> {
       maxOpenPositions: ov.sportsMaxOpenPositions ?? env.maxOpenPositions,
       minHoursToEnd:    ov.sportsMinHoursToEnd   ?? env.minHoursToEnd,
       maxHoursToEnd:    ov.sportsMaxHoursToEnd   ?? env.maxHoursToEnd,
+      sessionLossLimit: ov.sportsSessionLossLimit ?? env.sessionLossLimit,
     };
   } catch {
     return env;

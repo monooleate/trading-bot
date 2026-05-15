@@ -322,11 +322,37 @@ function normalCdf(z: number): number {
   return z >= 0 ? cdf : 1 - cdf;
 }
 
+// Slug-based threshold K-parser for `bitcoin-above-Nk-on-...` markets.
+// These markets pay $1 if BTC > $N×1000 at resolution — so the strike
+// price is LITERALLY $N×1000, not the spot at market-open. Without this
+// parser the vol_divergence signal falls back to K=S (or openedAt-fetched
+// K which only works for up-or-down markets), making d₂ ≈ −σ·√T/2 and
+// fair YES ≈ 0.5 for ALL above-Nk markets regardless of N. The combiner
+// then averages this near-noise output with 7 K-blind directional signals
+// and outputs finalProb ≈ 0.5 ± small drift — the bot reads this as "huge
+// edge" against the actual market price, opening contrarian trades on
+// noise. Bug surfaced 2026-05-15 with 3 simultaneous contrarian trades
+// on near-identical finalProb values (0.46, 0.47, 0.47 across 78K/80K/82K
+// markets). Mirrors `parseBtcAboveSlug` in cross-position-gates.mts (kept
+// duplicated to avoid the top-level ↔ auto-trader/ circular import).
+function parseThresholdK(slug: string | undefined | null): number | null {
+  if (!slug) return null;
+  const m = String(slug).toLowerCase().match(
+    /(?:bitcoin|btc)-(?:be-)?above-(\d+(?:\.\d+)?)k(?:-on-(.+?))?$/,
+  );
+  if (!m) return null;
+  const kThousand = parseFloat(m[1]);
+  if (!Number.isFinite(kThousand) || kThousand <= 0) return null;
+  return kThousand * 1000; // K in USD (78k → $78,000)
+}
+
 // Strike-price estimate: a BTC up/down piacok jellemzően a `openedAt`-kori
 // BTC árhoz képest mérnek. Ha a piac kezdete kiszámítható (durationMs-ből),
 // a referencia árat egy 1m Binance kline lekérdezéssel kapjuk meg arra a
 // timestamp-re. Ha nincs durationMs (legacy / daily piacok), fallback a
 // jelenlegi spot árra → d₂ ≈ −σ·√T/2 → fair YES ≈ 0.5 (semleges signal).
+// 2026-05-15: az `above-Nk` piacokra a `parseThresholdK` veszi át (literal
+// strike). Az up-or-down logika ezen kívül változatlan.
 async function fetchBtcPriceAt(timestampMs: number): Promise<number | null> {
   try {
     const r = await fetch(
@@ -402,10 +428,21 @@ async function getVolSignal(
     //    saját parsing-jából csak az endDate van; az openedAt-et a
     //    durationMs-ből származtatjuk a kérdésből.
     let K = S; // fallback: ATM (signal ≈ 0.5)
-    let strikeSource: "fetched" | "spot-fallback" | "fetch-disabled" = "spot-fallback";
-    if (!strikeFetchEnabled) {
+    let strikeSource: "slug-threshold" | "fetched" | "spot-fallback" | "fetch-disabled" =
+      "spot-fallback";
+    // Priority 1: literal threshold from slug (above-Nk markets). This is
+    // the most reliable K source because it's the market's resolution
+    // criterion verbatim — no Binance round-trip needed, no openedAt
+    // estimation error. Skips the fetch-disabled guard since slug parsing
+    // is local + free.
+    const thresholdK = parseThresholdK(market.slug);
+    if (thresholdK !== null) {
+      K = thresholdK;
+      strikeSource = "slug-threshold";
+    } else if (!strikeFetchEnabled) {
       strikeSource = "fetch-disabled";
     } else {
+      // Priority 2 (up-or-down markets): K = BTC price at openedAt.
       const durationMs = parseDurationFromQuestion(market.question);
       if (durationMs && market.endDate) {
         const endTs = new Date(market.endDate).getTime();
@@ -464,6 +501,24 @@ async function loadVolSignalOptions(): Promise<VolSignalOptions> {
     };
   } catch {
     return { enabled: true, strikeFetchEnabled: true };
+  }
+}
+
+// Sprint 42A (2026-05-15): load the K-blind downweight knob from the
+// trader-settings Blobs store. Default 1.0 (zero behavior change). The
+// combiner uses this only on threshold (BTC-above-K) markets; on
+// directional / up-or-down markets the value is ignored. Safe-fallback
+// on any settings outage so the combiner never breaks.
+async function loadKBlindDownweight(): Promise<number> {
+  try {
+    const mod: any = await import("./trader-settings.mts");
+    const ov = await mod.loadRuntimeOverrides();
+    if (typeof ov.combinerKBlindDownweight === "number" && Number.isFinite(ov.combinerKBlindDownweight)) {
+      return Math.max(0, Math.min(1, ov.combinerKBlindDownweight));
+    }
+    return 1.0;
+  } catch {
+    return 1.0;
   }
 }
 
@@ -992,6 +1047,29 @@ async function getPairsSpreadSignal(market: MarketInfo): Promise<{ prob: number 
   } catch { return { prob: null, detail: null }; }
 }
 
+// Sprint 42A (2026-05-15): K-blind signal classification for the
+// market-aware re-weighting. The 4 signals below provide BTC-wide
+// directional sentiment with no per-K dependence (momentum / contrarian
+// look at BTC price; funding_rate is a single Bybit funding number;
+// pairs_spread compares BTC/ETH-style related markets). On
+// `bitcoin-above-Nk-on-...` threshold markets these 4 signals therefore
+// mean-revert the combined output toward 0.5 regardless of how far BTC
+// is from K. The other 4 signals (vol_divergence, orderflow,
+// apex_consensus, cond_prob) ARE per-market / per-K aware.
+//
+// The `combinerKBlindDownweight` Settings knob (default 1.0 = zero
+// behavior change) multiplies the IC of K_BLIND_SIGNALS on threshold
+// markets so the combiner output becomes meaningfully K-sensitive. Set
+// to 0.5 to halve K-blind contribution, 0 to fully suppress.
+const K_BLIND_SIGNALS = new Set([
+  "momentum",
+  "contrarian",
+  "funding_rate",
+  "pairs_spread",
+]);
+
+type MarketKind = "threshold" | "directional";
+
 // ─── KOMBINÁTOR ───────────────────────────────────────────────────────────────
 // `icMap` (optional): per-signal IC override map. When provided, the combiner
 // uses these IC values instead of the static SIGNAL_ICS priors. The
@@ -999,9 +1077,22 @@ async function getPairsSpreadSignal(market: MarketInfo): Promise<{ prob: number 
 // realized IC (from closedTrades) and the academic priors. Falling back to
 // SIGNAL_ICS when a signal is missing from icMap (or the whole map is
 // undefined) means existing callers behave exactly as before.
+//
+// `marketKind` (optional, default "directional"): when set to "threshold",
+// the IC for K_BLIND_SIGNALS is multiplied by `kBlindDownweight` so K-aware
+// signals get proportionally more weight in the combined output. Sprint 42A
+// (2026-05-15). On "directional" markets (up-or-down, generic) the
+// downweight is NEVER applied, regardless of the knob — zero regression
+// risk for the existing market types.
+//
+// `kBlindDownweight` (optional, default 1.0 = no change): the multiplier
+// applied to K_BLIND_SIGNALS' IC on threshold markets. Settings-tunable
+// via `combinerKBlindDownweight` (range [0, 1]).
 function combine(
   signals: Record<string, number | null>,
   icMap?: Record<string, number>,
+  marketKind: MarketKind = "directional",
+  kBlindDownweight: number = 1.0,
 ) {
   const valid: Record<string, number> = {};
   for (const [k, v] of Object.entries(signals)) {
@@ -1012,8 +1103,19 @@ function combine(
   const n     = names.length;
   if (n === 0) return { combined: 0.5, weights: {}, ir: 0, kelly_q: 0, cv_edge: 1 };
 
-  const icFor = (k: string) =>
-    (icMap && Number.isFinite(icMap[k]) ? icMap[k] : SIGNAL_ICS[k]) || 0.05;
+  // Sprint 42A: clamp downweight to [0, 1] defensively. On
+  // non-threshold markets the multiplier never applies — we just keep
+  // baseIC as the priors define it.
+  const effectiveDownweight = marketKind === "threshold"
+    ? Math.max(0, Math.min(1, kBlindDownweight))
+    : 1.0;
+  const icFor = (k: string) => {
+    const baseIC = (icMap && Number.isFinite(icMap[k]) ? icMap[k] : SIGNAL_ICS[k]) || 0.05;
+    if (effectiveDownweight !== 1.0 && K_BLIND_SIGNALS.has(k)) {
+      return baseIC * effectiveDownweight;
+    }
+    return baseIC;
+  };
 
   const mean = names.reduce((s, k) => s + valid[k], 0) / n;
   const demeaned: Record<string, number> = {};
@@ -1109,6 +1211,15 @@ export default async function handler(req: Request, _ctx: Context) {
     // on any error so the combiner is never broken by a settings outage.
     const volOptions = await loadVolSignalOptions();
 
+    // 1.6. Sprint 42A (2026-05-15): K-blind signal downweight knob +
+    // market-kind classification. The combiner applies the downweight only
+    // on threshold (BTC-above-K) markets; up-or-down / directional markets
+    // are unaffected regardless of the setting.
+    const kBlindDownweight = await loadKBlindDownweight();
+    const marketKind: MarketKind = parseThresholdK(market.slug) !== null
+      ? "threshold"
+      : "directional";
+
     // 2. Parallel signal fetch — 8 signals + resolution-risk
     // Resolution-risk runs in parallel; never blocks the primary signals.
     const skipRisk    = url.searchParams.get("skip_risk") === "1";
@@ -1179,7 +1290,7 @@ export default async function handler(req: Request, _ctx: Context) {
       } catch { /* swallow — fall back to static priors */ }
     }
 
-    const combo = combine(raw_signals, effectiveICMap);
+    const combo = combine(raw_signals, effectiveICMap, marketKind, kBlindDownweight);
     const rec   = recommend(combo.combined, combo.ir, combo.kelly_q);
     const active = Object.values(raw_signals).filter(v => v !== null).length;
 

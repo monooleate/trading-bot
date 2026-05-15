@@ -11,6 +11,7 @@
 | **`current-state/`** | Élő rendszer snapshot — mi van most | Új session elején: "mi működik, mi a deploy state, milyen env-ek kellenek" |
 | **`math/`** | Signal math + bot implementation reference | Algoritmus-szintű kérdéseknél: "hogy számol a Kyle λ", "mi a 8-gates HL-en" |
 | **`roadmap/`** | Jövőbeli rendszer + action plan | "Mit építsünk legközelebb", "Hetzner-migráció lépései" |
+| **`playbooks/`** | Runbookok ismétlődő feladatokhoz | "User kérte a trade history auditot, mit nézzek?" — Claude Code procedure-ök |
 | **`changelog/`** | Session-by-session history | "Mit változtattam tegnap" |
 | **`archive/`** | Elkészült promptok + historikus tanulságok | Ritkán; csak ha egy régi döntés indokát keresed |
 
@@ -43,7 +44,7 @@ A **CLAUDE.md** a repo gyökerében az **AKTUÁLIS ÁLLAPOT** szekcióval — mi
 | `math/10-signal-combiner.md` | Signal combination | Grinold-Kahn IR = IC × √N |
 | `math/11-arb-matrix.md` | Arbitrage detection | VWAP scanner, LLM dependency |
 | `math/12-realtime-websocket.md` | WebSocket architecture | Phase 3 — math leírva, deploy planned |
-| `math/13-crypto-bot.md` | **Crypto auto-trader implementation** | 15 gate (incl. monotonicity), Kelly sizing, paper-vs-live invariants, runtime walkthrough |
+| `math/13-crypto-bot.md` | **Crypto auto-trader implementation** | 16 gate (incl. monotonicity + outcome-overlap), Kelly sizing, paper-vs-live invariants, runtime walkthrough |
 | `math/14-hl-directional.md` | **HL directional perp bot** | 15 gate (incl. directional-consistency), ¼-Kelly + 3x lev cap, TP/SL clamps, paper funding accrual |
 | `math/15-funding-arb.md` | **Funding-rate arb bot** | 8 gate (incl. coin-capacity), atomic 2-leg open, mark-to-market accrual, asymmetric close slippage |
 | `math/16-weather-bot.md` | **Weather bot** (ensemble forecast + bucket matching) | 8 gate (incl. outcome-sum monotonicity), Gauss PDF allokáció, METAR settlement, bug audit |
@@ -66,6 +67,16 @@ ott és mit NEM**, hogy duplikáció ne keletkezzen.
 | `roadmap/hetzner-infrastructure.md` | **VPS fizikai layout SSOT** (OS, port, deploy, monitoring) |
 | `roadmap/migration-strangler-fig.md` | **Komponens-mapping SSOT** (Netlify Function → VPS process táblázat, absztrakt 9-fázis) |
 | `roadmap/risk-coordinator-considerations.md` | **Pilléres-vs-koordinátor trade-off SSOT** (no-build referencia) |
+
+---
+
+## playbooks/ — Runbookok ismétlődő feladatokhoz
+
+Stabil procedure-ök Claude Code (vagy operator) számára — minden playbook **read-only** alapból, csak explicit user-kérésre indítja a leírt akciókat. Egyetlen érvényes karbantartási szabály: új bug-pattern / új audit-endpoint felmerülése esetén az érintett playbook frissül.
+
+| Fájl | Mikor használd | Cél |
+|------|-----------------|-----|
+| `playbooks/trade-history-audit.md` | User kéri a closed trade-ek + open positions ellenőrzését (pl. "validate", "audit", "PnL valós?") | 5-step audit: Gamma resolution cross-check, paper-fee PnL reproduction, bankroll-rekonciliáció, cross-position konzisztencia, statisztikai sanity. Pattern-detection-tár, modifikációs javaslatok, anti-pattern lista. |
 
 ---
 

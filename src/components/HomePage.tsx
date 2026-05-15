@@ -404,38 +404,6 @@ export default function HomePage() {
         </div>
       )}
 
-      {/* ─── PER-TRADER LIVE-READINESS QUICK GLANCE ─── */}
-      {anyKnownReadiness && (
-        <>
-          <SectionTitle
-            title="Live-readiness gates"
-            subtitle="Bot-onkénti verdict — zöld = élesedhet, sárga = paper-validálás folyamatban / blokkolva"
-          />
-          <div className="hp-readiness-grid">
-            {readinessRows.map((r) => {
-              const rep = r.report;
-              const cls = !rep ? "unknown" : rep.ready ? "ready" : "not-ready";
-              return (
-                <a key={r.key} href={r.href} className={`hp-rd-card hp-rd-${cls}`}>
-                  <div className="hp-rd-head">
-                    <span className="hp-rd-cat">{r.label}</span>
-                    <span className="hp-rd-status">
-                      {!rep ? "?" : rep.ready ? "READY" : "PAPER"}
-                    </span>
-                  </div>
-                  <div className="hp-rd-count">
-                    {rep ? `${rep.gatesPassed}/${rep.gatesTotal} gates` : "lekérdezés…"}
-                  </div>
-                  {rep && (
-                    <div className="hp-rd-reason" title={rep.reason}>{rep.reason}</div>
-                  )}
-                </a>
-              );
-            })}
-          </div>
-        </>
-      )}
-
       {/* ─── SESSION SUMMARY (összesített) ─── */}
       <SectionTitle title="Aggregated session" subtitle="Minden bot összesítve · alább kattintható per-category lebontás → bot oldal" />
       <section className="hp-summary">
@@ -549,6 +517,38 @@ export default function HomePage() {
           <CapCard key={c.id} card={c} envStat={envStat} multi={multi} />
         ))}
       </div>
+
+      {/* ─── PER-TRADER LIVE-READINESS QUICK GLANCE ─── */}
+      {anyKnownReadiness && (
+        <>
+          <SectionTitle
+            title="Live-readiness gates"
+            subtitle="Bot-onkénti verdict — zöld = élesedhet, sárga = paper-validálás folyamatban / blokkolva"
+          />
+          <div className="hp-readiness-grid">
+            {readinessRows.map((r) => {
+              const rep = r.report;
+              const cls = !rep ? "unknown" : rep.ready ? "ready" : "not-ready";
+              return (
+                <a key={r.key} href={r.href} className={`hp-rd-card hp-rd-${cls}`}>
+                  <div className="hp-rd-head">
+                    <span className="hp-rd-cat">{r.label}</span>
+                    <span className="hp-rd-status">
+                      {!rep ? "?" : rep.ready ? "READY" : "PAPER"}
+                    </span>
+                  </div>
+                  <div className="hp-rd-count">
+                    {rep ? `${rep.gatesPassed}/${rep.gatesTotal} gates` : "lekérdezés…"}
+                  </div>
+                  {rep && (
+                    <div className="hp-rd-reason" title={rep.reason}>{rep.reason}</div>
+                  )}
+                </a>
+              );
+            })}
+          </div>
+        </>
+      )}
 
       {/* ─── ENV STATUS CHECKLIST ─── */}
       <SectionTitle title="Environment Status" subtitle="Netlify env varok — zöld = beállítva, piros = hiányzik" />

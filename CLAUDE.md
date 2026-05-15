@@ -39,6 +39,7 @@ Az [`internal-docs/roadmap/README.md`](./internal-docs/roadmap/README.md) az SSO
 | **Új fizikai-layout-döntés** (Postgres séma, port, monitoring) | `internal-docs/roadmap/hetzner-infrastructure.md` |
 | **Új env-vár / secret** | `internal-docs/current-state/env-vars.md` (NEM a roadmap-ban) |
 | **Új algoritmus-leírás** | `internal-docs/math/NN-name.md` (új fájl + index frissítés) |
+| **Új ismétlődő procedure / runbook** (pl. trade-audit, deploy-checklist) | `internal-docs/playbooks/NN-name.md` |
 | **Session-by-session változás** | `internal-docs/changelog/CHANGELOG-YYYY-MM-DD.md` |
 
 ### Tilos (SSOT-sértés)
@@ -48,6 +49,7 @@ Az [`internal-docs/roadmap/README.md`](./internal-docs/roadmap/README.md) az SSO
 - ❌ **Új tervezési fájl minden session-ben**: a 6 roadmap-doksi elég.
 - ❌ **Live-state-et roadmap-pel keverni**: `current-state/` snapshot ≠ `roadmap/` tervezet.
 - ❌ **Env-vár listát roadmap-ba írni**: csak `current-state/env-vars.md` a katalógus.
+- ❌ **Sprint-feladatot bárhol máshol felvenni mint a `sprints.md`-ben** (2026-05-15 szabály): ha egy session során azonosítasz egy új code-change feladatot, sprint-jellegű follow-up-ot, vagy backlog-tételt, az **kizárólag** a `internal-docs/roadmap/sprints.md`-be kerül (Active / Next candidates / Backlog táblákba). A többi doksiba (`math/`, `changelog/`, `current-state/`, `master-plan.md`) **csak hivatkozás** mehet a sprints.md megfelelő tételére, pl. `→ Sprint 42A` vagy `→ Backlog B9`. **Tilos**: "Maradó limitációk" listák a math/-ben, "Mit NEM tett" szekciók a changelog-ban, vagy "TODO" jegyek a master-plan-ben, ha a feladat NINCS bevezetve a sprints.md-be. A sprints.md a feladat-SSOT.
 
 ---
 
@@ -345,23 +347,34 @@ netlify deploy --prod --dir=dist
 
 ## Ismert limitációk és TODO-k
 
-### Technikai debt
+> **2026-05-15 szabály**: minden sprint-jellegű task `internal-docs/roadmap/sprints.md`-ben van karbantartva (SSOT). Ez a szekció csak **stabil, sprint-szinten nem trackelt környezeti tudnivalókat** tartalmazza. Konkrét feladatok / TODO-k esetén → `sprints.md`.
 
-- `Dashboard.tsx` tab array manuálisan szinkronizálandó új tabok esetén (nem generált)
-- `{src/` és `{src/{components,pages,layouts},public}/` mappák artifact-ok a build folyamatból – ignorálandók
+### Környezeti tudnivalók (nem task)
+
+- `{src/` és `{src/{components,pages,layouts},public}/` mappák artifact-ok a build folyamatból – **ignorálandók** (nem hiba)
 - A `package-lock.json` 277K – ne szerkeszd manuálisan
+- **Frank-Wolfe / Gurobi cond-prob solver**: IP solver licenc nélkül nem implementálható → permanens architektúra-állapot, nem sprint-tárgy (Anti-sprint blocked-by-license)
 
-### Hiányos implementációk
+### Sprint-trackelt limitációk (pointerek)
 
-- **Signal Combiner IC becslések:** priorok, nem mért értékek. 50+ trade után kalibrálni kell.
-- **CV_edge:** nem valódi Monte Carlo, IR-ből becsült proxy.
-- **VWAP scanner:** 90 mp cache – real-time WebSocket kellene production-ban.
-- **Frank-Wolfe / Gurobi:** nincs implementálva (IP solver licenc szükséges).
-- **Trade logging:** nincs Supabase integráció – minden session stateless (Netlify Blobs).
+| Limitáció | sprints.md hivatkozás |
+|---|---|
+| Signal Combiner IC priorok kalibrálása (50+ trade) | **B1** (Tier 2 reliability) + **B13** (Brier sub-task) |
+| CV_edge nem valódi Monte Carlo | **B16** (Technical-debt cluster sub-item) |
+| VWAP scanner real-time WebSocket | **B14** (Hetzner-függő, 1 hét) |
+| Trade logging persistence (Supabase / Postgres) | **B12** (post-Hetzner, 2-3 nap) |
+| Dashboard.tsx tab-array auto-generate | **B16** (Technical-debt cluster sub-item) |
+| Cooldown map Blobs-perzisztálás | **B16** (Technical-debt cluster sub-item) |
+| Live early-exit Netlify timeout | **B16** (Technical-debt cluster sub-item) |
+| On-chain CTF redemption automatizálás | **B6** (Polymarket auto-redeem cron, P1.4) |
+| Walk-forward backtest framework | **B11** (post-Hetzner, kritikus infra) |
+| Weather bot σ kalibráció | **B15** (post-50-trade) |
+| Live trading infrastructure prerequisites (HL + PM) | **B10** (BLOKKOLÓ, paper-gate-függő) |
+| Topup action (bankroll növelése reset nélkül) | **Sprint 42B** (READY NOW, promotálva B9-ből 2026-05-15) |
 
 ---
 
-## AKTUÁLIS ÁLLAPOT (2026-05-14f)
+## AKTUÁLIS ÁLLAPOT (2026-05-15)
 
 **Élő deploy:** `mj-trading.netlify.app`. Paper mode, simVersion 3 (crypto), v2 (HL).
 
@@ -369,12 +382,30 @@ netlify deploy --prod --dir=dist
 
 | Bot | Bankroll | PnL | Trades | Open | Megjegyzés |
 |-----|---------|-----|--------|------|-------|
-| **Crypto** | $250 → $242.88 | +$51.17 | 3 closed (2W/1L) | 4 open | Loose preset alatt nyitott. Mind a 3 trade real Polymarket resolution-on zárt — validált (lásd 35. session audit) |
+| **Crypto** | $250 → $237.00 | +$21.96 | 7 closed (3W/4L) | 2 open (paper) | 41. session: 7-trade history Gamma-revalidálva + bit-pontos PnL rekonstrukció — minden valid. Új 16. gate (Outcome-overlap) a következő tick-től véd a 80K-NO + 82K-YES típusú kontradikciók ellen. |
 | **Weather** | $250 → $216.48 | -$5.10 | 2 closed (1W/1L) | 3 open | Mindkét closed trade real Polymarket resolution-on zárt — validált |
 | **HL Perp** | $200 → $199.44 | -$0.56 | 4 closed (1W/3L) | 0 open | 3 consecutive loss → 1h pause triggerelt (design intent) |
 | **F-Arb** | $200 → $200 (shared HL) | $0 | 0 closed | 0 open | Idle (paper) |
 
-### Mit fix utoljára (40. session, 2026-05-14f)
+### Mit fix utoljára (42. session, 2026-05-15)
+
+- **Sprint 42B Topup action** ✅ IMPLEMENTÁLVA: új `topup` action mind a 4 boton (crypto, weather, hyperliquid, funding-arb — sports stub kihagyva), auth-protected mint a `reset`. Új `topupSession()` helper a `crypto/session-manager.mts`-ben + `topupHlSession()` a `hyperliquid/session-manager.mts`-ben (F-Arb delegál ide a shared bankroll miatt). Új `SESSION_TOPUP` LogEvent. Új `handleTopup()` + `hlTopup()` exported function. Új `alertTopup()` Telegram helper. Frontend: új `topup?` prop a `TraderShell`-en — `💰 Top up…` gomb (a Reset gomb előtt) + dialog with dynamic `Current bankroll → After topup` preview, number input (range [1, 1M], step 1), validation + inline error display, Mégse + Confirm action. 5 új unit test (`shared/topup-action.test.mts`): standard topup state-preservation, stopped-not-cleared, HL-specific (consecutiveLosses + pausedUntil unchanged), additive (2×$50 = 1×$100), decimal cent. Preview verified: gomb megjelenik (`💰 Top up…`), dialog renderelődik teljes magyarázattal + before/after preview, validáció működik (`Adj meg pozitív összeget` negatív értékre), Mégse zárja a modal-t, zero console error. Megoldja a mai user-pain "ha elfogy a bankroll paper módban folytatni akarom reset nélkül" kérdést — most 1 kattintással bankroll injektálható a closedTrades + IC kalibráció + open positions megőrzésével. (changelog 2026-05-15 · sprints.md Sprint 42B)
+
+- **Sports `sessionLossLimit` Settings-knob**: a sports bot eddig env-only küszöbe (`SPORTS_SESSION_LOSS_LIMIT`, default $30) Blobs-tunable lett. Új `sportsSessionLossLimit` SCHEMA mező a `trader-settings.mts`-ben (range 5-500 USD, step 5, group "Risk & sizing"); mind a 3 sports preset (Lazább 50 / Normál 30 / Szigorú 20 USD) bővült. `getEffectiveSportsConfig()` olvassa az új override-ot; `sports/index.mts` :213-as session-loss guard automatikusan használja. Trigger: az operátor "Session loss limit hit" auto-stopot kapott a sports bot-on és redeploy nélkül akarta a küszöböt módosítani. A crypto (`sessionLossLimit`) + HL Perp (`hlSessionLossLimit`) már Settings-tunable volt; weather + F-Arb nem rendelkezik session-loss-limit fogalommal jelenleg (külön sprint-tárgy ha kell). (changelog 2026-05-15 "Follow-up" szekció · sprints.md Sprint 42F)
+
+### Mit fix korábban (41. session, 2026-05-15)
+
+- **Sprint 42A K-blind downweight (speculative implementáció)**: a `signal-combiner.mts` `combine()` függvény új `marketKind: "threshold" | "directional"` paraméter + `kBlindDownweight: number = 1.0` szorzó. Új `K_BLIND_SIGNALS = {momentum, contrarian, funding_rate, pairs_spread}` Set. Új SCHEMA-knob `combinerKBlindDownweight` (range [0, 1], default 1.0 = zero behavior change). A downweight CSAK threshold (`bitcoin-above-Nk-on-...`) piacokon alkalmazódik (`parseThresholdK(slug) !== null` az ágválasztó), up-or-down + directional piacokon nincs változás → zero regression risk a meglévő bot trade-típusokra. 6 új unit test pin-eli a contract-et. Sprint 42 monitoring data alapján a knob 0.5-re átkapcsolható, ha 10+ post-fix trade-en a finalProb még flat — pillanatnyilag default-off. (changelog 2026-05-15)
+
+- **vol_divergence K-extrakció root-cause fix**: a "lapos 0.46-os finalProb" mintázat (ami a 2026-05-14e Monotonicity-gate-et átengedte és a 2026-05-15 Outcome-overlap-gate-et triggerelte) gyökérokának javítása. A `getVolSignal` Black-Scholes digital képlete a strike K-t csak `up-or-down` piacokra állította be (openedAt BTC ár Binance kline-ból), `above-Nk` piacokra `K = S` fallback-be esett → `fair YES ≈ N(-σ√T/2) ≈ 0.5` K-tól függetlenül. Új `parseThresholdK(slug)` helper kinyeri a literal `N × 1000` USD értéket; a `getVolSignal` új Priority-1 ágban használja (`strikeSource: "slug-threshold"`). BTC $80,620 mellett a fix után: 78K → 0.98, 80K → 0.69, 82K → 0.14 — K-szerint meaningfully szétváló jel. A combiner output ezzel K-aware lesz; a Normal preset `Combiner confidence (|p − 0.5|)` gate-je automatikusan blokkolja a near-noise contrarian trade-eket. Új test `signal-combiner-threshold.test.mts` (11 case: parser-pin + BS-digital monotonicity invariáns). (changelog 2026-05-15)
+
+- **Cross-position outcome-overlap gate (crypto, #16) + 7-trade history audit** — kettős munka egy ülésben.
+  - **Audit**: a `/edge-tracker?category=crypto` 7 closed trade-jét végigellenőriztük Polymarket Gamma `&closed=true` API-n — mind a 7 exit egyezik a real resolution-nel. A paper-fee modell (`applySettlementFee`, 3.6% roundtrip) szerint mind a 7 PnL érték ±3 tizedesjegyen belül reprodukálható. Bankroll-rekonciliáció ($250 + $21.96 − $34.96 open = $237.00) konzisztens. **A history valid és a PnL reális.**
+  - **Új gate**: ma reggel a bot nyitott egy `NO@above-80k-may-15` (pred=46.04%) + `YES@above-82k-may-15` (pred=45.57%) párost. A predikciók szigorúan monoton csökkenőek (a Sprint 39e Monotonicitás-gate helyesen átengedte), de a bet-oldalak nyerési zónái diszjunktak — a (80K, 82K] sáv **mindkét pozíción** bukik. Új `findOutcomeOverlapViolation` shared helper + új gate `CRYPTO_GATE_LABELS[15]` pozíción: NO@K_lo + YES@K_hi (K_hi > K_lo) pár blokk. **Strukturálisan különbözik** a #15 Monotonicitás-gate-től: a #15 a predikció-koherenciát ellenőrzi, a #16 a side-bet kontradikciókat. Mindkét gate független és komplementer.
+  - **A többi 4 bot változatlan** — már Sprint 39e óta tartalmazzák a saját outcome-overlap-analógjukat (Weather Σ P(YES) ≤ 1, HL Directional-consistency, F-Arb Coin-capacity, Sports Outcome-sum). Mindegyik decision-engine-be coverage-comment került, hogy a gate-térkép explicit legyen.
+  - 8 új test case (összesen 18) a `cross-position-gates.test.mts`-ben. `npx tsc --noEmit` + `npm run build` + test suite mind zöld. (changelog 2026-05-15)
+
+### Mit fix korábban (40. session, 2026-05-14f)
 
 - **HL Perp consecutive-loss pause UX + Settings**: két UX-hiányosság a HL pause-rendszerben fixelve.
   - **Inline action a pause/stopped alerten**: a `TraderAlert` interface kapott egy opcionális `action: { label, onClick, disabled?, title? }` mezőt. A HL pause alert most `Cancel pause` gombbal renderelődik, a stopped alert pedig `Resume`-mal. Az operátornak már nem kell külön gombot keresnie a kontroll-panelen — a warning mellett azonnali action. `display: flex; gap: 12px` layout, gomb a tone-color öröklődéssel (`border: 1px solid currentColor`).
@@ -433,6 +464,7 @@ netlify deploy --prod --dir=dist
 4. **Új env-vár**: `current-state/env-vars.md`, NEM a roadmap
 5. **Új algoritmus**: új `math/NN-name.md` + index-frissítés
 6. **Session-zárás**: a "📋 Doksi SSOT-szabályok" checklist + új `changelog/CHANGELOG-YYYY-MM-DD.md`
+7. **Trade history audit user-kérésre** ("validate", "PnL valós?", "audit", "ellenőrizd", URL: `mj-trading.netlify.app/trade/<cat>/`): kötelezően kövesd a [`internal-docs/playbooks/trade-history-audit.md`](./internal-docs/playbooks/trade-history-audit.md) 5-step procedure-ét — 5 adatforrás párhuzamos lekérdezés, Gamma cross-check, 3.6% paper-fee PnL-reprodukció, bankroll-rekonciliáció, cross-position konzisztencia, statisztikai sanity. A playbook tartalmazza az ismert bug-patternek ujjlenyomatait + a Settings-knob és Sprint-promotion javaslatokat.
 
 ### Történeti tanulságok (a részletek a changelog-ban)
 

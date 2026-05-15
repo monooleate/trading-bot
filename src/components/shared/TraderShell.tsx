@@ -102,6 +102,20 @@ export interface TraderShellProps {
   onExportTrades?: () => void | Promise<void>;
   /** Reflects the in-flight state of an export. */
   exportingTrades?: boolean;
+  /** Sprint 42B (2026-05-15): Topup action — non-destructive bankroll
+   *  injection. Preserves closedTrades, IC calibration, openPositions —
+   *  only bankrollStart + bankrollCurrent grow. When provided, TraderShell
+   *  renders a "💰 Top up…" button gated by a confirm-with-amount dialog.
+   *  Per-bot panels should NOT add Topup to `controls`. */
+  topup?: {
+    onTopup: (amount: number) => void | Promise<void>;
+    /** Current bankroll for the before/after preview in the dialog. */
+    currentBankroll?: number;
+    /** Disable when another action is running. */
+    disabled?: boolean;
+    /** Optional category label — e.g. "Crypto", "HL Perp". */
+    categoryLabel?: string;
+  };
   children?: React.ReactNode;
 }
 
@@ -134,6 +148,7 @@ export default function TraderShell({
   reset,
   onExportTrades,
   exportingTrades,
+  topup,
   children,
 }: TraderShellProps) {
   // Re-render once a second so the relative timestamp ages locally without
@@ -149,6 +164,37 @@ export default function TraderShell({
   const [resetOpen, setResetOpen] = useState(false);
   const [resetBackup, setResetBackup] = useState(true);
   const [resetBusy, setResetBusy] = useState(false);
+
+  // Sprint 42B (2026-05-15): topup dialog state. Local-only — same pattern
+  // as reset. The amount text-input is controlled here so we can validate
+  // before submit.
+  const [topupOpen, setTopupOpen] = useState(false);
+  const [topupAmount, setTopupAmount] = useState<string>("100");
+  const [topupBusy, setTopupBusy] = useState(false);
+  const [topupError, setTopupError] = useState<string | null>(null);
+
+  const handleTopupConfirm = useCallback(async () => {
+    if (!topup) return;
+    const n = parseFloat(topupAmount);
+    if (!Number.isFinite(n) || n <= 0) {
+      setTopupError("Adj meg pozitív összeget");
+      return;
+    }
+    if (n > 1_000_000) {
+      setTopupError("Maximum $1,000,000 / topup");
+      return;
+    }
+    setTopupError(null);
+    setTopupBusy(true);
+    try {
+      await topup.onTopup(n);
+      setTopupOpen(false);
+    } catch (e: any) {
+      setTopupError(e?.message ?? "Topup failed");
+    } finally {
+      setTopupBusy(false);
+    }
+  }, [topup, topupAmount]);
 
   const handleResetConfirm = useCallback(async () => {
     if (!reset) return;
@@ -267,6 +313,16 @@ export default function TraderShell({
             {c.label}
           </button>
         ))}
+        {topup && (
+          <button
+            className="ts-btn ts-btn-info"
+            onClick={() => { setTopupAmount("100"); setTopupError(null); setTopupOpen(true); }}
+            disabled={topup.disabled}
+            title="Non-destructive bankroll injection — preserves closed trades, IC calibration, open positions"
+          >
+            💰 Top up…
+          </button>
+        )}
         {reset && (
           <button
             className="ts-btn ts-btn-secondary"
@@ -312,6 +368,81 @@ export default function TraderShell({
           onConfirm={handleResetConfirm}
           onCancel={() => setResetOpen(false)}
         />
+      )}
+
+      {topup && topupOpen && (
+        <div
+          className="ts-modal-overlay"
+          onClick={() => !topupBusy && setTopupOpen(false)}
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="ts-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="ts-modal-title">
+              💰 Top up bankroll — {topup.categoryLabel ?? "this bot"}
+            </div>
+            <div className="ts-modal-body">
+              Növeli a bankrollStart-ot ÉS bankrollCurrent-et a megadott összeggel. Megmarad: closedTrades history, tradeCount, sessionPnL, sessionLoss, openPositions, realized signal-IC kalibráció. <strong>Reset NÉLKÜL</strong> folytatódik a session.
+            </div>
+            {typeof topup.currentBankroll === "number" && (
+              <div className="ts-modal-preview">
+                <div>Current bankroll: <strong>${topup.currentBankroll.toFixed(2)}</strong></div>
+                {(() => {
+                  const n = parseFloat(topupAmount);
+                  const valid = Number.isFinite(n) && n > 0;
+                  return valid ? (
+                    <div>After topup: <strong>${(topup.currentBankroll + n).toFixed(2)}</strong> (+${n.toFixed(2)})</div>
+                  ) : null;
+                })()}
+              </div>
+            )}
+            <label className="ts-modal-label">
+              Amount (USD)
+              <input
+                type="number"
+                min="1"
+                max="1000000"
+                step="1"
+                value={topupAmount}
+                onChange={(e) => { setTopupAmount(e.target.value); setTopupError(null); }}
+                disabled={topupBusy}
+                autoFocus
+                className="ts-modal-input"
+              />
+            </label>
+            {topupError && <div className="ts-modal-error">{topupError}</div>}
+            <div className="ts-modal-actions">
+              <button
+                className="ts-btn ts-btn-secondary"
+                onClick={() => setTopupOpen(false)}
+                disabled={topupBusy}
+              >
+                Mégse
+              </button>
+              <button
+                className="ts-btn ts-btn-info"
+                onClick={handleTopupConfirm}
+                disabled={topupBusy}
+              >
+                {topupBusy ? "Topping up…" : "Top up bankroll"}
+              </button>
+            </div>
+          </div>
+          <style>{`
+            .ts-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.65); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+            .ts-modal { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 24px; max-width: 480px; width: calc(100% - 32px); font-family: var(--sans); }
+            .ts-modal-title { font-size: 1.1rem; font-weight: 600; margin-bottom: 12px; color: var(--text); }
+            .ts-modal-body { color: var(--muted); font-size: 0.9rem; line-height: 1.5; margin-bottom: 16px; }
+            .ts-modal-body strong { color: var(--accent); }
+            .ts-modal-preview { background: var(--surface2); border-radius: 4px; padding: 10px 12px; font-family: var(--mono); font-size: 0.85rem; margin-bottom: 14px; line-height: 1.6; }
+            .ts-modal-preview strong { color: var(--accent); }
+            .ts-modal-label { display: flex; flex-direction: column; gap: 6px; color: var(--text); font-size: 0.9rem; margin-bottom: 12px; }
+            .ts-modal-input { padding: 8px 12px; background: var(--surface2); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-family: var(--mono); font-size: 1rem; }
+            .ts-modal-input:focus { outline: none; border-color: var(--accent2); }
+            .ts-modal-error { color: var(--danger); font-size: 0.85rem; margin-bottom: 12px; }
+            .ts-modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+          `}</style>
+        </div>
       )}
     </div>
   );

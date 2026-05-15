@@ -196,3 +196,30 @@ export function resetSession(bankroll: number, paperMode: boolean): SessionState
   log("SESSION_START", paperMode, { bankroll, simVersion: PAPER_SIM_VERSION });
   return session;
 }
+
+// Sprint 42B (2026-05-15): non-destructive bankroll injection. Increases
+// BOTH bankrollStart (so drawdown % stays consistent — the new capital
+// becomes part of the high-water mark baseline) AND bankrollCurrent (so
+// the running balance shows the topped-up amount). Everything else is
+// preserved: closedTrades history, tradeCount, sessionPnL, sessionLoss,
+// openPositions, signal-IC calibration (stored in a separate Blobs key),
+// startedAt timestamp.
+//
+// Use case: operator hit sessionLossLimit OR bankroll near-zero in paper
+// mode and wants to continue accumulating trades without wiping the
+// 7-trade history that already built up. Mirrors the `reset` action's
+// auth gate but skips the session-wipe.
+export function topupSession(session: SessionState, amount: number): SessionState {
+  log("SESSION_TOPUP", session.paperMode, {
+    amount,
+    bankrollBefore: session.bankrollCurrent,
+    bankrollStartBefore: session.bankrollStart,
+    pnl: session.sessionPnL,
+    trades: session.tradeCount,
+  });
+  return {
+    ...session,
+    bankrollStart:   session.bankrollStart   + amount,
+    bankrollCurrent: session.bankrollCurrent + amount,
+  };
+}

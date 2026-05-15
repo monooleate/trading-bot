@@ -186,6 +186,86 @@ Ezek implementálhatók ha a rendszer 3-6 hónapig gyűjt adatot.
 
 ---
 
+## 2026-05-15 — Vol Divergence K-extrakció fix (above-Nk piacok)
+
+### A bug
+
+A `getVolSignal` (signal-combiner.mts:356) Black-Scholes digital képletet
+használ:
+
+$$
+\text{fair YES} = N(d_2), \quad d_2 = \frac{\ln(S/K) - \tfrac{1}{2}\sigma^2 T}{\sigma \sqrt{T}}
+$$
+
+A strike K-t **kétféleképpen** próbálta származtatni a 2026-05-15 előtti kód:
+
+1. Ha a kérdés tartalmazza pl. "5 minutes" / "15 minutes" → `parseDurationFromQuestion` kinyeri a `durationMs`-t, abból `openTs = endDate − durationMs`, majd Binance 1m kline lekérés az `openTs`-re → K = openedAt BTC ár. **Ez a logika up-or-down piacokra korrekt.**
+2. Ha nincs `durationMs` → fallback **K = S** (jelenlegi spot), ami:
+   - $\ln(S/K) = 0$
+   - $d_2 = -\tfrac{1}{2}\sigma\sqrt{T} \approx 0$ (kis $T$ mellett)
+   - fair YES $\approx N(0) = 0.5$ — **K-tól független, semleges jel.**
+
+A bug: a `bitcoin-above-Nk-on-...` piacok **nem tartalmazzák** a kérdésben az időtartamot (csak az end-date-et és a thresholdot), így a `parseDurationFromQuestion` null-t ad, és a kód a 2. ágon ragad. Ennek következtében MINDEN above-Nk piacra **K = S, fair YES ≈ 0.5** — a jel K-tól függetlenül noise.
+
+### A bug demonstrálása
+
+2026-05-15 paper session: BTC spot $80,620, a bot 3 above-Nk piacra adott `finalProb`-ot:
+
+| Piac | Pre-fix vol_div | Helyes fair YES (T=6h, σ=0.6) | Combiner finalProb |
+|---|---|---|---|
+| `above-78k-may-15` | ≈ 0.50 (K=S fallback) | **0.98** (BTC már 3.4% K fölött) | 0.4609 |
+| `above-80k-may-15` | ≈ 0.50 (K=S fallback) | **0.69** (BTC 0.77% K fölött) | 0.4604 |
+| `above-82k-may-15` | ≈ 0.50 (K=S fallback) | **0.14** (BTC 1.7% K alatt) | 0.4557 |
+
+A vol_divergence jel a 3 piacon **azonos** ≈0.5 értéket adott, miközben az igazi fair YES **0.98, 0.69, és 0.14**. A 7 másik jel K-tól független / K-aware-de-noisy, így a combiner finalProb-ja a 3 piacra **0.46–0.46 sávba esett** — szinte azonosan. A decision-engine pedig 22–31% gross edge-et detektált a piaci 0.78/0.225/0.13 árakkal szemben, és aggresszív contrarian trade-eket nyitott. Mind a 3-on the K-aware vol_divergence ROOT-CAUSE-szerűen tévesen jelzett.
+
+### A fix (root-cause)
+
+Új `parseThresholdK(slug)` helper (signal-combiner.mts:325):
+
+```ts
+function parseThresholdK(slug: string): number | null {
+  const m = slug.toLowerCase().match(
+    /(?:bitcoin|btc)-(?:be-)?above-(\d+(?:\.\d+)?)k(?:-on-(.+?))?$/,
+  );
+  if (!m) return null;
+  const kThousand = parseFloat(m[1]);
+  return Number.isFinite(kThousand) && kThousand > 0 ? kThousand * 1000 : null;
+}
+```
+
+A `getVolSignal`-ben a K-választás új prioritási sorrendje:
+
+1. **Priority 1 (NEW)**: slug-threshold → K = `parseThresholdK(market.slug)` USD-ben. Ez a piac resolution-kritériumának szó szerinti olvasata — nincs Binance round-trip, nincs openedAt becslési hiba. Új `strikeSource: "slug-threshold"`.
+2. **Priority 2** (változatlan): up-or-down markets → K = openedAt BTC ár Binance 1m kline-ból.
+3. **Priority 3** (változatlan): K = S fallback (akkor is ha 1. és 2. failel).
+
+### Várható hatás
+
+A fix után a vol_divergence jel **piaconként meaningfully eltérő**:
+- 78K piacra ≈0.98 → strongly YES bias
+- 80K piacra ≈0.69 → mild YES bias
+- 82K piacra ≈0.14 → strongly NO bias
+
+A combiner-súlyozás (`w = ic × (1 + |demeaned| × 0.5)`) a normától távolabbi jeleknek nagyobb súlyt ad, így ez a változás a finalProb-ot **meaningfully K-érzékennyé** teszi. A 8 jelből 4 K-aware (vol_divergence, orderflow, apex_consensus, cond_prob), a maradék 4 K-blind market-sentiment (momentum, contrarian, funding_rate, pairs_spread). A K-blind jelek ezután mean-reversion-t adnak az átlaghoz, miközben a K-aware jelek a piaconkénti irányt diktálják.
+
+A 2026-05-15 incidens 3 contrarian trade-jét a fix után a `Combiner confidence (|p − 0.5|)` gate (#3) automatikusan blokkolja Normal preset alatt, mert a K-érzékeny finalProb értékek **nem a noise-küszöb körül** lesznek (pl. ≈0.7 vagy ≈0.2), és a gate nem ezeket bünteti.
+
+> **K-blind signal re-weighting** → **[sprints.md Sprint 42A](../roadmap/sprints.md)** ✅ implementálva 2026-05-15 (speculative, default-off). A `combinerKBlindDownweight` Settings-knob default 1.0 (zero behavior change). 0.5-re állítva a 4 K-blind signal (momentum, contrarian, funding_rate, pairs_spread) IC-súlya feleződik **csak threshold piacokon** (`bitcoin-above-Nk-on-...`); up-or-down + directional piacokon nincs változás. Sprint 42 monitoring data alapján kapcsolható át, ha 10+ trade-en a finalProb még mindig 0.45-0.50 sávban ragad. Részletes hatás-elemzés a `sprints.md` aljának "Hatás-elemzés" szekciójában.
+
+### Tesztek
+
+Új test fájl: `netlify/functions/signal-combiner-threshold.test.mts` (parser-pin + BS-digital sanity). 11 case zöld. A monotonicity-invariáns (`P(>K1) > P(>K2)` for `K1 < K2`) BS-digital szinten ki van pinnelve — ha a regex elszáll, a K-keresztezés-fix mellett az is fail-elne.
+
+A regex **háromszorosan duplikált** a kódbázisban (intencionálisan):
+1. `signal-combiner.mts` — `parseThresholdK` (USD-output)
+2. `auto-trader/shared/cross-position-gates.mts` — `parseBtcAboveSlug` (ezerben K + closingKey)
+3. `signal-combiner-threshold.test.mts` — pin-elt másolat tesztelésre
+
+A 3 helyet együtt kell változtatni — ezt a test-suite kötelezővé teszi.
+
+---
+
 ## Forrás
 
 - Grinold, R.C. & Kahn, R.N. (1994). *Active Portfolio Management*. Probus Publishing.

@@ -123,3 +123,19 @@ export function resumeHlSession(s: HlSessionState): HlSessionState {
 export function resetHlSession(paperMode: boolean, bankroll = DEFAULT_BANKROLL): HlSessionState {
   return freshSession(paperMode, bankroll);
 }
+
+// Sprint 42B (2026-05-15): non-destructive bankroll injection — mirror of
+// `topupSession` in crypto/session-manager.mts. Preserves closedTrades,
+// tradeCount, sessionPnL, sessionLoss, openPositions, consecutiveLosses,
+// pausedUntil, startedAt. Only bankrollStart + bankrollCurrent grow.
+//
+// Note: F-Arb shares this HL bankroll (the funding-arb capital comes from
+// the same HL perp account), so the F-Arb dispatcher delegates its topup
+// to this function — there is NO separate `topupArbSession`.
+export function topupHlSession(s: HlSessionState, amount: number): HlSessionState {
+  return {
+    ...s,
+    bankrollStart:   s.bankrollStart   + amount,
+    bankrollCurrent: s.bankrollCurrent + amount,
+  };
+}

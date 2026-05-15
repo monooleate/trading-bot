@@ -213,6 +213,12 @@ export default function FundingArbPanel({ bankroll }: { bankroll?: number }) {
         disabled: isRunning,
         categoryLabel: "Funding Rate Arbitrage",
       }}
+      topup={{
+        onTopup: (amount) => run("topup", { amount }).then(() => refresh()),
+        currentBankroll: session?.bankrollShared ?? undefined,
+        disabled: isRunning,
+        categoryLabel: "Funding Rate Arbitrage (shared HL bankroll)",
+      }}
       onExportTrades={exportTrades}
       exportingTrades={exporting}
     >

@@ -186,6 +186,12 @@ export default function WeatherTrader({ bankroll }: { bankroll?: number }) {
         disabled: isRunning,
         categoryLabel: "Weather Auto-Trader",
       }}
+      topup={{
+        onTopup: (amount) => run("topup", { amount }).then(() => refresh()),
+        currentBankroll: session?.bankrollCurrent,
+        disabled: isRunning,
+        categoryLabel: "Weather Auto-Trader",
+      }}
       onExportTrades={exportTrades}
       exportingTrades={exporting}
     >

@@ -266,7 +266,7 @@ A felhőborítás 2026-05-11 óta GFS + ECMWF **átlag** (előtte csak GFS-ből 
 
 **Empirical σ via 31-tagú ensemble.** Ha `USE_ENSEMBLE = true` (default 2026-05-11 óta), a `confidence` mező a 31 perturbed GFS-tag empirikus szórásából származik (`σ_emp`), nem a 1.0/1.5 hardcoded értékből. A bucket-matcher `σ` paramétere továbbra is a `cloudCoverPct`-alapú értéket használja, **de a `confidence` skálázás ennek finomabb visszacsatolása**.
 
-> **Kalibráció TODO.** A bucket-matcher `σ` paramétere nincs historikus residual-eloszlásból mérve. Hosszú távon a DEB-hez hasonló per-város / per-évszak residual-tanulás kellene a `σ`-ra is.
+> **Kalibráció** → **[sprints.md B15](../roadmap/sprints.md)** (post-50-trade, 2-3 nap). A bucket-matcher `σ` paramétere nincs historikus residual-eloszlásból mérve; hosszú távon DEB-hez hasonló per-város / per-évszak residual-tanulás kellene.
 
 ---
 

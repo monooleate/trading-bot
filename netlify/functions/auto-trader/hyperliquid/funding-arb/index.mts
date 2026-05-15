@@ -191,6 +191,12 @@ async function runFundingArbInner(): Promise<any> {
       // doubles the correlated exit risk. Layered with the upstream
       // uniqueness check so both fail together — informational, but
       // names the constraint loudly in the UI.
+      //
+      // Outcome-overlap coverage (2026-05-15): an F-Arb position IS a
+      // structurally fixed HL-short + Binance-long pair on a single coin,
+      // so a second F-Arb on the same coin = redundant exposure (not a
+      // disjoint outcome problem like crypto NO+YES). The per-coin
+      // uniqueness gate already blocks this case completely.
       "Coin-capacity (cross-position)",
       "Pozíció szám < max",
       "Capital cap (sizing)",

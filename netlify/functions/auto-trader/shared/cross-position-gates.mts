@@ -71,3 +71,63 @@ export function findMonotonicityViolation(
   }
   return null;
 }
+
+/**
+ * Outcome-overlap (side-bet contradiction) check between a candidate trade
+ * and one existing position on the same (closingKey) group.
+ *
+ * Trigger: 2026-05-15 paper session — model predicted P(>78K)=46.09%,
+ * P(>80K)=46.04%, P(>82K)=45.57% (strictly monotone, monotonicity gate
+ * passes), yet the bot opened NO @ 78K, NO @ 80K, AND YES @ 82K. NO@80K
+ * wins iff BTC ≤ $80K; YES@82K wins iff BTC > $82K. The two winning zones
+ * are disjoint, and the $80K < BTC ≤ $82K band is a guaranteed
+ * double-loss zone for the pair.
+ *
+ * Contract: for two BTC-above-Kx markets resolving at the same time,
+ *   - YES @ K_hi wins ⇔ BTC > K_hi
+ *   - NO  @ K_lo wins ⇔ BTC ≤ K_lo
+ * If K_hi > K_lo, both winning conditions cannot be true simultaneously,
+ * and the (K_lo, K_hi] band is double-loss.
+ *
+ * Violation patterns (returns the existing offending position):
+ *   - candidate YES @ K_cand AND existing NO @ K_existing with K_cand > K_existing
+ *   - candidate NO  @ K_cand AND existing YES @ K_existing with K_cand < K_existing
+ *
+ * Consistent (returns null):
+ *   - same direction on both K's (YES@K_lo + YES@K_hi: both win if BTC > K_hi)
+ *   - winning zones overlap (e.g. YES@K_lo + NO@K_hi with K_hi > K_lo:
+ *     overlap zone is K_lo < BTC ≤ K_hi where both win)
+ *
+ * Note: this is structurally distinct from the monotonicity check above.
+ * Monotonicity inspects the model's *probabilities* for internal coherence;
+ * outcome-overlap inspects the *side bets themselves* for mutually exclusive
+ * winning conditions. Both gates fire independently — today's incident
+ * cleared monotonicity but tripped outcome-overlap.
+ */
+export interface OutcomeOverlapCandidate {
+  K: number;
+  closingKey: string;
+  direction: "YES" | "NO";
+}
+
+export interface OutcomeOverlapExisting {
+  K: number;
+  closingKey: string;
+  direction: "YES" | "NO";
+  slug: string;
+}
+
+export function findOutcomeOverlapViolation(
+  cand: OutcomeOverlapCandidate,
+  existing: OutcomeOverlapExisting[],
+): OutcomeOverlapExisting | null {
+  for (const e of existing) {
+    if (e.closingKey !== cand.closingKey) continue;
+    if (cand.K === e.K) continue; // same K + opposite direction is a separate flag elsewhere
+    // Pattern A: candidate YES on higher K, existing NO on lower K
+    if (cand.direction === "YES" && e.direction === "NO" && cand.K > e.K) return e;
+    // Pattern B: candidate NO on lower K, existing YES on higher K
+    if (cand.direction === "NO" && e.direction === "YES" && cand.K < e.K) return e;
+  }
+  return null;
+}

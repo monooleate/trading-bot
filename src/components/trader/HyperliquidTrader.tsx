@@ -185,6 +185,12 @@ export default function HyperliquidTrader({ bankroll }: { bankroll?: number }) {
         disabled: isRunning,
         categoryLabel: "Hyperliquid Perp Trader",
       }}
+      topup={{
+        onTopup: (amount) => run("topup", { amount }).then(() => refresh()),
+        currentBankroll: session?.bankrollCurrent,
+        disabled: isRunning,
+        categoryLabel: "Hyperliquid Perp Trader",
+      }}
       onExportTrades={exportTrades}
       exportingTrades={exporting}
     >

@@ -329,7 +329,7 @@ Itt **bukik** a példában — `netEdge < edgeThreshold`. A `noResult` early-ret
 {
   shouldTrade: false, direction: "YES", positionSizeUSDC: 0, edge: 0.084,
   reason: "Net edge 8.4% < threshold 15.0%",
-  gates: [...]   ← teljes 15 gate lista, "Net edge ≥ küszöb" sora failed=true
+  gates: [...]   ← teljes 16 gate lista, "Net edge ≥ küszöb" sora failed=true
 }
 ```
 
@@ -377,7 +377,7 @@ entryDecision = {
   feePct: 0.036, direction: "YES", kellyRaw: 0.04, kellyCapped: 0.04, kellyCap: 0.08,
   positionSizeUSDC: 6, entryPrice: 0.51, activeSignals: 8,
   signalBreakdown: { ... }, obImbalance: { ratio: 2.1, direction: "UP" },
-  gates: [...15 gate...], reason: "..."
+  gates: [...16 gate...], reason: "..."
 }
 
 paperPosition = {
@@ -504,7 +504,7 @@ végén dönt `shouldTrade = gates.every(g => g.passed)` — így a UI a
 teljes pass/fail listát megjeleníti a "Why?" panel-en. A `reason` mező
 az első bukó gate üzenetét hordozza, hogy a sor footer-en olvasható maradjon.
 
-### A 15 gate (2026-05-14e cross-position consistency után)
+### A 16 gate (2026-05-15 outcome-overlap után)
 
 | # | Gate | Match rule | Default | Where to tune |
 |---|------|------------|---------|---------------|
@@ -523,14 +523,17 @@ az első bukó gate üzenetét hordozza, hogy a sor footer-en olvasható maradjo
 | 13 | **Kelly méret ≥ minimum** ✦ | `bankroll * kellyCapped ≥ minPositionSizeUSDC` | $0.50 | `MIN_POSITION_SIZE_USDC` env / Settings `minPositionSizeUSDC` |
 | 14 | **Kelly méret ≤ cap** (informational) | `min(kellyFraction, maxKellyFraction)` | 8% bankroll | `MAX_KELLY_FRACTION` / Settings `maxKellyFraction` |
 | 15 | **Monotonicitás (egyéb nyitott pozíciók)** ✦✦✦ | `findMonotonicityViolation(cand, open BTC-above-K positions) === null` | hard-coded | – (cross-position-gates.mts) |
+| 16 | **Outcome-overlap (NO+YES BTC párok)** ✦✦✦✦ | `findOutcomeOverlapViolation(cand, open BTC-above-K positions) === null` | hard-coded | – (cross-position-gates.mts) |
 
 ✦ Új gate-ek a 2026-05-11 audit fixből (3 új konvergencia-gate + Kelly minimum gate). A korábbi 9 gate listából a régi "Kelly conviction (combiner > 0)" gate-et kivettem — a "Kelly méret ≥ minimum" (#13) funkcionálisan ekvivalens, csak a tényleges $ méreten ellenőriz, nem a 0-küszöbös conviction-en.
 
 ✦✦ Új gate-ek a 2026-05-12 expansion-ből: a Combiner trust + Sanity cap blokkolja az alacsony-IR kombinátor + extrém edge ("hallucinated alpha") és a > 40% gross-edge model-error eseteket. Részletek a 2026-05-12 changelog-ban.
 
-✦✦✦ Új gate a 2026-05-14e cross-position consistency sweep-ből — lásd §9.5 "Cross-market consistency gate (monotonicity)". Trigger: 2026-05-14 paper session 78K-NO @ 52% + 80K-YES @ 53% incidens.
+✦✦✦ Új gate a 2026-05-14e cross-position consistency sweep-ből — lásd §9.5 "Cross-market consistency gate (monotonicity)". Trigger: 2026-05-14 paper session 78K-NO @ 52% + 80K-YES @ 53% incidens. Csak a model-predikció monotonitását ellenőrzi, az oldal-választás kontradikcióját nem fogja meg (lásd #16).
 
-⚠ Az **#9 entry window** csak rövid (5m/15m) BTC piacokon aktív. Daily piacokon idle, mert az `openedAtEstimate` null — ekkor a gate "n/a (daily market)" actual-lal és `passed: true`-val szerepel a listán, hogy Y = 15 stabil maradjon a UI-on.
+✦✦✦✦ Új gate a 2026-05-15 outcome-overlap sweep-ből — lásd §9.6. Trigger: 2026-05-15 paper session 80K-NO + 82K-YES incidens. A model-predikciók szigorúan monotonok voltak (P(>80K)=46.04% > P(>82K)=45.57% → #15 átengedte), de a bet-oldalak kizárják egymást: NO@80K nyer iff BTC≤$80K, YES@82K nyer iff BTC>$82K → a (80K, 82K] sáv mindkét trade-en bukik. Strukturálisan különbözik a #15-től: monotonitás = predikció-koherencia, outcome-overlap = side-bet kontradikció.
+
+⚠ Az **#9 entry window** csak rövid (5m/15m) BTC piacokon aktív. Daily piacokon idle, mert az `openedAtEstimate` null — ekkor a gate "n/a (daily market)" actual-lal és `passed: true`-val szerepel a listán, hogy Y = 16 stabil maradjon a UI-on.
 
 ### A 3 új konvergencia-gate miértje (2026-05-11 audit)
 
@@ -1085,29 +1088,105 @@ findMonotonicityViolation(
 A test 6 case-t fed le: live-incident, reverse-direction, consistent
 monotonic, different closingKey, equal K, empty list.
 
+### 2026-05-15 — Cross-position outcome-overlap gate
+
+**Trigger**: az élő paper session 2026-05-15-én bug-jelentést produkált. A
+bot nyitotta:
+- `bitcoin-above-78k-on-may-15` NO @ pred=46.09%
+- `bitcoin-above-80k-on-may-15` NO @ pred=46.04%
+- `bitcoin-above-82k-on-may-15` YES @ pred=45.57%
+
+A 3 predikció **szigorúan monoton csökkenő K-val** (46.09% > 46.04% >
+45.57%) → a 2026-05-14e Monotonicitás-gate **helyesen átengedte** mind a
+hármat. De a NO@80K + YES@82K **bet-pár oldal-választás-szinten
+ellentmondó**:
+
+- NO @ 80K nyer ⇔ BTC ≤ $80K
+- YES @ 82K nyer ⇔ BTC > $82K
+
+A két nyerési zóna diszjunkt, és a (80K, 82K] sáv **mindkét pozíciónak
+loser**. A model predikciói szerint ennek a sávnak a valószínűsége csak
+0.47% (kvázi-bimodális prior), miközben a piac szerint 55% — ez a bug a
+combiner kimenetében, hogy K-paramétertől gyengén függő finalProb-ot ad
+("vagy mélyen alatt, vagy magasan fölött" mintázat).
+
+**Fix**: új non-short-circuit gate `Outcome-overlap (NO+YES BTC párok)` a
+`CRYPTO_GATE_LABELS[15]` pozícióban. Strukturálisan különbözik a #15
+Monotonicitás-gate-től:
+- **Monotonicitás** = a model *probabilitásai* koherensek-e (predNew vs
+  predExisting kapcsolata K_new vs K_existing fényében).
+- **Outcome-overlap** = a *bet-oldalak* nyerési feltételei átfednek-e.
+
+A kettő **független** — a 2026-05-15 incidens monotonitásban tiszta volt,
+de outcome-overlap-ben bukik. Mindkét gate szükséges, egyik sem
+helyettesíti a másikat.
+
+A `findOutcomeOverlapViolation()` shared helper csoportosít `closingKey`
+szerint és ellenőrzi:
+- Candidate **YES @ K_cand** + existing **NO @ K_existing** ahol
+  `K_cand > K_existing` → violation
+- Candidate **NO @ K_cand** + existing **YES @ K_existing** ahol
+  `K_cand < K_existing` → violation
+- Azonos oldal (mindkét YES vagy mindkét NO) → konzisztens (mindkettő
+  nyer ugyanabban a zónában)
+- Átfedő nyerési zóna (pl. YES@K_lo + NO@K_hi K_hi > K_lo) → konzisztens
+- Azonos K + ellentétes oldal → ez nem ide tartozik (a "same market
+  LONG+SHORT" ellenőrzés külön réteg lenne)
+
+**Reprodukció**: a `shared/cross-position-gates.test.mts` 8 új case-t fed
+le:
+
+```ts
+findOutcomeOverlapViolation(
+  { K: 82, closingKey: "may-15", direction: "YES" },
+  [{ K: 80, closingKey: "may-15", direction: "NO", slug: "..." }],
+) !== null;  // PASS — violation flagged (today's incident)
+```
+
+A 8 case: pattern-A (YES@hi + NO@lo), pattern-B (NO@lo + YES@hi),
+consistent-same-YES, consistent-same-NO, overlap-zone (YES@lo + NO@hi),
+different-closingKey, same-K-opposite-direction (skip), empty.
+
+**Hatás a többi botra**: a Sprint 39e óta a többi 4 bot már rendelkezik
+funkcionálisan ekvivalens védelemmel:
+- **Weather**: `Σ P(YES) ≤ 1.0` per (city, date) negRisk group — disjoint
+  bucketek joint-impossibility-jét fogja.
+- **HL Perp**: `Directional-consistency (no LONG+SHORT same coin)` — a
+  perp analóg, ugyanaz a "disjoint winning conditions" mintázat.
+- **F-Arb**: `Coin-capacity (cross-position)` — F-Arb pozíció szerkezetileg
+  fixed (HL-short + Binance-long), per-coin uniqueness elég.
+- **Sports**: `Outcome-sum (cross-position)` per eventSlug — disjoint
+  outcomes ugyanaz mint a weather buckets.
+
+Mindegyik bot decision-engine-jébe rövid coverage-komment került, hogy a
+gate-térkép egyértelmű maradjon. Funkcionálisan csak a crypto-engine
+bővült.
+
 ---
 
 ### Maradó (post-fix) limitációk
 
-- **Cooldown map in-memory**: `decision-engine.mts:cooldownMap` egy
-  `Map<string, number>` ami a Netlify function cold-start után elvész. Ha
-  egy market 5 percen belül 2× passol minden gate-en és a függvény közben
-  cold-startol → 2× nyithat ugyanarra a slug-ra. Mitigation: `addOpenPosition`
-  post-check (`openPositions.some(p => p.market === slug) → skip`) megfogja,
-  de csak a tényleges Position rekord után. **Nem fixelve** — Blobs-perzisztálás
-  trade-off: 1 plusz Blobs read/write/tick. Tesztelési protokoll alatt
-  monitorozandó.
+> **2026-05-15 szabály**: A konkrét sprint-tárgyú feladatok az
+> [`internal-docs/roadmap/sprints.md`](../roadmap/sprints.md) backlog-jában
+> követhetők. Ebben a szekcióban csak **rövid architektúra-leírás** marad,
+> nem a TODO maga. → sprint-szintű pointer minden tételhez.
 
-- **Live early-exit Netlify timeout**: `LIVE_EXIT_BUDGET_PER_TICK = 3`-mal
-  worst case 3 × ~30s GTC poll = 90s. Netlify scheduled function 15 min
-  budgetje bőven elég, de standard sync function timeout 26s. Ha valaha
-  átkerül a bot egy nem-scheduled függvénybe, ez áttervezést igényel.
+- **Cooldown map in-memory** → **[sprints.md B16](../roadmap/sprints.md)**.
+  `decision-engine.mts:cooldownMap` egy `Map<string, number>` ami a Netlify
+  function cold-start után elvész. Mitigáció: `addOpenPosition` post-check
+  megfogja a duplikálást a tényleges Position rekord után. Blobs-perzisztálás
+  trade-off-fal jár (1 plusz read/write/tick).
 
-- **On-chain CTF redemption manuális**: live-mode close után az USDC nem
-  jön vissza automatikusan a funder address-re. `PAPER_RESOLVED.requiresRedeem:
-  true` log-bejegyzés és Telegram alert jelzi, hogy a user futtassa a
-  `/polymarket-redeem` end-pointot. Auto-redeem opcionálisan beépíthető,
-  de jelenleg intent-only minta (security-conscious default).
+- **Live early-exit Netlify timeout** → **[sprints.md B16](../roadmap/sprints.md)**.
+  `LIVE_EXIT_BUDGET_PER_TICK = 3`, worst case 3 × ~30s GTC poll = 90s.
+  Scheduled function 15 min budgetje elég, sync function 26s. Pre-live
+  arch-review tárgya ha a bot átkerül nem-scheduled function-be.
+
+- **On-chain CTF redemption manuális** → **[sprints.md B6](../roadmap/sprints.md)**.
+  Live-mode close után az USDC nem jön vissza automatikusan; `PAPER_RESOLVED.requiresRedeem:
+  true` log-bejegyzés + Telegram alert jelzi az operátornak. Auto-redeem
+  opcionális (B6, P1.4 follow-up, 2h becslés). Jelenleg intent-only minta
+  security-conscious default-ként.
 
 ---
 
@@ -1141,7 +1220,7 @@ netlify/functions/auto-trader/
 ├── crypto/
 │   ├── btc-market-finder.mts          ← Gamma /events?tag_id=21 + filterek
 │   ├── signal-aggregator.mts          ← /signal-combiner + Binance OB enrichment
-│   ├── decision-engine.mts            ← 15 gate, Kelly, edge, direction, monotonicity (cross-position)
+│   ├── decision-engine.mts            ← 16 gate, Kelly, edge, direction, monotonicity + outcome-overlap (cross-position)
 │   ├── execution.mts                  ← clob-client BUY/SELL + fetchOrderFillDetail (audit-fix #E)
 │   ├── order-lifecycle.mts            ← TP/SL checkExitConditions + handleSellLifecycle (live, audit-fix #A)
 │   ├── live-price.mts                 ← CLOB /midpoint fetcher a live early-exit pass-hez

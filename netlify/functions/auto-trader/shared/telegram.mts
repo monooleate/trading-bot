@@ -89,6 +89,28 @@ export function alertError(message: string): Promise<boolean> {
   return sendMessage(`⚠️ <b>ERROR</b>\n${message}`);
 }
 
+// Sprint 42B (2026-05-15): audit trail for the `topup` action — non-
+// destructive bankroll injection. Sends one Telegram message per topup,
+// regardless of paper/live mode, so the operator has a reliable record of
+// when the bankroll was grown and by how much.
+export function alertTopup(
+  paper: boolean,
+  category: string,
+  amount: number,
+  bankrollBefore: number,
+  bankrollAfter: number,
+  bankrollStartAfter: number,
+): Promise<boolean> {
+  const tag = paper ? "PAPER" : "LIVE";
+  const text =
+    `💰 <b>BANKROLL TOPPED UP [${tag}]</b>\n` +
+    `Category: ${category}\n` +
+    `Added: +$${amount.toFixed(2)}\n` +
+    `Bankroll: $${bankrollBefore.toFixed(2)} → $${bankrollAfter.toFixed(2)}\n` +
+    `New start basis: $${bankrollStartAfter.toFixed(2)}`;
+  return sendMessage(text);
+}
+
 export function alertCalibrationNoise(
   paper: boolean,
   message: string,
