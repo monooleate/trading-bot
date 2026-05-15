@@ -91,9 +91,33 @@ const { title = "EdgeCalc // Polymarket & Funding Arb Toolkit" } = Astro.props;
           tip.style.left = left + "px";
           tip.style.top  = top + "px";
         }
+        // Interactive-element gate: ha a tap egy <a href>, <button>,
+        // <summary>, form-input vagy ARIA-role-os interaktív elemre esik,
+        // hagyni kell hogy a natív akció lefusson (navigálás, gombnyomás,
+        // details-toggle). A tooltip felülírása mobilon eddig elnyelte
+        // ezeket a kattintásokat — a fix 2026-05-15-en jött.
+        function isInteractiveAncestor(node) {
+          var n = node;
+          while (n && n !== document.body) {
+            var tag = n.tagName;
+            if (tag === "BUTTON" || tag === "SUMMARY" || tag === "INPUT"
+              || tag === "SELECT" || tag === "TEXTAREA" || tag === "LABEL") return true;
+            if (tag === "A" && n.hasAttribute && n.hasAttribute("href")) return true;
+            var role = n.getAttribute && n.getAttribute("role");
+            if (role === "button" || role === "link" || role === "tab"
+              || role === "menuitem" || role === "menuitemcheckbox"
+              || role === "checkbox" || role === "switch") return true;
+            n = n.parentElement;
+          }
+          return false;
+        }
         document.addEventListener("click", function (ev) {
           // Bezárás ha tip-en kívül kattint
           if (tip.contains(ev.target)) return;
+          // Ha a tap interaktív elemen vagy annak gyerekén történt, a
+          // natív viselkedés (link navigáció, gomb, summary toggle) NYER —
+          // nem mutatunk tooltip-et és nem hívunk preventDefault-ot.
+          if (isInteractiveAncestor(ev.target)) { hide(); return; }
           var el = ev.target;
           while (el && el !== document.body) {
             if (el.getAttribute && el.getAttribute("data-tip")) {
