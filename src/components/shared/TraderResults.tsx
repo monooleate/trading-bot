@@ -208,7 +208,7 @@ export function ScanResultRow(p: ScanRowProps) {
       <div className="ts-row-main">
         <div className="ts-row-title" title={p.titleTip || p.title}>
           {p.prefix && <span className="ts-row-title-prefix">{p.prefix}</span>}
-          {p.title}
+          <span className="ts-row-title-text">{p.title}</span>
           {p.link && (
             <a
               href={p.link}

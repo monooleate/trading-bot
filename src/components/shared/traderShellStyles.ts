@@ -178,8 +178,12 @@ export const traderShellCSS = `
 .ts-row-main { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
 .ts-row-title {
   color: var(--text); font-weight: 600; font-size: 0.78rem;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   display: flex; align-items: center; gap: 6px;
+  min-width: 0;
+}
+.ts-row-title-text {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  min-width: 0; flex: 1 1 auto;
 }
 .ts-row-title-prefix { color: var(--accent); flex-shrink: 0; }
 .ts-row-title-link {
