@@ -110,3 +110,50 @@ Választott megközelítés (user): a bizonyítottan tüzelő `*/3` multi-cron �
   `runStatus.source` weather-en `cron`-ra vált és `lastRunAt` frissül 3 percenként.
 
 → Sprint-tracker: `internal-docs/roadmap/sprints.md` Sprint 43.
+
+---
+
+## (c) — Crypto deploy-gap audit + Netlify build-fix (45. session)
+
+### Trigger
+
+User: *"ellenőrizd és értékeld az élő oldalon a bot általi összes kereskedést (https://mj-trading.netlify.app/trade/crypto/) … validáld … értékeld a bot teljesítményét!"* → a [`playbooks/trade-history-audit.md`](../playbooks/trade-history-audit.md) 5-step procedure-je.
+
+### Audit eredmény — a history VALID, de a teljesítmény katasztrofális
+
+45 closed trade (2026-05-15 → 05-28), 5 open.
+
+- **Step 1 — Gamma cross-check**: 16 reprezentatív trade (mindkét irány) verify-olva a `gamma-api…&closed=true`-n → **mind egyezik**, minden `closedAt > endDate` (nincs pre-resolution close).
+- **Step 2 — PnL reprodukció**: a 3.6% roundtrip fee modell mind a **45 trade-en bit-pontos** (max eltérés 0.000000 USD). Loserek `−103.6%` (helyes fee-ujjlenyomat).
+- **Step 3 — Bankroll-rekonciliáció**: `$250 + (−$109.75) − $30.56 open = $109.69` ✓ (diff 0.0000).
+- **Step 5 — Statisztika**: 22.2% WR (10W/35L), profit factor **0.72**, Sharpe −0.07, **evGap −$742.41**, max DD **152%**, calibrationDeviation 14.2%.
+- **Értékelés**: a 10 győztesből 9 **NO/short** fogadás volt egy eső piacon (BTC ~$80k→$73k) → **béta, nem alfa**. A predikciók laposak (minden `predictedProb ∈ [0.45, 0.55]`) = a §4.1 "flat finalProb" minta.
+
+### Gyökérok — a Sprint 41-42B fixek 2 hétig élesítetlenek voltak
+
+A `NO@72k-may-29` open pozíció **tárolt entryDecision-je csak 15 gate-et** tartalmazott (a 16. Outcome-overlap hiányzott), pedig a repo HEAD-en 16 van. A production tehát a **05-15 előtti kódot futtatta**. A user megerősítette: **a 2026-05-15-i Netlify deploy ELBUKOTT**:
+
+```
+ERROR: The following serverless functions failed to deploy: signal-combiner-threshold.test
+To deploy these functions successfully, change the function names to contain only
+alphanumeric characters, hyphens or underscores
+```
+
+Ok: a Sprint 41-ben hozzáadott `netlify/functions/signal-combiner-threshold.test.mts` a functions-könyvtár **top-level**-jén volt → a Netlify functionként bundle-elte, és a `signal-combiner-threshold.**test**` névben a **pont érvénytelen**. A deploy a function-bundling stage-en megszakadt → a K-fix + outcome-overlap gate #16 + K-blind downweight + topup **mind élesítetlen maradt**. A bot a régi 15-gate kódot futtatta, Loose preset (0.02) + $1000 loss-limit override mellett → szabad zaj-kereskedés, $250→$109.
+
+### Build-fix (kód — committed + pushed + deployed)
+
+- **Első próba (`b24d3cd`)**: `_tests/` alkönyvtárba mozgatás — **nem működött** (a Netlify a `_`-prefixű mappa loose fájlját is functionként vette, a 21:07-es deploy ugyanazzal a hibával bukott).
+- **Valódi fix (`5d910c8`)**: áthelyezés `netlify/functions/auto-trader/shared/`-be. Ott már él 3 másik `.test.mts` (cross-position-gates, topup-action, hl-consec-loss-recovery), és a 05-15-ös hibalog **kizárólag** a top-level fájlt listázta — bizonyíték, hogy az `auto-trader/` alatti fájlok (a mappának van `index.mts`-e → egyetlen function) **nem** külön functionök. A test self-contained (lokális `parseThresholdK`), `npx tsx` zöld. Path-kommentek frissítve.
+- **Deploy zöld** ✅, az új kód élő-verifikálva: `combinerKBlindDownweight` megjelent a `trader-settings` schemában, 16 gate aktív.
+
+### Operatív akciók (user-jóváhagyott, auth-olt live API)
+
+| Akció | Érték | Megjegyzés |
+|---|---|---|
+| `combinerKBlindDownweight` | **0.5** | a maradék lapos-jel (momentum/pairs_spread exact 0.5) ellen |
+| `combinerConfidenceMin` | **0.02 → 0.05** | Loose → Normál preset (a user saját terve volt 30+ trade után) |
+| `sessionLossLimit` | **marad $1000** | a user explicit választása (friss $250 sessionön gyakorlatilag nincs circuit-breaker) |
+| crypto session | **reset** | tiszta lap ($250 / 0 trade); a 45 buggos-kód trade + IC-kalibráció törölve |
+
+> Megjegyzés: ez az audit-rész **azért** került changelogba (a playbook §8.3 szerint pusztán verifikáció nem kerülne ide), mert egy **valódi kód-bug** (deploy-blokkoló test-fájl elhelyezés) lett lejavítva.

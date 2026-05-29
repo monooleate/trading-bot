@@ -340,6 +340,16 @@ A korábbi B9 (Topup action) átkerült a "📋 Next sprint candidates" szekció
 
 ---
 
+### B19 — Deploy-guard: top-level `.test.mts` ne tudja megbuktatni a Netlify buildet 🟡
+
+- **Trigger:** 2026-05-29 crypto deploy-gap audit. A Sprint 41-ben hozzáadott `signal-combiner-threshold.test.mts` a `netlify/functions/` **top-level**-jén volt → a Netlify functionként bundle-elte, a `.test` pont érvénytelen függvénynév → a **2026-05-15-i deploy elbukott**, és a Sprint 41-42B fixek **2 hétig élesítetlenek** maradtak (a bot a régi 15-gate, lapos-predikció kódot futtatta, $250→$109). Az **azonnali fix kész** (`5adf152`→ test áthelyezve `auto-trader/shared/`-be, commit `5d910c8`, deploy zöld) — ez a tétel a **megelőzés**.
+- **Becslés:** 1-2 óra.
+- **Mit ad (opciók):** (a) pre-commit / pre-deploy lint, ami fail-el, ha bármely fájl közvetlenül a `netlify/functions/` top-level-jén `.` -ot tartalmaz a basename-ben (a `.mts` kiterjesztésen kívül); VAGY (b) `netlify.toml` `[functions]` exclusion a `**/*.test.*` mintára; VAGY (c) konvenció-doksi + a `npm run build` után egy záró ellenőrzés. Az (a) a legrobosztusabb (CI-szinten fog).
+- **Precondition:** nincs — bármikor megcsinálható.
+- **Várt hatás:** egy elgépelt/rossz-helyre tett test fájl soha többé nem tud csendben 2 hetes deploy-blokádot okozni.
+
+---
+
 ## ✅ Completed sprints (rolling 5 utolsó)
 
 ### Sprint 43 (2026-05-29) — Weather cron életre keltése (multi-cron fan-out)
