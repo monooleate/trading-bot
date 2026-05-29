@@ -220,13 +220,20 @@ export default async function handler(req: Request, _ctx: Context) {
       case "run":
         if (cat === "weather") {
           const wConfig = await getEffectiveWeatherConfig();
-          // Same scheduled-vs-manual detection: weather has its own */5 cron
-          // (`auto-trader-weather-cron`), but if anyone hits this dispatcher
-          // with `category: "weather", action: "run"` from a schedule body,
-          // tag it accordingly.
+          // Scheduled-vs-manual detection. Weather is now driven by the shared
+          // `auto-trader-multi-cron` fan-out (?source=cron) — its standalone
+          // `schedule()`-wrapper cron never registered under the esbuild/.mts
+          // build, so it sat idle from 2026-05-21 (see 2026-05-29 changelog).
           const url = new URL(req.url);
           const source: "manual" | "cron" =
             (url.searchParams.get("source") === "cron" || isScheduledTick) ? "cron" : "manual";
+          // Honour the `weatherCronEnabled` toggle on cron-driven ticks only.
+          // The old weather-cron wrapper gated on `cfg.cronEnabled`; preserve
+          // that pause semantics now that the multi-cron fan-out drives weather.
+          // Manual "Scan" clicks always run regardless of the toggle.
+          if (source === "cron" && !wConfig.cronEnabled) {
+            return jsonResponse({ ok: true, action: "skipped", reason: "Weather cron disabled (weatherCronEnabled = 0)" });
+          }
           return jsonResponse(await runWeatherTrader(wConfig, source));
         }
         // The crypto trader records run-state itself so cron and manual

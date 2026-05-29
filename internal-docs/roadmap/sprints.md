@@ -329,9 +329,42 @@ A korábbi B9 (Topup action) átkerült a "📋 Next sprint candidates" szekció
   - #12 Cointegration BTC/ETH pairs (~2 hét, pairs_spread pillar completion)
 - **Sprint-szintű terv:** prioritás-sorrend kizárólag a `new-strategies.md` Score alapján.
 
+### B18 — HL Perp directional long-bias vizsgálat 🟠
+
+- **Trigger:** 2026-05-29 HL performance-audit. A 22 closed trade **mind LONG** (21× BTC, 1× ETH), win rate 27.3%, calibration-deviation 32.7%, profit factor 0.31. A `getHlSignalForCoin` iránya = `finalProb >= 0.5 ? LONG : SHORT`, és a combiner `combined_probability`-ja a teljes 2026-05-12…17 ablakban > 0.5 maradt, miközben a BTC ~$81K → $73K esett.
+- **Precondition:** 30+ closed HL trade (n=22 most statisztikailag elégtelen IC/Sharpe következtetéshez) — a deadlock-fix (Sprint 42G) után gyűlhet újra.
+- **Becslés:** 1-2 nap (vizsgálat + esetleges fix).
+- **Mit kell eldönteni:** valódi strukturális combiner-bias-e (a 8 jel directional-output szimmetriája HL coin-okon), vagy csak regime-artefakt (a momentum/trend jelek legitim módon long-ra álltak egy choppy tetőn). Ha bias → a combiner directional-leágazás auditja; ha regime → nincs kód-teendő, csak kalibráció (`useRealizedIC=1`, calib-dev > 7%).
+- **Várt hatás:** ha bias-fix, a HL win-rate a 27% noise-floor fölé kerülhet; ha regime, a realized-IC blend csökkenti a 32.7% deviation-t.
+- **NEM most:** a playbook §8.2/§8.9 szerint spekulatív irány-kényszerítés (pl. "néha shortolj") tilos — adat-vezérelt vizsgálat kell.
+
 ---
 
 ## ✅ Completed sprints (rolling 5 utolsó)
+
+### Sprint 43 (2026-05-29) — Weather cron életre keltése (multi-cron fan-out)
+
+**Mit ért el:**
+- **Root-cause fix** egy „cron futott, a bot mégsem kereskedett" osztályú bugra (a Sprint 42G HL-deadlock testvére, de **eltérő ok**): a weather bot **≈8 napja (2026-05-21 óta) nem nyitott pozíciót**. A `runStatus.source` weather-en **soha** nem volt `cron`, csak `manual` → a Netlify egyszer sem hívta meg az `auto-trader-weather-cron`-t.
+- **Gyökérok**: a két weather cron (`auto-trader-weather-cron` */5, `auto-trader-weather-reconciler-cron` */15) a legacy `export const handler = schedule(...)` wrappert használta, ami az esbuild/.mts build alatt **nem regisztrálódik**. A tüzelő cronok (`auto-trader`, `auto-trader-multi-cron`) mind sima `export default handler` + netlify.toml schedule mintát használnak.
+- **Fix**: weather `run` + `reconcile` befűzve a bizonyítottan tüzelő `auto-trader-multi-cron` */3 fan-out-ba (`FanOutTarget.action` szélesítve `"run" | "reconcile"`-ra). A dispatcher weather `run` ága `cronEnabled`-guardot kapott, hogy a `weatherCronEnabled` pause-toggle cron-tick-eken megmaradjon (manuális Scan változatlanul fut). A két halott wrapper fájl + netlify.toml entry **kivezetve**. UI/Settings label `5 min → 3 min`.
+- `npx tsc --noEmit` + `npm run build` zöld. Élesedés: a következő `netlify deploy --prod` után `runStatus.source` weather-en `cron`-ra vált.
+
+**Másodlagos megfigyelés (nem bug):** a weather temp-piacok (ázsiai városok) `endDate = 12:00 UTC`, így a napi kereskedési ablak ≈ 00:00–12:00 UTC — a fix utáni `*/3` cron ezen belül fog automatikusan nyitni.
+
+**Changelog:** [`CHANGELOG-2026-05-29.md`](../changelog/CHANGELOG-2026-05-29.md) (b szekció)
+
+### Sprint 42G (2026-05-29) — HL consecutive-loss deadlock fix
+
+**Mit ért el:**
+- **Root-cause fix** egy 🔴 deadlock-bug-ra, amit a 2026-05-29 HL performance-audit tárt fel: a HL bot **12 napja (2026-05-17 óta) nem kereskedett**, miközben a cron futott. Ok: a `consecutiveLosses` counter (5) ≥ `consecutiveLossLimit` (3), és a [`decision-engine.mts:108`](../../netlify/functions/auto-trader/hyperliquid/decision-engine.mts) minden tick-en blokkol amíg a counter ≥ limit. A counter **csak nyertes trade-en** nullázódik → nincs trade → nincs win → permanens block. A "design intent 1h pause" valójában örökös leállás volt.
+- **Fix 1 — auto-recovery**: új pure helper `clearElapsedConsecutiveLossPause()` a [`hyperliquid/session-manager.mts`](../../netlify/functions/auto-trader/hyperliquid/session-manager.mts)-ben; a [`index.mts`](../../netlify/functions/auto-trader/hyperliquid/index.mts) runner a stopped-check és a pause-check között hívja. Lejárt `pausedUntil` + counter ≥ limit → slate wipe (counter→0, pausedUntil→null). A meglévő bricked session **deploy után a következő cron-tick-en magától felépül**, reset nélkül.
+- **Fix 2 — `resumeHlSession`**: eddig csak `pausedUntil=null`-t állított, a countert nem → a `resume` action **nem oldotta fel** a deadlockot (a raw-count gate továbbra is blokkolt). Most a countert is nullázza → a `resume` valódi, history-megőrző unbrick.
+- Új `PAUSE_AUTORECOVER` LogEvent (audit-trail). 6 új unit test ([`shared/hl-consec-loss-recovery.test.mts`](../../netlify/functions/auto-trader/shared/hl-consec-loss-recovery.test.mts)). `tsc --noEmit` + `npm run build` zöld.
+
+**Mit NEM tett (szándékos scope — lásd B18):** a HL bot **long-bias** (22/22 trade LONG, 27.3% WR, 32.7% calibration-deviation) **nem** deterministikus kód-bug, hanem signal-quality / regime-kérdés (n=22 kicsi) → külön vizsgálati tétel **B18**, nem ad-hoc kód-változtatás.
+
+**Changelog:** [`CHANGELOG-2026-05-29.md`](../changelog/CHANGELOG-2026-05-29.md)
 
 ### Sprint 42F (2026-05-15) — Sports `sessionLossLimit` Settings-knob
 

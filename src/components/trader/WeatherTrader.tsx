@@ -166,7 +166,7 @@ export default function WeatherTrader({ bankroll }: { bankroll?: number }) {
       title="Weather Auto-Trader"
       subtitle="Edge sources: GFS / ECMWF / NOAA blend, 31-member ensemble (opt-in), DEB per-city weights, METAR Fahrenheit rounding"
       mode={{ label: "PAPER", tone: "paper" }}
-      cron={{ enabled: !!status?.cronEnabled, intervalLabel: "5 min", title: "Set in Settings tab (auto-trader-weather-cron */5 * * * *)" }}
+      cron={{ enabled: !!status?.cronEnabled, intervalLabel: "3 min", title: "Set in Settings tab (auto-trader-multi-cron fan-out */3 * * * *)" }}
       isRunning={isRunning}
       lastSource={rs?.source ?? null}
       lastRunAt={rs?.lastRunAt ?? null}

@@ -374,20 +374,30 @@ netlify deploy --prod --dir=dist
 
 ---
 
-## AKTUÁLIS ÁLLAPOT (2026-05-15)
+## AKTUÁLIS ÁLLAPOT (2026-05-29)
 
 **Élő deploy:** `mj-trading.netlify.app`. Paper mode, simVersion 3 (crypto), v2 (HL).
 
 ### 4 fő bot státusz
 
+> **Megjegyzés (2026-05-29):** a **HL Perp** + **Weather** sorokat frissítettük élő pull-lal (HL-audit + weather cron-fix kapcsán). A Crypto / F-Arb sorok a 2026-05-15 snapshotból maradtak — **NEM** re-validálva 2026-05-29-én, élő érték eltérhet.
+
 | Bot | Bankroll | PnL | Trades | Open | Megjegyzés |
 |-----|---------|-----|--------|------|-------|
-| **Crypto** | $250 → $237.00 | +$21.96 | 7 closed (3W/4L) | 2 open (paper) | 41. session: 7-trade history Gamma-revalidálva + bit-pontos PnL rekonstrukció — minden valid. Új 16. gate (Outcome-overlap) a következő tick-től véd a 80K-NO + 82K-YES típusú kontradikciók ellen. |
-| **Weather** | $250 → $216.48 | -$5.10 | 2 closed (1W/1L) | 3 open | Mindkét closed trade real Polymarket resolution-on zárt — validált |
-| **HL Perp** | $200 → $199.44 | -$0.56 | 4 closed (1W/3L) | 0 open | 3 consecutive loss → 1h pause triggerelt (design intent) |
-| **F-Arb** | $200 → $200 (shared HL) | $0 | 0 closed | 0 open | Idle (paper) |
+| **Crypto** | $250 → $237.00 | +$21.96 | 7 closed (3W/4L) | 2 open (paper) | *(05-15 snapshot, nem re-validált)* 41. session: 7-trade history Gamma-revalidálva + bit-pontos PnL rekonstrukció — minden valid. Új 16. gate (Outcome-overlap). |
+| **Weather** | $250 → **$241.50** | **-$8.50** | **7 closed (57.1% WR)** | 0 open | **05-29 élő**: a bot **≈8 napja (05-21 óta) nem nyitott pozíciót** — a `auto-trader-weather-cron` (legacy `schedule()` wrapper) sosem regisztrálódott a Netlify-on → **lejavítva Sprint 43** (weather befűzve a `*/3` multi-cron fan-out-ba). |
+| **HL Perp** | $200 → **$196.45** | **-$3.55** | **22 closed (6W/16L)** | 0 open | **05-29 élő audit**: history valid (bankroll-rekonciliáció bit-pontos), de 🔴 consecutive-loss **deadlock** (12 napja állt) → **lejavítva Sprint 42G** (auto-recovery + resume fix). 🟠 long-bias (22/22 LONG, 27% WR) → B18 vizsgálat. |
+| **F-Arb** | $200 → $200 (shared HL) | $0 | 0 closed | 0 open | *(05-15 snapshot)* Idle (paper) |
 
-### Mit fix utoljára (42. session, 2026-05-15)
+### Mit fix utoljára (44. session, 2026-05-29 (b))
+
+- **Sprint 43 Weather cron életre keltése** ✅ IMPLEMENTÁLVA: a user jelezte, hogy a weather bot „nagyon régen nyitott pozíciót". Élő státusz-pull: a weather `runStatus.source` **soha** nem volt `cron`, csak `manual`, utolsó futás **2026-05-21** (≈8 napja) — miközben a crypto/HL cron 3 percenként rendben fut. **Gyökérok**: a két weather cron (`auto-trader-weather-cron` */5 + `auto-trader-weather-reconciler-cron` */15) a legacy `export const handler = schedule(...)` wrappert használta, ami az esbuild/.mts build alatt **nem regisztrálódik** a Netlify scheduler-ben; a tüzelő cronok (`auto-trader`, `auto-trader-multi-cron`) mind sima `export default handler` + netlify.toml schedule mintát használnak. **Fix**: weather `run` + `reconcile` befűzve a bizonyítottan tüzelő `auto-trader-multi-cron` */3 fan-out-ba (`FanOutTarget.action` → `"run" | "reconcile"`). A dispatcher weather `run` ága `cronEnabled`-guardot kapott (a `weatherCronEnabled` pause-toggle cron-tick-eken megmarad; manuális Scan változatlan). A két halott wrapper fájl + netlify.toml entry **kivezetve**, UI/Settings label `5 min → 3 min`. `tsc --noEmit` + `npm run build` zöld; manuális run igazolta a kódutat (12:51 UTC-kor mind a 3 ázsiai piac expired 12:00 UTC után — a napi ablak ≈ 00:00–12:00 UTC). Élesedés: a következő `netlify deploy --prod` után `runStatus.source` weather-en `cron`-ra vált. (changelog 2026-05-29 (b) · sprints.md Sprint 43)
+
+### Mit fix korábban (43. session, 2026-05-29 (a))
+
+- **Sprint 42G HL consecutive-loss deadlock fix** ✅ IMPLEMENTÁLVA: a 2026-05-29 HL performance-audit feltárta, hogy a HL bot **12 napja (2026-05-17 óta) nem kereskedett**, miközben a cron futott. Gyökérok: `consecutiveLosses` (5) ≥ `consecutiveLossLimit` (3), és a [`decision-engine.mts:108`](netlify/functions/auto-trader/hyperliquid/decision-engine.mts) minden tick-en blokkol amíg a counter ≥ limit; a counter csak **nyertes** trade-en nullázódik → nincs trade → nincs win → permanens block. A "design intent 1h pause" valójában örökös leállás volt. **Fix 1**: új `clearElapsedConsecutiveLossPause()` pure helper a [`hyperliquid/session-manager.mts`](netlify/functions/auto-trader/hyperliquid/session-manager.mts)-ben, a runner a stopped- és pause-check között hívja — lejárt `pausedUntil` + counter ≥ limit → slate wipe → a bricked session **deploy után a következő cron-tick-en magától felépül** reset nélkül. **Fix 2**: `resumeHlSession` most a countert is nullázza (eddig csak `pausedUntil=null`, így a `resume` nem oldotta fel a deadlockot). Új `PAUSE_AUTORECOVER` LogEvent, 6 új unit test (`shared/hl-consec-loss-recovery.test.mts`), `tsc`+build+tesztek zöld. A HL **long-bias** (22/22 LONG, 27.3% WR, 32.7% calib-dev) **nem** kód-bug → **B18** backlog-vizsgálat (precondition 30+ trade). (changelog 2026-05-29 · sprints.md Sprint 42G + B18)
+
+### Mit fix korábban (42. session, 2026-05-15)
 
 - **Sprint 42B Topup action** ✅ IMPLEMENTÁLVA: új `topup` action mind a 4 boton (crypto, weather, hyperliquid, funding-arb — sports stub kihagyva), auth-protected mint a `reset`. Új `topupSession()` helper a `crypto/session-manager.mts`-ben + `topupHlSession()` a `hyperliquid/session-manager.mts`-ben (F-Arb delegál ide a shared bankroll miatt). Új `SESSION_TOPUP` LogEvent. Új `handleTopup()` + `hlTopup()` exported function. Új `alertTopup()` Telegram helper. Frontend: új `topup?` prop a `TraderShell`-en — `💰 Top up…` gomb (a Reset gomb előtt) + dialog with dynamic `Current bankroll → After topup` preview, number input (range [1, 1M], step 1), validation + inline error display, Mégse + Confirm action. 5 új unit test (`shared/topup-action.test.mts`): standard topup state-preservation, stopped-not-cleared, HL-specific (consecutiveLosses + pausedUntil unchanged), additive (2×$50 = 1×$100), decimal cent. Preview verified: gomb megjelenik (`💰 Top up…`), dialog renderelődik teljes magyarázattal + before/after preview, validáció működik (`Adj meg pozitív összeget` negatív értékre), Mégse zárja a modal-t, zero console error. Megoldja a mai user-pain "ha elfogy a bankroll paper módban folytatni akarom reset nélkül" kérdést — most 1 kattintással bankroll injektálható a closedTrades + IC kalibráció + open positions megőrzésével. (changelog 2026-05-15 · sprints.md Sprint 42B)
 

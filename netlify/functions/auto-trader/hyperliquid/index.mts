@@ -37,6 +37,7 @@ import {
   stopHlSession,
   resetHlSession,
   applyConsecutiveLossPause,
+  clearElapsedConsecutiveLossPause,
   resumeHlSession,
   topupHlSession,
 } from "./session-manager.mts";
@@ -142,6 +143,25 @@ async function runHyperliquidTraderInner(
   // Session-level short-circuits
   if (session.stopped) {
     return { ok: true, action: "skipped", reason: `Session stopped: ${session.stoppedReason}`, session: summarize(session), liveReadiness };
+  }
+  // Auto-recover from an ELAPSED consecutive-loss pause BEFORE the pause
+  // short-circuit below. Without this the consecutive-loss counter never
+  // clears (it only resets on a win, which can't happen while blocked), so
+  // the decision-engine's consecutive-loss gate deadlocks the session forever
+  // once the limit is hit — the "1h pause" becomes permanent. The cleared
+  // session is persisted by the normal saveHlSession at the end of the tick
+  // (no early return between here and there for this path); we also surface a
+  // PAUSE_AUTORECOVER log line so the operator can audit the unbrick.
+  {
+    const rec = clearElapsedConsecutiveLossPause(session, config.consecutiveLossLimit);
+    if (rec.cleared) {
+      log("PAUSE_AUTORECOVER", config.paperMode, {
+        venue: "hyperliquid",
+        clearedConsecutiveLosses: session.consecutiveLosses,
+        expiredPausedUntil: session.pausedUntil,
+      });
+      session = rec.session;
+    }
   }
   if (session.pausedUntil && new Date(session.pausedUntil).getTime() > Date.now()) {
     return { ok: true, action: "skipped", reason: `Paused until ${session.pausedUntil}`, session: summarize(session), liveReadiness };

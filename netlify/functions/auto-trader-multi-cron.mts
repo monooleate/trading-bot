@@ -26,7 +26,7 @@ const CORS = {
 
 interface FanOutTarget {
   label: string;
-  body: { action: "run"; category: string; layer?: string };
+  body: { action: "run" | "reconcile"; category: string; layer?: string };
 }
 
 const TARGETS: FanOutTarget[] = [
@@ -36,6 +36,16 @@ const TARGETS: FanOutTarget[] = [
   // strangler-fig path routes these through bot-registry without any
   // switch-case in auto-trader/index.mts.
   { label: "sports",            body: { action: "run", category: "sports" } },
+  // Weather (2026-05-29): the dedicated `auto-trader-weather-cron` +
+  // `auto-trader-weather-reconciler-cron` used the legacy `schedule()`
+  // wrapper, which never registered under the esbuild/.mts build — the
+  // weather bot sat idle (last cron run never; only manual scans) from
+  // 2026-05-21. Folding weather into this proven-firing fan-out drives both
+  // the trader and the settlement reconciler on the same */3 cadence. The
+  // dispatcher honours the `weatherCronEnabled` Settings toggle on cron
+  // ticks, so the pause mechanism is preserved.
+  { label: "weather",           body: { action: "run", category: "weather" } },
+  { label: "weather-reconcile", body: { action: "reconcile", category: "weather" } },
 ];
 
 async function runOne(target: FanOutTarget, ctx: Context): Promise<{ label: string; ok: boolean; status?: number; error?: string }> {

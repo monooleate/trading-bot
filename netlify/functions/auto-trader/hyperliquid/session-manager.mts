@@ -112,12 +112,45 @@ export function applyConsecutiveLossPause(s: HlSessionState, hours: number): HlS
   return { ...s, pausedUntil: until };
 }
 
+// ── Consecutive-loss pause auto-recovery (2026-05-29 audit fix) ──────────────
+//
+// The consecutive-loss circuit-breaker sets `pausedUntil` (the cooldown
+// window) on the limit-hit close, but historically left `consecutiveLosses`
+// untouched. The decision-engine's consecutive-loss gate blocks on the RAW
+// count — not on whether the pause has elapsed — and the count only resets on
+// a WIN. So once a session hit the limit it could never trade again (no trade
+// → no win → count stays ≥ limit → permanent block): the intended "1h pause"
+// silently became a permanent halt. (Live finding: the HL paper bot sat
+// bricked for 12 days with consecutiveLosses=5, limit=3.)
+//
+// This helper treats an ELAPSED pause as served: once the window passes, wipe
+// the slate so the bot resumes with a fresh count. Idempotent — once the count
+// is cleared it returns `cleared: false` and a no-op session. Returns the
+// (possibly) new session plus a flag so the caller can log the recovery.
+export function clearElapsedConsecutiveLossPause(
+  s: HlSessionState,
+  consecutiveLossLimit: number,
+): { session: HlSessionState; cleared: boolean } {
+  const pauseElapsed =
+    !!s.pausedUntil && new Date(s.pausedUntil).getTime() <= Date.now();
+  if (s.consecutiveLosses >= consecutiveLossLimit && pauseElapsed) {
+    return { session: { ...s, consecutiveLosses: 0, pausedUntil: null }, cleared: true };
+  }
+  return { session: s, cleared: false };
+}
+
 export function stopHlSession(s: HlSessionState, reason: string): HlSessionState {
   return { ...s, stopped: true, stoppedReason: reason };
 }
 
 export function resumeHlSession(s: HlSessionState): HlSessionState {
-  return { ...s, pausedUntil: null };
+  // Clearing the pause MUST also reset the consecutive-loss counter. The
+  // decision-engine's consecutive-loss gate blocks on the raw count, so a
+  // resume that left the count ≥ limit would null `pausedUntil` yet still
+  // silently fail to un-block the bot (it would skip every tick with
+  // "N consecutive losses — pause required"). Resetting the count here makes
+  // `resume` a real, history-preserving unbrick. (2026-05-29 audit.)
+  return { ...s, pausedUntil: null, consecutiveLosses: 0 };
 }
 
 export function resetHlSession(paperMode: boolean, bankroll = DEFAULT_BANKROLL): HlSessionState {

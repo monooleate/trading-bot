@@ -20,19 +20,14 @@
 [functions."auto-trader"]
   schedule = "*/3 * * * *"
 
-# Weather auto-trader cron — minden 5 percben.
-# Csak akkor csinál bármit, ha a Settings tab-on a "Enable scheduled cron runs"
-# toggle be van kapcsolva (weatherCronEnabled = 1 a runtime overrides-ban).
-[functions."auto-trader-weather-cron"]
-  schedule = "*/5 * * * *"
+# Weather trading + reconcile a `auto-trader-multi-cron` fan-out-ban fut (lent).
+# A korábbi különálló `auto-trader-weather-cron` (*/5) és
+# `auto-trader-weather-reconciler-cron` (*/15) a legacy `schedule()` wrappert
+# használták, ami az esbuild/.mts build alatt SOHA nem regisztrálódott → a
+# weather bot 2026-05-21 óta tétlen volt (runStatus.source mindig "manual").
+# 2026-05-29: kivezetve, a weather a bizonyítottan tüzelő */3 multi-cronon megy.
 
-# Weather paper-pozíció reconciler cron — 15 percenként ellenőrzi az
-# endDate-en túli nyitott paper pozíciókat. Polymarket Gamma settlement
-# elsődleges, METAR fallback 6h múlva. Always-on (nem gate-elt).
-[functions."auto-trader-weather-reconciler-cron"]
-  schedule = "*/15 * * * *"
-
-# Multi-cron a Hyperliquid Perp és Funding Arb futtatásához.
+# Multi-cron: Hyperliquid Perp + Funding Arb + Sports + Weather (+ reconcile).
 # A meglévő auto-trader cron csak a crypto category-t hívja
 # (default category="crypto" a dispatcherében), ezért a HL + FR
 # sessionök 18 napon át sosem futottak. Ez fan-out-ot csinál.
