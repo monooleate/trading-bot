@@ -125,9 +125,12 @@ async function runFundingArbInner(): Promise<any> {
     //    rather than the entry-time snapshot. See accrueFunding in
     //    fr-session for the mark-to-market math.
     const fundings = await scanFundings(ARB_COINS, config.paperMode);
-    const hlSnapshotByCoin = new Map<string, { rate: number; markPrice: number }>();
+    // Snapshot BOTH rates + markPrice so accrueFunding can compute the
+    // direction-aware carry (reverse positions need the Binance rate — see
+    // fr-session.accrueFunding).
+    const hlSnapshotByCoin = new Map<string, { rate: number; markPrice: number; binanceRate: number }>();
     for (const f of fundings) {
-      hlSnapshotByCoin.set(f.coin, { rate: f.hlFundingHourly, markPrice: f.markPrice });
+      hlSnapshotByCoin.set(f.coin, { rate: f.hlFundingHourly, markPrice: f.markPrice, binanceRate: f.binanceFundingHourly });
     }
 
     // 2. Accrue funding using the freshest HL rate × current notional.
@@ -144,11 +147,17 @@ async function runFundingArbInner(): Promise<any> {
       const nowAge = Date.now() - new Date(pos.openedAt).getTime();
       const current = fundingByCoin.get(pos.coin);
       const currentSpread = current ? (current.hlFundingHourly - current.binanceFundingHourly) : pos.entrySpread;
+      // Direction-aware carry: forward earns +spread-ish, reverse earns
+      // −spread. Close when the position's OWN carry decays/flips, not the
+      // raw spread (a reverse position should close when −spread drops, i.e.
+      // the spread rises back toward/through zero).
+      const posDir = pos.direction ?? "forward";
+      const carry  = posDir === "reverse" ? -currentSpread : currentSpread;
 
       let closeReason: string | null = null;
-      if (nowAge >= maxHoldMs)                          closeReason = `Max hold ${config.maxHoldDays}d reached`;
-      else if (currentSpread < config.minSpreadToClose) closeReason = `Spread dropped to ${(currentSpread * 100).toFixed(4)}%/h`;
-      else if (currentSpread < 0)                       closeReason = `Spread flipped negative — shorts now pay`;
+      if (nowAge >= maxHoldMs)                   closeReason = `Max hold ${config.maxHoldDays}d reached`;
+      else if (carry < config.minSpreadToClose)  closeReason = `Carry dropped to ${(carry * 100).toFixed(4)}%/h (${posDir})`;
+      else if (carry < 0)                        closeReason = `Carry flipped negative (${posDir}) — position now pays`;
 
       if (closeReason) {
         const closeResp = await closeArbPosition(pos, closeReason, config, current?.markPrice);
@@ -230,33 +239,38 @@ async function runFundingArbInner(): Promise<any> {
         continue;
       }
 
-      // Gate 1 — Spread ≥ minimum hourly
-      const spreadOk = opp.spread >= config.minSpreadHourly;
+      // Gate 1 — Carry ≥ minimum hourly (direction-aware: forward=spread,
+      // reverse=−spread). `opp.score` is the chosen direction's carry
+      // magnitude, so a strongly negative spread passes as a reverse entry.
+      const dirTag = opp.direction === "reverse" ? "reverse (HL-long)" : "forward (HL-short)";
+      const spreadOk = opp.score >= config.minSpreadHourly;
       coinGates.push({
         label: ARB_GATE_LABELS[0],
         passed: spreadOk,
-        actual: `${(opp.spread * 100).toFixed(4)}%/h`,
+        actual: `${(opp.score * 100).toFixed(4)}%/h · ${dirTag} (spread ${(opp.spread * 100).toFixed(4)}%/h)`,
         required: `≥ ${(config.minSpreadHourly * 100).toFixed(4)}%/h`,
-        hint: "HL hourly funding − Binance hourly funding.",
+        hint: "Irány-tudatos carry: forward = HL−Binance, reverse = Binance−HL (|spread|).",
       });
 
-      // Gate 2 — Spread sanity cap. Funding spreads ~max around 0.1%/h
-      // even in extreme directional regimes; anything above 0.5%/h is
+      // Gate 2 — Carry sanity cap. Funding spreads ~max around 0.1%/h
+      // even in extreme directional regimes; |carry| above 0.5%/h is
       // almost certainly a feed glitch (NaN, stale cache, decimal-place
       // error). Defensive guard — rarely fires under normal conditions.
+      // Uses the magnitude (opp.score = |spread|) so a glitchy huge NEGATIVE
+      // spread is caught too.
       const maxSpreadHourly = config.maxSpreadHourly ?? 0.005;
-      const spreadSaneOk = opp.spread <= maxSpreadHourly;
+      const spreadSaneOk = opp.score <= maxSpreadHourly;
       coinGates.push({
         label: ARB_GATE_LABELS[1],
         passed: spreadSaneOk,
-        actual: `${(opp.spread * 100).toFixed(4)}%/h`,
+        actual: `${(opp.score * 100).toFixed(4)}%/h`,
         required: `≤ ${(maxSpreadHourly * 100).toFixed(3)}%/h`,
-        hint: "Túl nagy spread tipikusan adat-hiba (NaN, stale cache, rossz decimal).",
+        hint: "Túl nagy carry tipikusan adat-hiba (NaN, stale cache, rossz decimal).",
       });
 
-      // Gate 3 — Fee-aware break-even hold
+      // Gate 3 — Fee-aware break-even hold (uses the direction-aware carry)
       const totalFees = config.feeRoundtripHl + config.feeRoundtripBinance;
-      const breakEvenH = totalFees / Math.max(opp.spread, 1e-9);
+      const breakEvenH = totalFees / Math.max(opp.score, 1e-9);
       const breakEvenDays = breakEvenH / 24;
       const beOk = spreadOk && breakEvenDays <= config.maxHoldDays;
       coinGates.push({
@@ -399,7 +413,9 @@ async function runFundingArbInner(): Promise<any> {
       // a per-bot branch. flavor:"spread" swaps the thesis line and
       // grid layout client-side.
       const feePct = config.feeRoundtripHl + config.feeRoundtripBinance;
-      const netSpread = opp.spread - feePct;
+      // Direction-aware edge: the realised carry is opp.score (forward=spread,
+      // reverse=−spread), so net edge nets fees off the carry magnitude.
+      const netSpread = opp.score - feePct;
       const capPct    = config.maxCapitalPct;
       const usedFracBankroll = bankroll > 0 ? sizeUSDC / bankroll : 0;
       const entryDecision: import("../../shared/types.mts").EntryDecisionSnapshot = {
@@ -407,10 +423,10 @@ async function runFundingArbInner(): Promise<any> {
         flavor:           "spread",
         finalProb:        opp.hlFundingHourly,
         marketPrice:      opp.binanceFundingHourly,
-        grossEdge:        opp.spread,
+        grossEdge:        opp.score,
         netEdge:          netSpread,
         feePct,
-        direction:        "SHORT",
+        direction:        opp.direction === "reverse" ? "LONG" : "SHORT",
         kellyRaw:         usedFracBankroll,
         kellyCapped:      Math.min(usedFracBankroll, capPct),
         kellyCap:         capPct,
@@ -425,7 +441,8 @@ async function runFundingArbInner(): Promise<any> {
         obImbalance:      null,
         // Reuse the per-coin gate list — all 6 already passed at this point.
         gates: [...coinGates],
-        reason: `Spread ${(opp.spread * 100).toFixed(4)}%/h (${opp.spreadAnnualized.toFixed(1)}%/yr ann.) ` +
+        reason: `${opp.direction === "reverse" ? "Reverse (HL-long)" : "Forward (HL-short)"} carry ` +
+                `${(opp.score * 100).toFixed(4)}%/h (${(opp.score * 8760 * 100).toFixed(1)}%/yr ann.) ` +
                 `· OI $${(opp.openInterestUSD / 1e6).toFixed(1)}M · size $${sizeUSDC.toFixed(0)}`,
       };
 
@@ -440,15 +457,19 @@ async function runFundingArbInner(): Promise<any> {
       log("ARB_OPEN", config.paperMode, {
         id:               resp.position.id,
         coin:             opp.coin,
+        direction:        opp.direction,
         sizeUSDC,
         spread:           opp.spread,
+        score:            opp.score,
         spreadAnnualized: opp.spreadAnnualized,
       });
       results.push({
         coin:             opp.coin,
         action:           "opened",
+        direction:        opp.direction,
         sizeUSDC:         parseFloat(sizeUSDC.toFixed(2)),
         spreadHourly:     opp.spread,
+        scoreHourly:      parseFloat((opp.score * 100).toFixed(4)),
         spreadAnnualized: parseFloat(opp.spreadAnnualized.toFixed(1)),
         openInterestM:    parseFloat((opp.openInterestUSD / 1e6).toFixed(1)),
         gates:            snapGates(),
@@ -652,6 +673,7 @@ function summarize(
     openDetails:          open.map((p: ArbPosition) => ({
       id:                 p.id,
       coin:               p.coin,
+      direction:          p.direction ?? "forward",
       sizeUSDC:           p.sizeUSDC,
       spreadEntry:        parseFloat((p.entrySpread * 100).toFixed(4)),
       accumulatedFunding: parseFloat(p.accumulatedFunding.toFixed(2)),

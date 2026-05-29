@@ -157,3 +157,37 @@ Ok: a Sprint 41-ben hozzáadott `netlify/functions/signal-combiner-threshold.tes
 | crypto session | **reset** | tiszta lap ($250 / 0 trade); a 45 buggos-kód trade + IC-kalibráció törölve |
 
 > Megjegyzés: ez az audit-rész **azért** került changelogba (a playbook §8.3 szerint pusztán verifikáció nem kerülne ide), mert egy **valódi kód-bug** (deploy-blokkoló test-fájl elhelyezés) lett lejavítva.
+
+---
+
+## (d) — Bidirekcionális F-Arb (reverse arb, paper) — Sprint 44 (45. session)
+
+### Trigger
+
+A 4. bot (Funding-Arb) auditja. Élő állapot: cron fut (`source: cron`, 5 coin / 3 min), `bankrollShared $196.45` (= HL), de **0 closed trade 2026-04-21 óta**. Gyökérok az `arb-detector.mts`-ben:
+
+```js
+// Spread must be positive (HL pays more than Binance to shorts)
+if (spread < config.minSpreadHourly) { skip }
+```
+
+A bot **egyirányú** (HL-short + Binance-spot-long), csak pozitív spreaden lép. A jelenlegi regime-ben a spreadek negatívak (BTC −0.1106%/h, ETH −0.0202, AVAX −0.0028; SOL +0.0013 küszöb-alatti) → semmi nem viable. A nagy negatív BTC spread **fordított irányban +0.1106%/h ≈ 968%/yr** lenne, de a bot ezt strukturálisan kihagyta.
+
+### Mit változott (irány-tudatos detektor + economics)
+
+- **`types.mts`**: `ArbOpportunity` + `ArbPosition` kapott `direction: "forward" | "reverse"` mezőt (+ `score` az opportunity-n = `|spread|`). Backward-compat: a régi pozíciók `direction ?? "forward"`.
+- **`arb-detector.mts`**: a jobb-scoringú irányt választja. **FORWARD** (spread ≥ min): HL-short, carry = hlFunding. **REVERSE** (−spread ≥ min): HL-long + Binance-perp-short, carry = `binanceRate − hlRate = −spread`. Ranking + break-even a `score`-on. Live reverse → `isViable=false` + reason (spot-only).
+- **`fr-session.mts` (`accrueFunding`)**: irány-tudatos. A snapshot most a Binance rátát is hordozza; `effRate = reverse ? (binanceRate − hlRate) : hlRate`.
+- **`fr-executor.mts`**: reverse + live → hard block (open ÉS close). Paper reverse modellezi a HL-long + Binance-short lábakat (nincs live hívás; a PnL funding-only, az ár-lábak delta-neutrálisan kiejtik egymást).
+- **`index.mts` (run loop)**: a 8 gate (1 carry, 2 sanity-magnitude, 3 break-even), a close-check (irány-tudatos carry), az `entryDecision` (LONG/SHORT) és a result-sorok mind irány-tudatosak.
+
+### Biztonsági korlát — miért paper-only
+
+A reverse hedge Binance shortot igényel, de a live `hedge-manager.mts` **szándékosan spot-only** (*"only SPOT trading permissions required — never enable futures or withdrawal"*), és spot nem shortolható. Ezért a reverse **paper-only**: a bot most (paper) gyűjt reverse-trade adatot, a live-élesítés (Binance USDM futures-short adapter + perm-döntés) **→ B20** (precondition: 10+ pozitív reverse paper-trade).
+
+### Verifikáció
+
+- Új `netlify/functions/auto-trader/shared/funding-arb-reverse.test.mts` (8 case): forward/reverse direction+score, live-gate reason, küszöb-alatti skip, sanity-cap magnitude, accrual forward (= hlRate) és reverse (= binanceRate − hlRate, pozitív carry negatív hl-fundingon). **Zöld.**
+- `npx tsx` (a 8 case) + `npx tsc --noEmit` (exit 0) + `npm run build` (10 oldal) mind zöld.
+
+→ Sprint-tracker: `sprints.md` Sprint 44 (completed, paper) + B20 (live, backlog).

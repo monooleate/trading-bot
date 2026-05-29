@@ -1,20 +1,30 @@
 // netlify/functions/auto-trader/hyperliquid/funding-arb/types.mts
 // Funding Rate Arbitrage types.
 //
-// Strategy: delta-neutral carry trade.
-//   Leg 1: SHORT the Hyperliquid perp (collects HL funding when rate > 0)
-//   Leg 2: LONG the Binance spot (hedge — spot pays NO funding,
-//          eliminates directional risk from Leg 1)
+// Strategy: delta-neutral carry trade. TWO directions (2026-05-29, B20):
 //
-// Net directional exposure: 0.
-// Net income per hour:  hlFundingHourly × notional   (Binance spot has no
-//                       funding, so the per-hour carry is just HL's payment
-//                       to shorts).
+//   FORWARD (live-safe, spot hedge — collects POSITIVE HL funding):
+//     Leg 1: SHORT the Hyperliquid perp (collects HL funding when rate > 0)
+//     Leg 2: LONG  the Binance SPOT     (hedge — spot pays NO funding)
+//     Net carry/hour = hlFundingHourly × notional.
 //
-// The Binance USDT-M `binanceFundingHourly` is only used at scan time as a
-// VIABILITY benchmark (avoid entering when HL pays similarly to the rest of
-// the market — the cross-venue arb may be already arbed elsewhere). It is
-// NOT a cost line on the spot hedge.
+//   REVERSE (paper-only — captures the symmetric NEGATIVE-spread opportunity):
+//     Leg 1: LONG  the Hyperliquid perp (collects −HL funding when rate < 0)
+//     Leg 2: SHORT the Binance perp     (collects +Binance funding)
+//     Net carry/hour = (binanceFundingHourly − hlFundingHourly) × notional
+//                    = −spread × notional.
+//     NOTE: Binance SPOT cannot be shorted, so the reverse hedge needs a
+//     Binance USDT-M futures (or margin) short. The live hedge-manager is
+//     deliberately SPOT-ONLY (no futures/withdrawal perms), so reverse is
+//     gated to PAPER mode. Live reverse opportunities are detected but
+//     SKIPPED until a futures-short adapter + perms are added (→ B20).
+//
+// Net directional exposure (either direction): 0.
+//
+// FORWARD viability gate uses the spread (hl − binance) as a benchmark:
+// avoid entering when HL pays similarly to the rest of the market (the
+// cross-venue arb may be already arbed elsewhere). REVERSE gates on
+// −spread, which equals its own realized perp-perp carry.
 
 import type { HlCoin } from "../types.mts";
 import type { EntryDecisionSnapshot } from "../../shared/types.mts";
@@ -37,6 +47,14 @@ export interface ArbOpportunity {
   binanceFundingHourly:  number;
   spread:              number;   // hl - binance per hour
   spreadAnnualized:    number;   // %
+  // Direction-aware carry (2026-05-29, B20). FORWARD captures positive
+  // spread (HL-short), REVERSE captures negative spread (HL-long). `score`
+  // is the direction's per-hour carry magnitude (forward=spread,
+  // reverse=−spread) — the value the viability gate, break-even, and
+  // ranking all key off, so a strongly negative spread is now a viable
+  // (reverse) opportunity instead of an automatic skip.
+  direction:           "forward" | "reverse";
+  score:               number;   // = spread (forward) | −spread (reverse), ≥ 0 when viable
   openInterestUSD:     number;
   markPrice:           number;
   isViable:            boolean;
@@ -47,12 +65,18 @@ export interface ArbOpportunity {
 export interface ArbPosition {
   id:                   string;
   coin:                 HlCoin;
+  // Direction (2026-05-29, B20). Optional for backward compat — positions
+  // opened before this field default to "forward" on read. FORWARD: HL leg
+  // is SHORT, Binance leg is SPOT-LONG. REVERSE: HL leg is LONG, Binance leg
+  // is a (paper) SHORT. The `hl*`/`binance*` field names below are kept for
+  // storage stability; interpret the side via `direction`.
+  direction?:           "forward" | "reverse";
   sizeUSDC:             number;
   sizeCoins:            number;
-  // HL SHORT leg
+  // HL leg (SHORT for forward, LONG for reverse)
   hlShortOrderId:       string;
   hlEntryPrice:         number;
-  // Binance LONG leg
+  // Binance leg (SPOT-LONG for forward, SHORT for reverse)
   binanceOrderId:       string;
   binanceEntryPrice:    number;
   // Tracking

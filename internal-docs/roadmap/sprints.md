@@ -350,7 +350,29 @@ A korábbi B9 (Topup action) átkerült a "📋 Next sprint candidates" szekció
 
 ---
 
+### B20 — Reverse F-Arb élesítése (Binance futures-short adapter) 🟠
+
+- **Trigger:** 2026-05-29 F-Arb audit + Sprint 44. A bidirekcionális F-Arb **paperben kész** (reverse = HL-long + Binance-perp-short, carry = −spread), de a reverse hedge Binance shortot igényel, amit a live `hedge-manager.mts` **nem tud** (szándékosan spot-only, „never enable futures or withdrawal"). Ezért a reverse jelenleg **paper-only** (live-ban detektálva de skippelve).
+- **Mit kell hozzá:** (1) Binance USDM futures-short adapter (HMAC, lot-precision, funding accrual a Binance lábra is); (2) explicit operator-döntés a Binance API-kulcs **futures** permjének engedélyezéséről (biztonsági posture-változás — jelenleg tudatosan tiltott); (3) a `fr-executor` reverse live-ágának kiépítése (nyit + zár + emergency-unwind a futures lábon).
+- **Precondition:** **paper-validáció** — 10+ zárt reverse paper-trade pozitív realized carry-vel (a Sprint 44 most kezd ilyet gyűjteni), MIELŐTT a futures perm + valódi tőke szóba jön.
+- **Becslés:** 1-2 nap (adapter + teszt), a perm-döntés után.
+- **Várt hatás:** a jelenlegi negatív-spread regime-ben (BTC −0.11%/h) a reverse arb élesben is futna; a 0-trade idle állapot megszűnik, ha a paper validálja a carry-t.
+- **NEM most:** futures perm engedélyezése paper-validáció + explicit operator-zöld nélkül tilos (a spot-only posture szándékos).
+
+---
+
 ## ✅ Completed sprints (rolling 5 utolsó)
+
+### Sprint 44 (2026-05-29) — Bidirekcionális F-Arb (reverse arb, paper)
+
+**Mit ért el:**
+- **Trigger**: a 2026-05-29 F-Arb audit kimutatta, hogy a bot **egyirányú** (`arb-detector.mts`: `spread < minSpread → skip`), így a **nagy negatív spreadeket** (most BTC −0.11%/h ≈ annualizált 968% fordított irányban) strukturálisan kihagyja → 2026-04-21 óta 0 trade.
+- **Fix (irány-tudatos detektor + economics)**: a `detectArbOpportunity` mostantól `direction: "forward" | "reverse"` + `score` (= `|spread|`) mezőt ad. **FORWARD** (HL-short + Binance-spot-long): viable pozitív spreaden, carry = hlFunding. **REVERSE** (HL-long + Binance-perp-short): viable negatív spreaden, carry = `binanceRate − hlRate = −spread`. Az `accrueFunding` irány-tudatos (a snapshot most a Binance rátát is hordozza); a close-check, a 8 gate (score-alapú), a break-even, a ranking és az `entryDecision` (LONG/SHORT) mind irány-tudatos.
+- **Biztonsági gate**: a reverse hedge Binance shortot igényelne, de a live `hedge-manager.mts` **szándékosan spot-only** (nincs futures/withdrawal perm). Ezért a reverse **paper-only**: live-ban a `detectArbOpportunity` + `openArbPosition` + `closeArbPosition` mind explicit blokkol (skip + ok, „needs Binance futures short — B20"). A paper modellezi mindkét lábat (a PnL funding-only, a delta-neutrális ár-lábak kiejtik egymást) → a stratégia **most paperben validálható**.
+- **Teszt**: új `shared/funding-arb-reverse.test.mts` (8 case): forward/reverse direction + score, live-gate, küszöb-alatti skip, sanity-cap magnitude, és az accrual mindkét irányra (forward = hlRate; reverse = binanceRate − hlRate). `tsc --noEmit` + `npm run build` + teszt zöld.
+- **Megmaradó (live) rész → B20**: Binance USDM futures-short adapter + perm-döntés, hogy a reverse élesben is fusson.
+
+**Changelog:** [`CHANGELOG-2026-05-29.md`](../changelog/CHANGELOG-2026-05-29.md) (d szekció)
 
 ### Sprint 43 (2026-05-29) — Weather cron életre keltése (multi-cron fan-out)
 

@@ -21,7 +21,48 @@ export async function openArbPosition(
   entryDecision?: EntryDecisionSnapshot,
 ): Promise<OpenArbResult> {
   const sizeCoins = sizeUSDC / opp.markPrice;
+  const direction = opp.direction ?? "forward";
 
+  // ── REVERSE (HL-long + Binance-perp-short) — PAPER ONLY ────────────────
+  // The live hedge-manager is deliberately spot-only (no futures/margin
+  // perms), and you cannot short spot, so a live reverse hedge is impossible
+  // here. Block it loudly rather than silently opening a wrong (spot-long)
+  // hedge that breaks delta-neutrality. Live reverse needs a Binance futures
+  // short adapter (→ B20). Paper models both legs internally (no live calls);
+  // PnL is funding-only (the price legs are delta-neutral and cancel), so the
+  // paper fill prices below are cosmetic-realistic, not PnL-bearing.
+  if (direction === "reverse") {
+    if (!config.paperMode) {
+      return {
+        ok: false,
+        error: "Reverse arb (HL-long + Binance short) is paper-only — the live hedge is spot-only and cannot short. Needs a Binance futures-short adapter (B20).",
+      };
+    }
+    const HL_ENTRY_SLIPPAGE  = 0.005;  // LONG fills slightly ABOVE mark
+    const BIN_ENTRY_SLIPPAGE = 0.0005; // SHORT sells slightly BELOW mark
+    const position: ArbPosition = {
+      id:                   `arb-${Date.now()}-${opp.coin}`,
+      coin:                 opp.coin,
+      direction:            "reverse",
+      sizeUSDC,
+      sizeCoins:            parseFloat(formatSize(opp.coin, sizeCoins)),
+      hlShortOrderId:       `paper-hl-long-${Date.now()}-${opp.coin}`,
+      hlEntryPrice:         opp.markPrice * (1 + HL_ENTRY_SLIPPAGE),
+      binanceOrderId:       `paper-binance-short-${Date.now()}-${opp.coin}`,
+      binanceEntryPrice:    opp.markPrice * (1 - BIN_ENTRY_SLIPPAGE),
+      openedAt:             new Date().toISOString(),
+      entryHlFunding:       opp.hlFundingHourly,
+      entryBinanceFunding:  opp.binanceFundingHourly,
+      entrySpread:          opp.spread,
+      accumulatedFunding:   0,
+      lastFundingUpdateAt:  new Date().toISOString(),
+      status:               "OPEN",
+      entryDecision,
+    };
+    return { ok: true, position };
+  }
+
+  // ── FORWARD (HL-short + Binance-spot-long) — live-safe ─────────────────
   // ── HL SHORT leg first ────────────────────────────────────────────────
   let hlOrderId:    string | null = null;
   let hlEntryPrice: number        = opp.markPrice;
@@ -84,6 +125,7 @@ export async function openArbPosition(
   const position: ArbPosition = {
     id:                   `arb-${Date.now()}-${opp.coin}`,
     coin:                 opp.coin,
+    direction:            "forward",
     sizeUSDC,
     sizeCoins:            parseFloat(formatSize(opp.coin, sizeCoins)),
     hlShortOrderId:       hlOrderId!,
@@ -108,6 +150,13 @@ export async function closeArbPosition(
   config:        FrArbConfig,
   currentPriceHint?: number,
 ): Promise<{ ok: boolean; error?: string; netPnl?: number }> {
+  // Reverse positions are paper-only (see openArbPosition). A live reverse
+  // close would need a Binance futures buy-to-cover + HL sell-to-close, which
+  // the spot-only live path can't do — guard defensively (unreachable today).
+  if ((pos.direction ?? "forward") === "reverse" && !config.paperMode) {
+    return { ok: false, error: "Reverse arb close is paper-only (live needs a futures-short adapter, B20)" };
+  }
+
   // Resolve a sensible close price. The previous version used
   // `pos.hlEntryPrice` for the IOC limit, which fails to fill whenever HL
   // has moved since entry — exactly when we most need to close. The caller

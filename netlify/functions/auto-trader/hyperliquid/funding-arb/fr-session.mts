@@ -100,8 +100,10 @@ export function addArbPosition(s: ArbSessionState, pos: ArbPosition): ArbSession
  * also still accepted so existing callers keep working until they migrate.
  */
 export interface AccrueSnapshot {
-  rate: number;
+  rate: number;        // HL hourly funding rate (signed)
   markPrice: number;
+  binanceRate?: number; // Binance hourly funding rate (signed) — needed for
+                        // REVERSE positions whose hedge is a Binance perp short.
 }
 export function accrueFunding(
   s: ArbSessionState,
@@ -126,23 +128,33 @@ export function accrueFunding(
     const observed = currentHlByCoin?.get(p.coin);
     let hourlyRate: number;
     let markPrice: number;
+    let binanceRate: number;
     if (typeof observed === "number") {
       // Legacy rate-only snapshot — fall back to entry mark for the notional.
-      hourlyRate = Number.isFinite(observed) ? observed : p.entryHlFunding;
-      markPrice  = p.hlEntryPrice;
+      hourlyRate  = Number.isFinite(observed) ? observed : p.entryHlFunding;
+      markPrice   = p.hlEntryPrice;
+      binanceRate = p.entryBinanceFunding;
     } else if (observed && typeof observed === "object") {
-      hourlyRate = Number.isFinite(observed.rate)      ? observed.rate      : p.entryHlFunding;
-      markPrice  = Number.isFinite(observed.markPrice) ? observed.markPrice : p.hlEntryPrice;
+      hourlyRate  = Number.isFinite(observed.rate)        ? observed.rate        : p.entryHlFunding;
+      markPrice   = Number.isFinite(observed.markPrice)   ? observed.markPrice   : p.hlEntryPrice;
+      binanceRate = Number.isFinite(observed.binanceRate as number) ? (observed.binanceRate as number) : p.entryBinanceFunding;
     } else {
-      hourlyRate = p.entryHlFunding;
-      markPrice  = p.hlEntryPrice;
+      hourlyRate  = p.entryHlFunding;
+      markPrice   = p.hlEntryPrice;
+      binanceRate = p.entryBinanceFunding;
     }
     // Mark-to-market notional: position_size_in_coins × current_mark_price.
-    // The SHORT receives funding when rate > 0 (sign flows naturally — a
-    // negative rate flips accrual into a payout, exactly what the tracker
-    // should reflect).
-    const notional = Math.abs(p.sizeCoins) * markPrice;
-    const delta    = notional * hourlyRate * hours;
+    //
+    // Direction-aware effective rate (2026-05-29, B20):
+    //   FORWARD (HL-short + Binance-spot-long): the SHORT receives funding
+    //     when rate > 0. Binance spot pays nothing → effRate = hlRate.
+    //   REVERSE (HL-long + Binance-perp-short): the LONG receives −hlRate,
+    //     the Binance short receives +binanceRate → effRate = binanceRate −
+    //     hlRate (= −spread). Sign flows naturally either way.
+    const dir       = p.direction ?? "forward";
+    const effRate   = dir === "reverse" ? (binanceRate - hourlyRate) : hourlyRate;
+    const notional  = Math.abs(p.sizeCoins) * markPrice;
+    const delta     = notional * effRate * hours;
     todayTotal += delta;
     allTimeDelta += delta;
     return {
