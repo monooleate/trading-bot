@@ -1,4 +1,9 @@
-// netlify/functions/signal-combiner-threshold.test.mts
+// netlify/functions/_tests/signal-combiner-threshold.test.mts
+//
+// NOTE: lives under `_tests/` (an underscore-prefixed dir) so Netlify does
+// NOT bundle it as a Function. A top-level handler-less *.test.mts in
+// netlify/functions/ breaks the Functions-bundling step at deploy time
+// (this was the root cause of the failed 2026-05-15 production deploy).
 //
 // Regression guard for `parseThresholdK` in signal-combiner.mts. The
 // parser extracts the LITERAL strike from `bitcoin-above-Nk-on-...`
@@ -12,7 +17,7 @@
 // three. Root cause: `getVolSignal` only handled `up-or-down` markets via
 // openedAt-fetched K, never the above-Nk threshold form.
 //
-// Run: npx tsx netlify/functions/signal-combiner-threshold.test.mts
+// Run: npx tsx netlify/functions/_tests/signal-combiner-threshold.test.mts
 //
 // Re-implements the parser locally to avoid pulling the full
 // signal-combiner.mts (which imports getStore and other Netlify-only
