@@ -225,3 +225,34 @@ A korábban felvetett **B21** (shared-bankroll cross-reconciliation live-prereq)
 - `npx tsc --noEmit` (exit 0) + `npm run build` (10 oldal) zöld.
 
 → Sprint-tracker: `sprints.md` Sprint 45 (completed).
+
+---
+
+## (f) — Sports bot: loss-limit kikapcsolható (paper default OFF) + topup — Sprint 46 (45. session)
+
+### Trigger
+
+User: *"a sport bot induljon el az élő oldalon, mert most fogja a session lost limit! paper verzióban nem kell ilyen limit vagy legalábbis lehessen kikapcsolni … és alapból paper versionban legyen kikapcsolva! vezesd be itt is hogy a bankroll-t lehessen top up-olni"*. Élő státusz: a sports bot `stopped: true`, ok „Session loss limit hit: -$35.07" ($250 → $214.93, 3 trade) — a $30-as napi loss-limit leállította, paperben.
+
+### Mit változott
+
+| Réteg | Változás |
+|---|---|
+| `sports/config.mts` | új `sessionLossLimitEnabled` mező. Env-default: **OFF paperben, ON live-ban** (`!paperMode`); env-override `SPORTS_SESSION_LOSS_LIMIT_ENABLED`. `getEffectiveSportsConfig` olvassa a `sportsSessionLossLimitEnabled` 0/1 Settings-override-ot. |
+| `sports/index.mts` | a loss-limit guard CSAK akkor tüzel, ha `sessionLossLimitEnabled`. **Auto-recovery**: ha a session loss-limit miatt állt le ÉS a limit most ki van kapcsolva → a következő cron-tick magától resume-ol (a HL Sprint 42G mintájára). Új `sportsTopup` handler + `topup` a `BotDefinition`-ben. |
+| `sports/session-manager.mts` | új `topupSportsSession` (additív, non-destruktív). |
+| `shared/bot-registry.mts` | `BotDefinition.topup?` + `BotAction` `"topup"` + `DispatchInput.topupAmount` + dispatch-case. (Eddig a registry-native botok — sports — nem tudtak topupolni.) |
+| `auto-trader/index.mts` | a registry-dispatch hívás átadja a `topupAmount`-ot. |
+| `trader-settings.mts` | új `sportsSessionLossLimitEnabled` knob (0/1, default 0); a 3 sports preset bővült (Lazább/Normál **0**, Szigorú **1**). |
+| `SportsTrader.tsx` | `topup` prop a TraderShell-en (💰 Top up… gomb). |
+
+### Hatás
+
+Deploy után paperben a loss-limit **alapból ki van kapcsolva**, és az auto-recovery a következő cron-tickkel **feloldja** a jelenlegi loss-limit-stopot → a sports bot **magától elindul** (nem kell manuális resume). A limit a Settings-ben bekapcsolható (`sportsSessionLossLimitEnabled = 1`, vagy a Szigorú preset). A bankroll mostantól **topupolható** (💰 Top up… gomb, mint a többi botnál).
+
+### Verifikáció
+
+- Új `shared/sports-loss-limit-topup.test.mts` (4 case): paper-default OFF, live-default ON, env-override ON, topup additív + state-preserving. **Zöld.**
+- `npx tsc --noEmit` (exit 0) + `npm run build` (10 oldal) zöld.
+
+→ Sprint-tracker: `sprints.md` Sprint 46 (completed).

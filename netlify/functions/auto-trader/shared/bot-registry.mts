@@ -119,6 +119,14 @@ export interface BotDefinition {
   resume(): Promise<unknown>;
 
   /**
+   * Optional non-destructive bankroll top-up (2026-05-29). Adds capital
+   * without wiping closedTrades / positions / session state — only the
+   * bankroll grows. Mirrors the crypto/HL topup. Bots that don't implement
+   * it get an "unsupported" response from the dispatcher.
+   */
+  topup?(amount?: number): Promise<unknown>;
+
+  /**
    * Optional manual reconcile — force a settlement pass without waiting
    * for the next cron tick. Only bots with deferred settlement (weather,
    * crypto) implement this.
@@ -170,13 +178,14 @@ export function listCategoryIds(): string[] {
 // path. This is the strangler-fig hinge: existing bots can register
 // gradually, new bots are registry-native from day one.
 
-export type BotAction = "run" | "status" | "reset" | "stop" | "resume" | "reconcile";
+export type BotAction = "run" | "status" | "reset" | "stop" | "resume" | "topup" | "reconcile";
 
 export interface DispatchInput {
   category:         string;
   action:           BotAction;
   source:           "manual" | "cron";
   bankrollOverride?: number;
+  topupAmount?:     number;
   bodyOverride?:    unknown;
 }
 
@@ -193,6 +202,11 @@ export async function dispatchToRegistry(
       case "reset":   return { handled: true, result: await bot.reset(input.bankrollOverride) };
       case "stop":    return { handled: true, result: await bot.stop() };
       case "resume":  return { handled: true, result: await bot.resume() };
+      case "topup":
+        if (!bot.topup) {
+          return { handled: true, error: `topup not supported by "${input.category}"` };
+        }
+        return { handled: true, result: await bot.topup(input.topupAmount) };
       case "reconcile":
         if (!bot.reconcile) {
           return { handled: true, error: `reconcile not supported by "${input.category}"` };

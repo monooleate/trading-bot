@@ -169,7 +169,8 @@ const SCHEMA: Record<string, FieldSpec> = {
   sportsEdgeThreshold:       { default: 0.10, min: 0.02,  max: 0.40,     label: "Edge threshold (net)",         step: 0.005, unit: "frac",  category: "sports", group: "Risk & sizing", help: "Pinnacle-derived true probability és Polymarket-ár közti minimum edge fee után." },
   sportsMaxPositionUSD:      { default: 20,   min: 2,     max: 200,      label: "Max position size",            step: 1,     unit: "USD",   category: "sports", group: "Risk & sizing", help: "Egy sports trade max USD értéke." },
   sportsMaxOpenPositions:    { default: 3,    min: 1,     max: 15,       label: "Max open positions",           step: 1,     unit: "n",     category: "sports", group: "Risk & sizing", help: "Egyszerre max ennyi nyitott sports pozíció. Default 3 — a hosszú-lejáratú piacok különben hetekig blokkolják a slot-okat." },
-  sportsSessionLossLimit:    { default: 30,   min: 5,     max: 500,      label: "Session loss limit",           step: 5,     unit: "USD",   category: "sports", group: "Risk & sizing", help: "Ha a session összesített VESZTESÉG-e (csak a vesztes trade-ek abszolút USD-je) eléri ezt → automatikus stop. Reset-tel indítható újra. A 'Session loss limit hit' alert ezt a küszöböt érte el." },
+  sportsSessionLossLimit:    { default: 30,   min: 5,     max: 500,      label: "Session loss limit",           step: 5,     unit: "USD",   category: "sports", group: "Risk & sizing", help: "Ha a session összesített VESZTESÉG-e (csak a vesztes trade-ek abszolút USD-je) eléri ezt → automatikus stop. Reset-tel indítható újra. A 'Session loss limit hit' alert ezt a küszöböt érte el. CSAK akkor hat, ha a 'Session loss limit ENABLED' be van kapcsolva." },
+  sportsSessionLossLimitEnabled: { default: 0, min: 0,    max: 1,        label: "Session loss limit enabled",   step: 1,     unit: "bool",  category: "sports", group: "Risk & sizing", help: "0 = a session loss limit KI van kapcsolva (paper default — korlátlan kísérletezés), 1 = bekapcsolva (a fenti USD-küszöbnél auto-stop). Paper módban alapból 0; live-ban a bot env-defaultja bekapcsolja. A botot a limit kikapcsolása automatikusan újraindítja, ha korábban a limit állította le." },
   sportsMinHoursToEnd:       { default: 2,    min: 0,     max: 72,       label: "Min hours to end-date",        step: 1,     unit: "h",     category: "sports", group: "Market filter", help: "Csak olyan piacokat fogad el, ahol legalább ennyi óra van a settlement-ig. Védi a botot az utolsó-pillanat liquidity-drop-tól." },
   sportsMaxHoursToEnd:       { default: 72,   min: 6,     max: 8760,     label: "Max hours to end-date",        step: 6,     unit: "h",     category: "sports", group: "Market filter", help: "Csak olyan piacokat fogad el, ahol nem több mint ennyi óra van a settlement-ig. Default 72h (3 nap) = a 3 open slot 3 napon belül felszabadul. Növeld ha hosszabb-lejáratú edge-eket akarsz (pl. season-long futures), csökkentsd ha csak match-day moneyline kell." },
 };
@@ -386,7 +387,7 @@ export const PRESETS: Record<string, CategoryPresets> = {
   sports: {
     loose: {
       label: "Lazább",
-      description: "Edge ≥5%, max pozíció $10, max 5 nap a settlement-ig, 5 open slot, session loss limit $50. Több paper trade a Pinnacle-edge validáláshoz.",
+      description: "Edge ≥5%, max pozíció $10, max 5 nap a settlement-ig, 5 open slot, session loss limit KI. Több paper trade a Pinnacle-edge validáláshoz.",
       values: {
         sportsEdgeThreshold:    0.05,
         sportsMaxPositionUSD:   10,
@@ -394,11 +395,12 @@ export const PRESETS: Record<string, CategoryPresets> = {
         sportsMinHoursToEnd:    2,
         sportsMaxHoursToEnd:    120,  // 5 days
         sportsSessionLossLimit: 50,
+        sportsSessionLossLimitEnabled: 0,   // OFF — unbounded paper experimentation
       },
     },
     normal: {
       label: "Normál",
-      description: "Edge ≥10%, max pozíció $20, max 3 nap a settlement-ig, 3 open slot, session loss limit $30. Match-day moneyline-fókusz — gyors slot-forgás.",
+      description: "Edge ≥10%, max pozíció $20, max 3 nap a settlement-ig, 3 open slot, session loss limit KI (paper). Match-day moneyline-fókusz — gyors slot-forgás.",
       values: {
         sportsEdgeThreshold:    0.10,
         sportsMaxPositionUSD:   20,
@@ -406,11 +408,12 @@ export const PRESETS: Record<string, CategoryPresets> = {
         sportsMinHoursToEnd:    2,
         sportsMaxHoursToEnd:    72,   // 3 days
         sportsSessionLossLimit: 30,
+        sportsSessionLossLimitEnabled: 0,   // OFF in paper (default)
       },
     },
     strict: {
       label: "Szigorú",
-      description: "Edge ≥18%, max pozíció $30, max 24 ó a settlement-ig, 2 open slot, session loss limit $20. Csak a same-day chalk fade-ek (NFL playoff longshot, NBA chalk lemmings).",
+      description: "Edge ≥18%, max pozíció $30, max 24 ó a settlement-ig, 2 open slot, session loss limit $20 BE. Csak a same-day chalk fade-ek (NFL playoff longshot, NBA chalk lemmings).",
       values: {
         sportsEdgeThreshold:    0.18,
         sportsMaxPositionUSD:   30,
@@ -418,6 +421,7 @@ export const PRESETS: Record<string, CategoryPresets> = {
         sportsMinHoursToEnd:    2,
         sportsMaxHoursToEnd:    24,   // 1 day
         sportsSessionLossLimit: 20,
+        sportsSessionLossLimitEnabled: 1,   // ON — strict preset enforces the stop
       },
     },
   },

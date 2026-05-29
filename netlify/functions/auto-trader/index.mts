@@ -150,6 +150,7 @@ export default async function handler(req: Request, _ctx: Context) {
         action: action as any,
         source,
         bankrollOverride,
+        topupAmount,
       });
       if (out.handled) {
         if (out.error) return jsonResponse({ ok: false, error: out.error }, 400);

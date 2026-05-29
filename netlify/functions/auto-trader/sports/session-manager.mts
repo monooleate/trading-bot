@@ -73,6 +73,17 @@ export function resumeSportsSession(s: SportsSessionState): SportsSessionState {
   return { ...s, stopped: false, stoppedReason: null };
 }
 
+// Non-destructive bankroll injection (2026-05-29) — mirror of crypto/HL/F-Arb
+// topup. Preserves closedTrades, sessionPnL, sessionLoss, openPositions,
+// stopped state — only the bankroll grows.
+export function topupSportsSession(s: SportsSessionState, amount: number): SportsSessionState {
+  return {
+    ...s,
+    bankrollStart:   parseFloat((s.bankrollStart   + amount).toFixed(4)),
+    bankrollCurrent: parseFloat((s.bankrollCurrent + amount).toFixed(4)),
+  };
+}
+
 export function addOpenPosition(s: SportsSessionState, p: SportsPosition): SportsSessionState {
   return { ...s, openPositions: [...s.openPositions, p] };
 }

@@ -166,6 +166,12 @@ export default function SportsTrader({ bankroll }: { bankroll?: number }) {
         disabled: isRunning,
         categoryLabel: "Sports Bot",
       }}
+      topup={{
+        onTopup: (amount) => run("topup", { amount }).then(() => { setHealthRefresh((n) => n + 1); refresh(); }),
+        currentBankroll: session?.bankrollCurrent ?? undefined,
+        disabled: isRunning,
+        categoryLabel: "Sports Bot",
+      }}
       onExportTrades={exportTrades}
       exportingTrades={exporting}
     >

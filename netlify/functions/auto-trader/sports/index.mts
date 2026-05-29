@@ -24,6 +24,7 @@ import {
   resetSportsSession,
   stopSportsSession,
   resumeSportsSession,
+  topupSportsSession,
   addOpenPosition,
 } from "./session-manager.mts";
 import { resolvePendingSportsPositions } from "./paper-resolver.mts";
@@ -52,6 +53,24 @@ async function runSportsTrader(
     config.paperMode,
     initialBankroll && initialBankroll > 0 ? initialBankroll : SPORTS_DEFAULT_BANKROLL,
   );
+
+  // Auto-recover from a loss-limit stop once the limit is disabled (default
+  // in paper). Mirrors the HL consecutive-loss auto-recovery (Sprint 42G):
+  // turning the guard off should un-stick a session it previously stopped,
+  // without requiring a manual resume. Only un-stops loss-limit stops — a
+  // manual stop stays stopped.
+  if (
+    session.stopped &&
+    !config.sessionLossLimitEnabled &&
+    (session.stoppedReason || "").startsWith("Session loss limit")
+  ) {
+    session = resumeSportsSession(session);
+    await saveSportsSession(session);
+    log("PAUSE_AUTORECOVER", session.paperMode, {
+      category: CATEGORY,
+      reason: "Session loss limit disabled — auto-resumed",
+    });
+  }
 
   if (session.stopped) {
     const result = {
@@ -210,7 +229,10 @@ async function runSportsTrader(
   }
 
   // ─── 4. Session loss limit guard ─────────────────────────────────
-  if (session.sessionLoss >= config.sessionLossLimit && !session.stopped) {
+  // Only enforced when enabled (default OFF in paper, ON in live — toggle via
+  // the `sportsSessionLossLimitEnabled` Settings knob). Paper is for unbounded
+  // experimentation, so a $30 daily stop just gets in the way there.
+  if (config.sessionLossLimitEnabled && session.sessionLoss >= config.sessionLossLimit && !session.stopped) {
     session = stopSportsSession(session, `Session loss limit hit: -$${session.sessionLoss.toFixed(2)}`);
     await alertSessionStop(session.paperMode, session.stoppedReason || "", session as any).catch(() => {});
   }
@@ -301,6 +323,17 @@ async function sportsResume(): Promise<any> {
   return { ok: true, action: "resumed", category: CATEGORY, session: summarize(resumed) };
 }
 
+async function sportsTopup(amount?: number): Promise<any> {
+  const config = getSportsConfig();
+  if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0) {
+    return { ok: false, error: "Topup amount must be a positive number", category: CATEGORY };
+  }
+  const loaded   = await loadSportsSession(config.paperMode, SPORTS_DEFAULT_BANKROLL);
+  const toppedUp = topupSportsSession(loaded, amount);
+  await saveSportsSession(toppedUp);
+  return { ok: true, action: "topup", category: CATEGORY, session: summarize(toppedUp), amountApplied: amount };
+}
+
 // ─── Registry registration ───────────────────────────────────────────
 
 const botDefinition: BotDefinition = {
@@ -313,6 +346,7 @@ const botDefinition: BotDefinition = {
   reset:    sportsReset,
   stop:     sportsStop,
   resume:   sportsResume,
+  topup:    sportsTopup,
   ui: {
     showLiveReadiness: false,    // no live mode yet
     showCalibration:   true,

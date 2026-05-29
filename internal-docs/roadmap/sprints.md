@@ -363,6 +363,17 @@ A korábbi B9 (Topup action) átkerült a "📋 Next sprint candidates" szekció
 
 ## ✅ Completed sprints (rolling 5 utolsó)
 
+### Sprint 46 (2026-05-29) — Sports loss-limit kikapcsolható (paper OFF) + topup
+
+**Mit ért el:**
+- **Trigger**: a sports bot `stopped` volt a $30 napi loss-limit miatt ($250 → $214.93 paperben). A user: paperben ne legyen ilyen limit (vagy legyen kikapcsolható, alapból OFF), és vezessünk be topupot a sportsra is.
+- **Loss-limit toggle**: új `sessionLossLimitEnabled` a sports configban — **OFF paperben, ON live-ban** (env-default `!paperMode`), `sportsSessionLossLimitEnabled` 0/1 Settings-knob override-olja. A guard csak akkor tüzel, ha engedélyezve. **Auto-recovery**: ha a session a loss-limit miatt állt le és a limit most OFF → a következő cron-tick magától resume-ol (HL Sprint 42G mintájára) → a bot **magától elindul** deploy után.
+- **Topup a registry-native botokra**: a `BotDefinition` + dispatcher + `DispatchInput` kibővült `topup`-pal (eddig csak a legacy crypto/HL/F-Arb tudott). Új `topupSportsSession` + `sportsTopup` + `topup` prop a `SportsTrader`-en (💰 gomb).
+- **Presetek**: a 3 sports preset bővült (Lazább/Normál loss-limit **OFF**, Szigorú **ON**).
+- **Teszt**: új `shared/sports-loss-limit-topup.test.mts` (4 case) zöld; `tsc` + build zöld.
+
+**Changelog:** [`CHANGELOG-2026-05-29.md`](../changelog/CHANGELOG-2026-05-29.md) (f szekció)
+
 ### Sprint 45 (2026-05-29) — F-Arb saját bankroll (HL-tól szétválasztva)
 
 **Mit ért el:**

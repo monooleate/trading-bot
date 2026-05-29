@@ -19,6 +19,10 @@ export interface SportsConfig {
   minPositionUSDC:     number;     // default 1
   /** Session daily loss limit — auto-stop when sessionLoss exceeds. */
   sessionLossLimit:    number;     // default 30
+  /** Whether the session loss limit is enforced at all. Default: OFF in
+   *  paper mode (paper is for unbounded experimentation), ON in live.
+   *  Toggle-able via the `sportsSessionLossLimitEnabled` Settings knob. */
+  sessionLossLimitEnabled: boolean;
   /** Minimum 24h volume for a market to be considered (liquidity gate). */
   minVolume24h:        number;     // default 5000
   /** Minimum hours until market end-date (avoid last-minute liquidity drops). */
@@ -37,8 +41,14 @@ export interface SportsConfig {
 }
 
 export function getSportsConfig(): SportsConfig {
+  const paperMode = process.env.SPORTS_PAPER_MODE !== "false";
   return {
-    paperMode:        process.env.SPORTS_PAPER_MODE !== "false",
+    paperMode,
+    // Loss limit enforced by default in LIVE, OFF in PAPER (paper is for
+    // unbounded experimentation). Env override: SPORTS_SESSION_LOSS_LIMIT_ENABLED.
+    sessionLossLimitEnabled: process.env.SPORTS_SESSION_LOSS_LIMIT_ENABLED != null
+      ? process.env.SPORTS_SESSION_LOSS_LIMIT_ENABLED !== "false"
+      : !paperMode,
     fanExtremeHigh:   parseFloat(process.env.SPORTS_FAN_EXTREME_HIGH || "0.85"),
     fanExtremeLow:    parseFloat(process.env.SPORTS_FAN_EXTREME_LOW  || "0.15"),
     edgeThreshold:    parseFloat(process.env.SPORTS_EDGE_THRESHOLD   || "0.08"),
@@ -73,6 +83,10 @@ export async function getEffectiveSportsConfig(): Promise<SportsConfig> {
       minHoursToEnd:    ov.sportsMinHoursToEnd   ?? env.minHoursToEnd,
       maxHoursToEnd:    ov.sportsMaxHoursToEnd   ?? env.maxHoursToEnd,
       sessionLossLimit: ov.sportsSessionLossLimit ?? env.sessionLossLimit,
+      // 0/1 override; when unset, fall back to the env/paper-aware default.
+      sessionLossLimitEnabled: ov.sportsSessionLossLimitEnabled != null
+        ? ov.sportsSessionLossLimitEnabled === 1
+        : env.sessionLossLimitEnabled,
     };
   } catch {
     return env;
