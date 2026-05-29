@@ -1,9 +1,14 @@
-// netlify/functions/_tests/signal-combiner-threshold.test.mts
+// netlify/functions/auto-trader/shared/signal-combiner-threshold.test.mts
 //
-// NOTE: lives under `_tests/` (an underscore-prefixed dir) so Netlify does
-// NOT bundle it as a Function. A top-level handler-less *.test.mts in
-// netlify/functions/ breaks the Functions-bundling step at deploy time
-// (this was the root cause of the failed 2026-05-15 production deploy).
+// NOTE: lives under auto-trader/shared/ (alongside the other *.test.mts
+// guards) and NOT directly in netlify/functions/. Netlify turns every loose
+// file in the functions dir into a serverless function, and a *.test.mts
+// yields the function name "...test" — the dot is an illegal function-name
+// char, so the deploy fails ("change the function names to contain only
+// alphanumeric characters, hyphens or underscores"). That broke the
+// 2026-05-15 production deploy. Files under auto-trader/ are part of the
+// single `auto-trader` function (it has its own index.mts), so test files
+// here are treated as plain modules, never as standalone functions.
 //
 // Regression guard for `parseThresholdK` in signal-combiner.mts. The
 // parser extracts the LITERAL strike from `bitcoin-above-Nk-on-...`
@@ -17,7 +22,7 @@
 // three. Root cause: `getVolSignal` only handled `up-or-down` markets via
 // openedAt-fetched K, never the above-Nk threshold form.
 //
-// Run: npx tsx netlify/functions/_tests/signal-combiner-threshold.test.mts
+// Run: npx tsx netlify/functions/auto-trader/shared/signal-combiner-threshold.test.mts
 //
 // Re-implements the parser locally to avoid pulling the full
 // signal-combiner.mts (which imports getStore and other Netlify-only
