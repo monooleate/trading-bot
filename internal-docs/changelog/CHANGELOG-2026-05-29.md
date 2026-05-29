@@ -191,3 +191,37 @@ A reverse hedge Binance shortot igényel, de a live `hedge-manager.mts` **szánd
 - `npx tsx` (a 8 case) + `npx tsc --noEmit` (exit 0) + `npm run build` (10 oldal) mind zöld.
 
 → Sprint-tracker: `sprints.md` Sprint 44 (completed, paper) + B20 (live, backlog).
+
+---
+
+## (e) — F-Arb saját bankroll (HL-tól szétválasztva) — Sprint 45 (45. session)
+
+### Trigger
+
+A bidirekcionális F-Arb (d szekció) után a user rámutatott: a **HL-directional** (spekulatív, irányított perp — LONG/SHORT árirány-tét) és az **F-Arb** (delta-neutrális funding harvester, ami magában nyitja mindkét lábát) **két teljesen külön stratégia**. Eddig egyetlen HL bankrollon osztoztak: az F-Arb-nak nem volt saját tőkéje, a `loadHlSession().bankrollCurrent`-et olvasta méretezési referenciaként, és a `reset`/`topup` a HL sessionbe írt. Mivel a két stratégia független, a közös tőke túl-foglalási kockázatot hordozott (egyik sem vonta le a másik lekötését) és fogalmilag is helytelen volt.
+
+### Mit változott
+
+| Réteg | Változás |
+|---|---|
+| `funding-arb/types.mts` | `ArbSessionState` + `bankrollStart` + `bankrollCurrent`. |
+| `funding-arb/fr-session.mts` | `DEFAULT_ARB_BANKROLL = 200`; `fresh()`/`loadArbSession` seedeli/migrálja; új `topupArbSession` + `creditArbPnl` (PnL → saját bankroll); `resetArbSession(paperMode, bankroll?)`. |
+| `funding-arb/index.mts` | méretezés a saját `session.bankrollCurrent`-ből; záráskor `creditArbPnl(netPnl)`; `arbReset` saját tőkére (nem ír HL-be); új `arbTopup`; `summarize` `bankroll`/`bankrollStart` (nem `bankrollShared`); live-readiness a saját `bankrollStart`-tal. A `loadHlSession`/`saveHlSession` import **kivezetve**. |
+| `auto-trader/index.mts` | az arb-`topup` ág `hlTopup` → `arbTopup`. |
+| `multi-status.mts` | `readFundingArb` a saját bankrollt olvassa (`bankrollShared: false`) → a home-page totals-ba bekerül. |
+| `FundingArbPanel.tsx` | `bankrollShared`/`bankrollSharedStart` → `bankroll`/`bankrollStart`; „Bankroll (HL)" → „Bankroll"; a „(shared HL bankroll)" felirat eltűnik. |
+
+### Tőke-modell
+
+F-Arb nyitáskor **nem** debitál margint (a lekötést a `deployedCapital ≤ bankroll × maxCapitalPct` korlátozza); záráskor a realizált `netPnl` (= funding − fees − slippage) a `bankrollCurrent`-be folyik. Equity-modell: `bankrollCurrent` = saját tőke, a nyitott margin külön követett. A HL-directional session **érintetlen** (marad a saját $196.45-jén). Élesedés után az F-Arb a migráción át a saját $200-ával indul (0 trade / 0 open → tiszta).
+
+### Mellékhatás — B21 tárgytalan
+
+A korábban felvetett **B21** (shared-bankroll cross-reconciliation live-prereq) **megszűnt** — a szétválasztás gyökerestül elveszi a problémát, így B21 nem került a backlogba.
+
+### Verifikáció
+
+- `funding-arb-reverse.test.mts` +4 case (reset default/override, `creditArbPnl` nyereség/veszteség, `topupArbSession` additív) → **12 case zöld**.
+- `npx tsc --noEmit` (exit 0) + `npm run build` (10 oldal) zöld.
+
+→ Sprint-tracker: `sprints.md` Sprint 45 (completed).

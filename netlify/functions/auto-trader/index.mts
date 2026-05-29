@@ -61,6 +61,7 @@ import {
   arbReset,
   arbStop,
   arbResume,
+  arbTopup,
 } from "./hyperliquid/funding-arb/index.mts";
 
 const DEFAULT_BANKROLL = 150; // $150 USDC
@@ -188,11 +189,9 @@ export default async function handler(req: Request, _ctx: Context) {
           case "reset":  return jsonResponse(await arbReset(bankrollOverride));
           case "stop":   return jsonResponse(await arbStop());
           case "resume": return jsonResponse(await arbResume());
-          // Sprint 42B (2026-05-15): F-Arb shares the HL bankroll, so its
-          // topup delegates to `hlTopup`. The arb session itself has no
-          // bankroll field — only HL does — so this is the structurally
-          // correct routing (mirrors how `arbReset` already cascades).
-          case "topup":  return jsonResponse(await hlTopup(topupAmount));
+          // F-Arb has its OWN bankroll (2026-05-29) — topup targets the arb
+          // session directly (no longer delegates to hlTopup).
+          case "topup":  return jsonResponse(await arbTopup(topupAmount));
           default:       return jsonResponse({ ok: false, error: `Unknown action: ${action}` }, 400);
         }
       }

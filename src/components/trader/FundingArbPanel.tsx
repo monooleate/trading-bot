@@ -51,8 +51,8 @@ interface ArbSessionSummary {
   totalFundingToday:   number;
   fundingDate:         string;
   startedAt:           string;
-  bankrollShared?:      number | null; // 2026-05-10 (j): HL session bankroll (shared)
-  bankrollSharedStart?: number | null; // 2026-05-10 (j): HL starting bankroll
+  bankroll?:           number | null; // 2026-05-29: F-Arb's OWN bankroll (no longer shared with HL)
+  bankrollStart?:      number | null; // 2026-05-29: F-Arb starting bankroll
   openDetails:         ArbOpenDetail[];
 }
 
@@ -115,16 +115,15 @@ export default function FundingArbPanel({ bankroll }: { bankroll?: number }) {
   }, [run, refresh, setError, bankroll]);
 
   // Parity with the other 4 bots: Bankroll / Session PnL / Trades / Open.
-  // F-Arb has no bankroll of its own — the backend includes the shared HL
-  // session bankroll. "Session PnL" maps to totalFundingAllTime since
-  // delta-neutral arb's only PnL component is funding accrual. Today's
-  // funding + deployed capital still appear in the bot's open-positions
-  // card and reset summary, so no info is lost.
+  // F-Arb has its OWN bankroll (2026-05-29) — independent of the directional
+  // HL session. "Session PnL" maps to totalFundingAllTime since delta-neutral
+  // arb's only PnL component is funding accrual. Today's funding + deployed
+  // capital still appear in the bot's open-positions card and reset summary.
   const stats: TraderStat[] = session ? [
     {
-      label: "Bankroll (HL)",
-      value: typeof session.bankrollShared === "number"
-        ? `$${session.bankrollShared.toFixed(2)}`
+      label: "Bankroll",
+      value: typeof session.bankroll === "number"
+        ? `$${session.bankroll.toFixed(2)}`
         : "—",
     },
     {
@@ -215,9 +214,9 @@ export default function FundingArbPanel({ bankroll }: { bankroll?: number }) {
       }}
       topup={{
         onTopup: (amount) => run("topup", { amount }).then(() => refresh()),
-        currentBankroll: session?.bankrollShared ?? undefined,
+        currentBankroll: session?.bankroll ?? undefined,
         disabled: isRunning,
-        categoryLabel: "Funding Rate Arbitrage (shared HL bankroll)",
+        categoryLabel: "Funding Rate Arbitrage",
       }}
       onExportTrades={exportTrades}
       exportingTrades={exporting}

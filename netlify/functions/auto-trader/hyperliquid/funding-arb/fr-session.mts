@@ -10,14 +10,20 @@ const STORE     = "hyperliquid-arb-session-v1";
 const PAPER_KEY = "arb_paper";
 const LIVE_KEY  = "arb_live";
 
+// F-Arb's own starting capital (2026-05-29). Independent of the directional
+// HL session — the two are separate strategies and no longer share a pool.
+export const DEFAULT_ARB_BANKROLL = 200;
+
 function keyOf(paperMode: boolean): string {
   return paperMode ? PAPER_KEY : LIVE_KEY;
 }
 
-function fresh(paperMode: boolean): ArbSessionState {
+function fresh(paperMode: boolean, bankroll = DEFAULT_ARB_BANKROLL): ArbSessionState {
   return {
     startedAt:            new Date().toISOString(),
     paperMode,
+    bankrollStart:        bankroll,
+    bankrollCurrent:      bankroll,
     positions:            [],
     totalFundingAllTime:  0,
     totalFundingToday:    { date: today(), amount: 0 },
@@ -56,6 +62,15 @@ export async function loadArbSession(paperMode: boolean): Promise<ArbSessionStat
     if (raw) {
       const parsed = JSON.parse(raw) as ArbSessionState;
       parsed.totalFundingToday = migrateTodayShape(parsed.totalFundingToday as any);
+      // Migrate legacy blobs that predate F-Arb's own bankroll (it used to
+      // borrow the HL directional session's). Seed from the default; the
+      // operator can reset/topup to a preferred amount.
+      if (typeof parsed.bankrollStart !== "number" || !Number.isFinite(parsed.bankrollStart)) {
+        parsed.bankrollStart = DEFAULT_ARB_BANKROLL;
+      }
+      if (typeof parsed.bankrollCurrent !== "number" || !Number.isFinite(parsed.bankrollCurrent)) {
+        parsed.bankrollCurrent = DEFAULT_ARB_BANKROLL;
+      }
       return parsed;
     }
   } catch {}
@@ -195,6 +210,24 @@ export function resumeArbSession(s: ArbSessionState): ArbSessionState {
   return { ...s, stopped: false, stoppedReason: null };
 }
 
-export function resetArbSession(paperMode: boolean): ArbSessionState {
-  return fresh(paperMode);
+export function resetArbSession(paperMode: boolean, bankroll = DEFAULT_ARB_BANKROLL): ArbSessionState {
+  return fresh(paperMode, bankroll);
+}
+
+// Non-destructive bankroll injection (mirror of crypto/HL topup). Preserves
+// positions, funding totals, stopped state — only the bankroll grows.
+export function topupArbSession(s: ArbSessionState, amount: number): ArbSessionState {
+  return {
+    ...s,
+    bankrollStart:   s.bankrollStart   + amount,
+    bankrollCurrent: s.bankrollCurrent + amount,
+  };
+}
+
+// Credit realised PnL (funding − fees − slippage) to the bankroll on close.
+// F-Arb does NOT debit margin at open (open capital is tracked via
+// deployedCapital against the cap), so the only ledger move is realised PnL.
+export function creditArbPnl(s: ArbSessionState, netPnl: number): ArbSessionState {
+  if (!Number.isFinite(netPnl)) return s;
+  return { ...s, bankrollCurrent: parseFloat((s.bankrollCurrent + netPnl).toFixed(4)) };
 }

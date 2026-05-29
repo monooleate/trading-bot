@@ -100,6 +100,16 @@ export interface ArbPosition {
 export interface ArbSessionState {
   startedAt:              string;
   paperMode:              boolean;
+  // Own bankroll (2026-05-29). Previously F-Arb borrowed the directional HL
+  // session's bankroll, but the two are INDEPENDENT strategies (a directional
+  // speculator vs a delta-neutral funding harvester), so sharing one capital
+  // pool made no sense. F-Arb now keeps its own ledger: bankrollCurrent grows
+  // by realised funding PnL on close; open margin is tracked via
+  // deployedCapital() against bankrollCurrent × maxCapitalPct. Optional on the
+  // type for backward-compat — loadArbSession migrates legacy blobs to the
+  // default on read.
+  bankrollStart:          number;
+  bankrollCurrent:        number;
   positions:              ArbPosition[];  // both open and closed
   totalFundingAllTime:    number;
   // Typed daily funding tracker: previous shape was a "YYYY-MM-DD:amount"

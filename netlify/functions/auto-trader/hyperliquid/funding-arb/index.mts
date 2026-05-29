@@ -13,7 +13,6 @@
 import { log } from "../../shared/logger.mts";
 import { alertError, alertLiveBlocked } from "../../shared/telegram.mts";
 import { computeLiveReadiness, shouldForcePaper, type LiveReadinessReport } from "../../shared/live-readiness.mts";
-import { loadHlSession, saveHlSession } from "../session-manager.mts";
 import type { HlCoin } from "../types.mts";
 import { scanFundings } from "./fr-scanner.mts";
 import { detectArbOpportunity, rankOpportunities } from "./arb-detector.mts";
@@ -29,6 +28,9 @@ import {
   stopArbSession,
   resumeArbSession,
   resetArbSession,
+  topupArbSession,
+  creditArbPnl,
+  DEFAULT_ARB_BANKROLL,
 } from "./fr-session.mts";
 import { getFrArbConfig, getEffectiveFrArbConfig } from "./config.mts";
 import { markArbRunStart, markArbRunFinish, getArbRunStatus } from "./arb-run-state.mts";
@@ -90,7 +92,7 @@ async function runFundingArbInner(): Promise<any> {
         closedTrades: [],
         stopped: session.stopped,
         stoppedReason: session.stoppedReason,
-        bankrollStart: 100,
+        bankrollStart: session.bankrollStart,
       } as any,
       trades: closedTrades,
       simVersionExpected: null,
@@ -163,6 +165,9 @@ async function runFundingArbInner(): Promise<any> {
         const closeResp = await closeArbPosition(pos, closeReason, config, current?.markPrice);
         if (closeResp.ok) {
           session = replacePosition(session, pos);
+          // Realised PnL flows into F-Arb's OWN bankroll (no margin was
+          // debited at open, so this is the only ledger move on close).
+          session = creditArbPnl(session, closeResp.netPnl ?? 0);
           log("ARB_CLOSE", config.paperMode, {
             id:       pos.id,
             coin:     pos.coin,
@@ -182,7 +187,7 @@ async function runFundingArbInner(): Promise<any> {
     //    list, regardless of whether we end up opening a position. This
     //    feeds the unified "X/Y gates ✓" chip + hover popover on the
     //    FundingArbPanel — same UX as the other 3 bots.
-    const bankroll = (await loadHlSession(config.paperMode)).bankrollCurrent;
+    const bankroll = session.bankrollCurrent;   // F-Arb's OWN bankroll (no longer shared with HL)
     const maxCapital = bankroll * config.maxCapitalPct;
     const openCoinSet = new Set(openArbPositions(session).map((p) => p.coin));
     const viableCoinSet = new Set(viable.map((o) => o.coin));
@@ -513,14 +518,6 @@ export async function getArbStatus(): Promise<any> {
   const session   = await loadArbSession(config.paperMode);
   const runStatus = await getArbRunStatus();
 
-  // Load the shared HL bankroll for parity with the other bots' stats grid.
-  // Failure is non-fatal — summary just renders with bankrollShared=null.
-  let hlBankroll: { bankrollStart: number; bankrollCurrent: number } | null = null;
-  try {
-    const hl = await loadHlSession(config.paperMode);
-    hlBankroll = { bankrollStart: hl.bankrollStart, bankrollCurrent: hl.bankrollCurrent };
-  } catch {}
-
   // Live-readiness verdict for the UI badge — same shape as getHlStatus
   // returns for the directional bot, so the home-page banner can poll
   // `category=hyperliquid&layer=arb` and read it from a single field.
@@ -551,7 +548,7 @@ export async function getArbStatus(): Promise<any> {
         closedTrades: [],
         stopped: session.stopped,
         stoppedReason: session.stoppedReason,
-        bankrollStart: 100,
+        bankrollStart: session.bankrollStart,
       } as any,
       trades: closedTrades,
       simVersionExpected: null,
@@ -570,7 +567,6 @@ export async function getArbStatus(): Promise<any> {
     category: "hyperliquid-arb",
     session:  summarize(
       session,
-      hlBankroll,
       runStatus?.lastResult?.results ?? null,
       runStatus?.lastResult?.finishedAt ?? runStatus?.lastRunAt ?? null,
     ),
@@ -583,37 +579,36 @@ export async function getArbStatus(): Promise<any> {
 }
 
 export async function arbReset(bankrollOverride?: number): Promise<any> {
-  const config  = getFrArbConfig();
-  const session = resetArbSession(config.paperMode);
+  const config = getFrArbConfig();
+  // F-Arb now has its OWN bankroll (independent of the directional HL
+  // session). Reset to the supplied amount or the default — no longer touches
+  // the HL session at all.
+  const bankroll = (typeof bankrollOverride === "number" && Number.isFinite(bankrollOverride))
+    ? bankrollOverride
+    : DEFAULT_ARB_BANKROLL;
+  const session = resetArbSession(config.paperMode, bankroll);
   await saveArbSession(session);
-
-  // Funding-arb has no bankroll of its own — capital is drawn from the HL
-  // directional session's bankrollCurrent. When the dashboard supplies a new
-  // bankroll on reset, propagate it to the HL session ONLY if that session
-  // has no open positions (otherwise we'd corrupt PnL accounting). Open
-  // positions ⇒ silently keep the existing HL bankroll; the response flag
-  // lets the UI surface what happened.
-  let bankrollApplied: number | null = null;
-  let bankrollSkippedReason: string | null = null;
-  if (typeof bankrollOverride === "number" && Number.isFinite(bankrollOverride)) {
-    const hl = await loadHlSession(config.paperMode);
-    if (hl.openPositions.length === 0) {
-      const updated = { ...hl, bankrollStart: bankrollOverride, bankrollCurrent: bankrollOverride };
-      await saveHlSession(updated);
-      bankrollApplied = bankrollOverride;
-    } else {
-      bankrollSkippedReason = `HL session has ${hl.openPositions.length} open perp position(s); close them or reset Hyperliquid Perp first.`;
-    }
-  }
 
   return {
     ok: true,
     action: "reset",
     category: "hyperliquid-arb",
     session: summarize(session),
-    bankrollApplied,
-    bankrollSkippedReason,
+    bankrollApplied: bankroll,
   };
+}
+
+// Topup F-Arb's OWN bankroll (no longer delegates to hlTopup — the two
+// strategies have separate capital pools as of 2026-05-29).
+export async function arbTopup(amount?: number): Promise<any> {
+  const config = getFrArbConfig();
+  if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0) {
+    return { ok: false, error: "Topup amount must be a positive number", category: "hyperliquid-arb" };
+  }
+  const loaded  = await loadArbSession(config.paperMode);
+  const toppedUp = topupArbSession(loaded, amount);
+  await saveArbSession(toppedUp);
+  return { ok: true, action: "topup", category: "hyperliquid-arb", session: summarize(toppedUp), amountApplied: amount };
 }
 
 export async function arbStop(): Promise<any> {
@@ -632,12 +627,11 @@ export async function arbResume(): Promise<any> {
   return { ok: true, action: "resumed", category: "hyperliquid-arb", session: summarize(resumed) };
 }
 
-// Summarize the F-Arb session for the UI. `hlBankroll` is the shared HL
-// session bankroll (F-Arb has no bankroll of its own), included so the
-// dashboard can show parity with the other bots' 4-cell stats grid.
+// Summarize the F-Arb session for the UI. F-Arb now has its OWN bankroll
+// (2026-05-29) — no longer shared with the directional HL session — surfaced
+// as `bankroll`/`bankrollStart` for the dashboard's 4-cell stats grid.
 function summarize(
   s: ArbSessionState,
-  hl?: { bankrollStart: number; bankrollCurrent: number } | null,
   lastScanResults: any[] | null = null,
   tickFinishedAt: string | null = null,
 ) {
@@ -668,8 +662,8 @@ function summarize(
     totalFundingToday:    parseFloat(s.totalFundingToday.amount.toFixed(2)),
     fundingDate:          s.totalFundingToday.date,
     startedAt:            s.startedAt,
-    bankrollShared:       hl ? parseFloat(hl.bankrollCurrent.toFixed(2)) : null,
-    bankrollSharedStart:  hl ? parseFloat(hl.bankrollStart.toFixed(2))   : null,
+    bankroll:             parseFloat(s.bankrollCurrent.toFixed(2)),
+    bankrollStart:        parseFloat(s.bankrollStart.toFixed(2)),
     openDetails:          open.map((p: ArbPosition) => ({
       id:                 p.id,
       coin:               p.coin,

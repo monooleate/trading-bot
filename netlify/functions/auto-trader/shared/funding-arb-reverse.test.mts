@@ -15,7 +15,7 @@
 // Run: npx tsx netlify/functions/auto-trader/shared/funding-arb-reverse.test.mts
 
 import { detectArbOpportunity } from "../hyperliquid/funding-arb/arb-detector.mts";
-import { accrueFunding } from "../hyperliquid/funding-arb/fr-session.mts";
+import { accrueFunding, creditArbPnl, resetArbSession, topupArbSession, DEFAULT_ARB_BANKROLL } from "../hyperliquid/funding-arb/fr-session.mts";
 import type { FundingData, FrArbConfig, ArbSessionState, ArbPosition } from "../hyperliquid/funding-arb/types.mts";
 
 interface Failure { test: string; message: string; }
@@ -98,6 +98,8 @@ function mkSession(pos: ArbPosition): ArbSessionState {
   return {
     startedAt: "2026-05-29T00:00:00Z",
     paperMode: true,
+    bankrollStart: 200,
+    bankrollCurrent: 200,
     positions: [pos],
     totalFundingAllTime: 0,
     totalFundingToday: { date: "2026-05-29", amount: 0 },
@@ -138,6 +140,33 @@ const basePos = (over: Partial<ArbPosition>): ArbPosition => ({
   const want = 70 * (0.0005 - (-0.001)) * 1;   // notional × (binance − hl) = 70 × 0.0015 = 0.105
   expect(approx(got, want, 1e-4), "rev.accrual", `reverse should accrue (binance−hl): want ${want}, got ${got}`);
   expect(got > 0, "rev.accrualPositive", `reverse on negative hl funding should be POSITIVE carry, got ${got}`);
+}
+
+// ── Own bankroll (2026-05-29): F-Arb no longer shares HL's pool ─────────────
+{
+  // reset → own default bankroll, fresh
+  const s = resetArbSession(true);
+  expect(s.bankrollStart === DEFAULT_ARB_BANKROLL && s.bankrollCurrent === DEFAULT_ARB_BANKROLL,
+    "reset.default", `reset should seed own bankroll ${DEFAULT_ARB_BANKROLL}, got ${s.bankrollCurrent}`);
+  expect(s.positions.length === 0, "reset.clean", "reset should clear positions");
+
+  // reset with override
+  const s2 = resetArbSession(true, 350);
+  expect(s2.bankrollStart === 350 && s2.bankrollCurrent === 350, "reset.override", `got ${s2.bankrollCurrent}`);
+
+  // credit realised PnL flows into bankroll
+  const s3 = creditArbPnl(s2, 12.5);
+  expect(approx(s3.bankrollCurrent, 362.5, 1e-6), "credit.pnl", `350 + 12.5 = 362.5, got ${s3.bankrollCurrent}`);
+  expect(s3.bankrollStart === 350, "credit.startUnchanged", `start should stay 350, got ${s3.bankrollStart}`);
+
+  // credit a loss
+  const s4 = creditArbPnl(s3, -5);
+  expect(approx(s4.bankrollCurrent, 357.5, 1e-6), "credit.loss", `362.5 − 5 = 357.5, got ${s4.bankrollCurrent}`);
+
+  // topup is additive, preserves current+start growth
+  const s5 = topupArbSession(s4, 100);
+  expect(approx(s5.bankrollCurrent, 457.5, 1e-6) && approx(s5.bankrollStart, 450, 1e-6),
+    "topup.additive", `expected current 457.5 / start 450, got ${s5.bankrollCurrent}/${s5.bankrollStart}`);
 }
 
 // ── Report ──────────────────────────────────────────────────────────────────

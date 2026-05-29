@@ -363,6 +363,16 @@ A korábbi B9 (Topup action) átkerült a "📋 Next sprint candidates" szekció
 
 ## ✅ Completed sprints (rolling 5 utolsó)
 
+### Sprint 45 (2026-05-29) — F-Arb saját bankroll (HL-tól szétválasztva)
+
+**Mit ért el:**
+- **Trigger**: a user rámutatott, hogy a HL-directional (spekulatív irányított perp) és az F-Arb (delta-neutrális funding harvester) **két külön stratégia** — nincs értelme egyetlen közös HL bankrollon osztozniuk (az F-Arb eddig `loadHlSession().bankrollCurrent`-et kölcsönzött méretezési referenciaként).
+- **Fix**: az `ArbSessionState` saját `bankrollStart` + `bankrollCurrent` mezőt kapott (`DEFAULT_ARB_BANKROLL = 200`). A `loadArbSession` migrálja a régi blobokat (default seed). A méretezés a **saját** bankrollra megy (`session.bankrollCurrent`, nem HL). A realizált funding-PnL záráskor a saját bankrollba folyik (`creditArbPnl` — nyitáskor nincs margin-debit, a lekötés a `deployedCapital` × cap-en keresztül korlátozott). A `reset` saját bankrollra állít (override-olható), új `arbTopup` a saját tőkét növeli (a dispatcher már nem `hlTopup`-ra delegál). A `multi-status` + `getArbStatus` + `FundingArbPanel` a saját bankrollt jelenti (`bankrollShared` → false, a „(shared)" címke eltűnik, és a home-page totals-ba bekerül).
+- **Mellékhatás**: a korábban felvetett **B21** (shared-bankroll cross-reconciliation, live-prereq) **tárgytalanná vált** — a szétválasztás gyökerestül megszünteti a megosztott-tőke túl-foglalás kockázatát, így B21 nem került felvételre.
+- **Teszt**: a `funding-arb-reverse.test.mts` +4 case-szel bővült (reset default/override, creditArbPnl nyereség/veszteség, topup additív). `tsc --noEmit` + `npm run build` + 12-case teszt zöld.
+
+**Changelog:** [`CHANGELOG-2026-05-29.md`](../changelog/CHANGELOG-2026-05-29.md) (e szekció)
+
 ### Sprint 44 (2026-05-29) — Bidirekcionális F-Arb (reverse arb, paper)
 
 **Mit ért el:**

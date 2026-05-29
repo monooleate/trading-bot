@@ -142,23 +142,20 @@ async function readFundingArb(paperMode: boolean): Promise<Snapshot> {
   const key = paperMode ? "arb_paper" : "arb_live";
   const s: any = await readJson("hyperliquid-arb-session-v1", key);
   if (!s) return EMPTY("funding-arb", "Funding Arbitrage", paperMode);
-  // Funding arb session shape is different: positions[] without bankroll fields.
-  // F-Arb shares the directional HL session's bankroll (capital comes from
-  // there), so surface that here too — `bankrollShared: true` flags the
-  // totals reducer to NOT add it again to avoid double-counting.
+  // F-Arb now has its OWN bankroll (2026-05-29) — independent of the
+  // directional HL session. Surface it directly; bankrollShared:false so the
+  // totals reducer INCLUDES it (it's a separate capital pool now).
   const positions = Array.isArray(s.positions) ? s.positions : [];
   const open = positions.filter((p: any) => !p.closedAt).length;
   const closed = positions.length - open;
-  const hlKey = paperMode ? "session_paper" : "session_live";
-  const hl: any = await readJson("hyperliquid-session-v1", hlKey);
   return {
     category: "funding-arb",
     label: "Funding Arbitrage",
     found: true,
     paperMode: s.paperMode,
-    bankrollStart:   hl?.bankrollStart   ?? 0,
-    bankrollCurrent: hl?.bankrollCurrent ?? 0,
-    bankrollShared:  true,
+    bankrollStart:   typeof s.bankrollStart   === "number" ? s.bankrollStart   : 200,
+    bankrollCurrent: typeof s.bankrollCurrent === "number" ? s.bankrollCurrent : 200,
+    bankrollShared:  false,
     sessionPnL: typeof s.totalFundingAllTime === "number" ? s.totalFundingAllTime : 0,
     closedTrades: closed,
     openPositions: open,
@@ -191,9 +188,10 @@ export default async function handler(req: Request, _ctx: Context) {
   const all = [crypto, weather, hl, fr, sports];
   const found = all.filter((s) => s.found);
 
-  // Skip bankroll for `bankrollShared: true` categories (F-Arb borrows the
-  // HL session's pool — adding it twice would inflate the home page total).
-  // PnL and trade counts are NOT shared, so those still aggregate.
+  // Sum every category's bankroll into the home-page total. As of 2026-05-29
+  // no category sets `bankrollShared: true` (F-Arb got its own bankroll), so
+  // the guard below is now a no-op safety net — kept in case a future bot ever
+  // borrows another's pool.
   const totals = found.reduce(
     (acc, s) => {
       if (!s.bankrollShared) {
