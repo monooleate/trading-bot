@@ -38,6 +38,9 @@ const EXPECTED: Expectation[] = [
   { city: "tokyo",    icao: "RJTT", notIcao: "RJAA",
     latApprox: [35.5494, 0.05], lonApprox: [139.7798, 0.05],
     notes: "Haneda — NOT Narita (RJAA)" },
+  { city: "shenzhen", icao: "ZGSZ",
+    latApprox: [22.6393, 0.05], lonApprox: [113.8107, 0.05],
+    notes: "Bao'an Intl — Pearl River Delta (2026-05-30 coverage add)" },
 ];
 
 interface Failure { city: string; message: string; }

@@ -243,6 +243,14 @@ export const SETTLEMENT_STATIONS: Record<string, StationConfig> = {
     tz: "Asia/Shanghai", city_offset: 0.0,
     peakHoursUTC: { summer: [6, 7, 8], winter: [6, 7], autumn: [6, 7], spring: [6, 7, 8] },
   },
+  shenzhen: {
+    // ZGSZ = Shenzhen Bao'an Intl. Pearl River Delta — between Hong Kong
+    // (VHHH, offset −1.0) and Guangzhou (ZGGG, offset 0.0); coastal, so a
+    // mild −0.5 city_offset. Same UTC+8 peak band as Guangzhou.
+    icao: "ZGSZ", lat: 22.6393, lon: 113.8107,
+    tz: "Asia/Shanghai", city_offset: -0.5,
+    peakHoursUTC: { summer: [6, 7, 8], winter: [6, 7], autumn: [6, 7], spring: [6, 7, 8] },
+  },
   denver: {
     icao: "KDEN", lat: 39.8617, lon: -104.6731,
     tz: "America/Denver", city_offset: 0.0,

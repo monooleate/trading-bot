@@ -76,6 +76,9 @@ const CITY_PATTERNS: Record<string, string[]> = {
   houston:       ["houston"],
   toronto:       ["toronto"],
   helsinki:      ["helsinki"],
+  // 2026-05-30 coverage extension #3 — Polymarket listed a liquid
+  // highest-temperature-in-shenzhen market ($188k vol) the bot couldn't touch.
+  shenzhen:      ["shenzhen"],
 };
 
 function parseCityFromSlug(slug: string): string | null {

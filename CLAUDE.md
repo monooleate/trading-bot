@@ -374,7 +374,7 @@ netlify deploy --prod --dir=dist
 
 ---
 
-## AKTUÁLIS ÁLLAPOT (2026-05-29)
+## AKTUÁLIS ÁLLAPOT (2026-05-30)
 
 **Élő deploy:** `mj-trading.netlify.app`. Paper mode, simVersion 3 (crypto), v2 (HL).
 
@@ -385,7 +385,7 @@ netlify deploy --prod --dir=dist
 | Bot | Bankroll | PnL | Trades | Open | Megjegyzés |
 |-----|---------|-----|--------|------|-------|
 | **Crypto** | $250 → **$250.00** (reset) | **$0** | **0 closed** | 0 open | **05-29 élő (45. session)**: 45-trade audit — adatintegritás hibátlan (Gamma 16/16, PnL 45/45 bit-pontos, bankroll reconcile 0.0000), de a Sprint 41-42B fixek **2 hétig élesítetlenek** voltak (a 05-15 deploy elbukott: top-level `signal-combiner-threshold.test.mts` function-bundling hiba) → a bot $250→$109-re vérzett lapos-zaj predikciókon (22% WR, PF 0.72). **Build-fix deployolva** + session **resetelve** tiszta lapra ($250/0) + Normál preset (combinerConfidenceMin 0.05) + combinerKBlindDownweight 0.5. |
-| **Weather** | $250 → **$241.50** | **-$8.50** | **7 closed (57.1% WR)** | 0 open | **05-29 élő**: a bot **≈8 napja (05-21 óta) nem nyitott pozíciót** — a `auto-trader-weather-cron` (legacy `schedule()` wrapper) sosem regisztrálódott a Netlify-on → **lejavítva Sprint 43** (weather befűzve a `*/3` multi-cron fan-out-ba). |
+| **Weather** | $250 → **$241.50** | **-$8.50** | **7 closed (57.1% WR)** | 0 open | **05-30 diagnózis**: a Sprint 43 cron-fix óta 0 trade — **NEM hiba**: a fix óta 1 ablakban (05-30) csak Shenzhen (lefedetlen volt) + London (lefedett, de már beárazódott, no edge) piac volt. A bot fut + helyesen skippel. **Shenzhen lefedettség hozzáadva** (ZGSZ, 27→28 város). (changelog 2026-05-30 (a)) |
 | **HL Perp** | $200 → **$196.45** | **-$3.55** | **22 closed (6W/16L)** | 0 open | **05-29 élő audit**: history valid (bankroll-rekonciliáció bit-pontos), de 🔴 consecutive-loss **deadlock** (12 napja állt) → **lejavítva Sprint 42G** (auto-recovery + resume fix). 🟠 long-bias (22/22 LONG, 27% WR) → B18 vizsgálat. |
 | **F-Arb** | $200 → **$200** (saját bankroll) | $0 | 0 closed | 0 open | **05-29 élő**: cron fut (5 coin / 3 min), 0 trade (a spreadek negatívak/küszöb-alattiak). **Sprint 44**: bidirekcionális (reverse arb paperben aktív, live-gated → B20). **Sprint 45**: **saját bankroll** — már NEM osztozik a HL-directional sessionön (külön $200-as tőke, a funding-PnL a saját bankrolljába folyik). |
 
