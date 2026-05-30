@@ -28,3 +28,24 @@ User: *"még a módosítás óta egy weather trade sem született. jó a bot?"* 
 ### Hatás
 
 A bot mostantól a Shenzhen-piacokat is megfogja (a következő, future-endDate Shenzhen-eseménynél). A weather coverage 27 → **28** város.
+
+---
+
+## (b) — Weather market-discovery gyökérok-fix (tag-alapú lekérés)
+
+### Trigger
+
+A (a) diagnózis után a „next window megfigyelése": a may-31 piacok (London/Shenzhen/Hong-Kong/NYC/…) **már listázva** voltak (future endDate), de egy manuális `run` mégis „no active markets"-et adott. **Gyökérok feltárva.**
+
+### A bug — top-100-by-volume láthatósági plafon
+
+A `findWeatherMarketsDetailed` a `/events?order=volume24hr&ascending=false`-szal húzott, és a Gamma a választ **~100 sorra vágja**. Polymarketen routine-szerűen >100 aktív esemény van, **~$180k volume24hr floor-ral** a 100. helyen. A frissen listázott daily-temperature piacok **$5k–$65k/24h**-n ülnek a saját window-jukig → **a top-100 alá esnek → a bot nem látja őket**. Mérés: may-31 London $37.9k, Shenzhen $21.3k vs a 100. helyezett **$182.8k**. Ezért a bot effektíve csak a heavy-traffic csúcson „látott" egy weather-piacot — ez magyarázta a ritka kereskedést.
+
+### Fix — `tag_slug=highest-temperature`
+
+- A `findWeatherMarketsDetailed` mostantól a precíz **`tag_slug=highest-temperature`** taget (id 104596) kérdezi, ami **volumentől függetlenül** adja a bot pontos piac-típusát (mérés: 100/100 temperature, **~46 future-dated**). A korábbi „tag broken" megjegyzés a **broad** `weather` tagre (id 84) vonatkozott, ami eső/hó piacokat is kever — a specifikus highest-temperature tag tiszta.
+- **Union + dedupe** a régi volumen-slice-szal `Promise.allSettled`-del: ha a tag valaha elromlana, a high-volume piacokra degradál (nem nullára); a title/slug szűrő végig megmarad defense-in-depth.
+
+### Hatás
+
+A bot most **37–46 future-dated weather-piacot lát folyamatosan** (London, Paris, Seoul, Toronto, Seattle, NYC, São Paulo, Shenzhen, …) szemben a korábbi ~2-vel. Korábbi belépés (nagyobb forecast-edge a window előtt, mielőtt a piac beárazódik) + sokkal több trade-lehetőség. `tsc` + `build` zöld.

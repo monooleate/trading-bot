@@ -223,19 +223,48 @@ export interface FindResult {
 }
 
 export async function findWeatherMarketsDetailed(): Promise<FindResult> {
-  // Gamma's `tag=weather` filter is broken (returns unrelated markets), so
-  // pull a wide active slice and filter by question text / slug ourselves.
-  const url = `${GAMMA_API}/events?limit=500&active=true&closed=false&order=volume24hr&ascending=false`;
-  const res = await fetch(url, {
-    headers: { Accept: "application/json", "User-Agent": "EdgeCalc-Weather/1.0" },
-    signal: AbortSignal.timeout(8000),
-  });
+  // 2026-05-30 discovery fix. The old approach pulled the top active events
+  // ordered by `volume24hr` and filtered by title. But Gamma caps the
+  // response at ~100 rows, and there are routinely >100 active events with a
+  // volume floor of ~$180k — so freshly-listed daily-temperature markets
+  // (which sit at $5k–$60k/24h until their active window) were INVISIBLE,
+  // and the bot only ever saw a weather market during its high-traffic peak.
+  //
+  // Fix: query the precise `tag_slug=highest-temperature` tag (id 104596),
+  // which returns the bot's exact market type regardless of volume (verified
+  // 100/100 temperature, ~46 future-dated). The earlier "tag is broken" note
+  // referred to the BROAD `weather` tag (id 84) which mixes in rain/snow
+  // markets — the specific highest-temperature tag is clean. We still UNION
+  // the volume-ranked slice as a fallback (so a future Gamma tag change
+  // degrades to the old behaviour, not to zero markets) and keep the
+  // title/slug filter below as defense-in-depth.
+  const tagUrl = `${GAMMA_API}/events?limit=500&active=true&closed=false&tag_slug=highest-temperature`;
+  const volUrl = `${GAMMA_API}/events?limit=500&active=true&closed=false&order=volume24hr&ascending=false`;
+  const headers = { Accept: "application/json", "User-Agent": "EdgeCalc-Weather/1.0" };
 
-  if (!res.ok) throw new Error(`Gamma API error: ${res.status}`);
+  const [tagRes, volRes] = await Promise.allSettled([
+    fetch(tagUrl, { headers, signal: AbortSignal.timeout(8000) }),
+    fetch(volUrl, { headers, signal: AbortSignal.timeout(8000) }),
+  ]);
 
-  const events: any[] = await res.json().then((d: any) =>
-    Array.isArray(d) ? d : [],
-  );
+  const pull = async (r: PromiseSettledResult<Response>): Promise<any[]> => {
+    if (r.status !== "fulfilled" || !r.value.ok) return [];
+    try { const d = await r.value.json(); return Array.isArray(d) ? d : []; }
+    catch { return []; }
+  };
+  const tagEvents = await pull(tagRes);
+  const volEvents = await pull(volRes);
+  if (tagEvents.length === 0 && volEvents.length === 0) {
+    throw new Error("Gamma API error: both highest-temperature tag and volume queries returned no events");
+  }
+
+  // Union + dedupe by event id (fall back to slug).
+  const byId = new Map<string, any>();
+  for (const e of [...tagEvents, ...volEvents]) {
+    const k = String(e?.id ?? e?.slug ?? "");
+    if (k && !byId.has(k)) byId.set(k, e);
+  }
+  const events: any[] = Array.from(byId.values());
 
   const results: WeatherMarket[] = [];
   const dropped: DroppedEvent[] = [];
