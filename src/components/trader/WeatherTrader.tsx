@@ -78,6 +78,7 @@ interface PendingPosition {
   predictedMaxC: number;
   reconcileAfter: string;
   isReady: boolean;
+  provisionalOutcome?: "won" | "lost" | "pending";
 }
 
 function formatDuration(ms: number): string {
@@ -358,6 +359,7 @@ export default function WeatherTrader({ bankroll }: { bankroll?: number }) {
               sizeText: `$${p.size.toFixed(2)}`,
               whenText: p.isReady ? "✓ ready to settle" : formatDuration(msUntil),
               isReady: p.isReady,
+              provisionalOutcome: p.provisionalOutcome,
             };
           })}
           footnote="Source priority: Polymarket Gamma (authoritative) → METAR fallback after 6h"

@@ -10,10 +10,12 @@ import {
   ScanResultsCard,
   ScanResultRow,
   OpenPositionsCard,
+  PendingPositionsCard,
   type ResultChip,
   type CriteriaGate,
   type OpenPositionRow,
   type OpenPositionRationale,
+  type PendingPositionLite,
 } from "../shared/TraderResults";
 import { polymarketEventUrl } from "../shared/marketLinks";
 import { useTradeExport } from "../shared/useTradeExport";
@@ -79,6 +81,14 @@ export default function SportsTrader({ bankroll }: { bankroll?: number }) {
   const [healthRefresh, setHealthRefresh] = useState(0);
 
   const session = (status?.session as SportsSessionSummary) ?? lastResult?.session ?? null;
+  const pending = (status as any)?.pending as {
+    count: number;
+    positions: Array<{
+      market: string; title: string | null; league?: string; direction: "YES" | "NO";
+      size: number; endDate?: string | null; ageMs: number; hasConditionId?: boolean;
+      provisionalOutcome?: "won" | "lost" | "pending";
+    }>;
+  } | undefined;
   const rs = status?.runStatus;
   const isRunning = loading || (rs?.isRunning ?? false);
   const display: SportsRunResult | null = lastResult ?? (rs?.lastResult as SportsRunResult | null) ?? null;
@@ -129,19 +139,35 @@ export default function SportsTrader({ bankroll }: { bankroll?: number }) {
   // Use the (truncated) question as the row "coin" label since sports
   // markets don't have a single-ticker concept like crypto. League label
   // goes into the spread slot as a secondary identifier.
-  const openRows: OpenPositionRow[] = (session?.openDetails ?? []).map((p) => {
-    const qShort = p.title.length > 60 ? p.title.slice(0, 57) + "…" : p.title;
-    return {
-      coin:       qShort,
-      link:       polymarketEventUrl(p.market),
-      direction:  p.direction,
-      sizeText:   `$${p.size.toFixed(2)}`,
-      entryText:  `${(p.avgEntry * 100).toFixed(1)}¢`,
-      spreadText: p.league !== "Other" ? p.league : undefined,
-      ageText:    relativeAge(p.openedAt),
-      rationale:  p.entryDecision ?? null,
-    };
-  });
+  // Active positions only (still before endDate) — past-endDate ones move to
+  // the pending card below so we don't double-display them.
+  const nowMs = Date.now();
+  const openRows: OpenPositionRow[] = (session?.openDetails ?? [])
+    .filter((p) => !p.endDate || new Date(p.endDate).getTime() > nowMs)
+    .map((p) => {
+      const qShort = p.title.length > 60 ? p.title.slice(0, 57) + "…" : p.title;
+      return {
+        coin:       qShort,
+        link:       polymarketEventUrl(p.market),
+        direction:  p.direction,
+        sizeText:   `$${p.size.toFixed(2)}`,
+        entryText:  `${(p.avgEntry * 100).toFixed(1)}¢`,
+        spreadText: p.league !== "Other" ? p.league : undefined,
+        ageText:    relativeAge(p.openedAt),
+        rationale:  p.entryDecision ?? null,
+      };
+    });
+
+  const pendingRows: PendingPositionLite[] = (pending?.positions ?? []).map((p) => ({
+    primary: p.title || p.market,
+    link: polymarketEventUrl(p.market),
+    secondary: p.league && p.league !== "Other" ? p.league : undefined,
+    direction: p.direction,
+    sizeText: `$${p.size.toFixed(2)}`,
+    whenText: p.hasConditionId === false ? "⚠ missing conditionId" : "awaiting Polymarket resolution",
+    isReady: p.hasConditionId !== false,
+    provisionalOutcome: p.provisionalOutcome,
+  }));
 
   return (
     <TraderShell
@@ -176,6 +202,14 @@ export default function SportsTrader({ bankroll }: { bankroll?: number }) {
       exportingTrades={exporting}
     >
       <OpenPositionsCard title="Open Positions" rows={openRows} />
+
+      {pending && pending.count > 0 && (
+        <PendingPositionsCard
+          title={`${pending.count} pending paper position${pending.count > 1 ? "s" : ""} past endDate — awaiting Polymarket resolution`}
+          positions={pendingRows}
+          footnote="Polymarket sports markets settle through UMA after the game. The '✓ áll: nyer' / '✗ áll: veszít' badge reads the market's CURRENT outcomePrices (real data) before the official resolution closes the position."
+        />
+      )}
 
       {display && display.results && display.results.length > 0 && (
         <ScanResultsCard

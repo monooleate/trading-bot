@@ -28,6 +28,7 @@ import {
   addOpenPosition,
 } from "./session-manager.mts";
 import { resolvePendingSportsPositions } from "./paper-resolver.mts";
+import { probeProvisionalOutcome } from "../shared/provisional-outcome.mts";
 import { markRunStart, markRunFinish, getSportsRunStatus } from "./run-state.mts";
 import type { SportsPosition, SportsMarket } from "./types.mts";
 import type { EntryDecisionSnapshot } from "../shared/types.mts";
@@ -284,6 +285,31 @@ function summarize(s: any) {
   };
 }
 
+// Past-endDate sports positions awaiting Polymarket (UMA) resolution, each
+// enriched with a provisional won/lost from the market's CURRENT outcomePrices.
+async function getSportsPending(session: any) {
+  const now = Date.now();
+  const past = (session.openPositions ?? []).filter(
+    (p: SportsPosition) => p.endDate && new Date(p.endDate).getTime() < now,
+  );
+  const positions = await Promise.all(past.map(async (p: SportsPosition) => {
+    const ageMs = now - new Date(p.endDate!).getTime();
+    return {
+      market:             p.market,
+      title:              p.question,
+      league:             p.league,
+      direction:          p.direction,
+      size:               p.costBasis,
+      endDate:            p.endDate,
+      ageMs,
+      hasConditionId:     !!p.conditionId,
+      provisionalOutcome: await probeProvisionalOutcome(p.conditionId, p.direction),
+    };
+  }));
+  positions.sort((a: any, b: any) => String(a.endDate).localeCompare(String(b.endDate)));
+  return { count: positions.length, nextReconcileAt: positions[0]?.endDate ?? null, positions };
+}
+
 async function getSportsStatus(): Promise<any> {
   const config    = getSportsConfig();
   const session   = await loadSportsSession(config.paperMode, SPORTS_DEFAULT_BANKROLL);
@@ -293,6 +319,7 @@ async function getSportsStatus(): Promise<any> {
     action:   "status",
     category: CATEGORY,
     session:  summarize(session),
+    pending:  await getSportsPending(session),
     runStatus,
     cronEnabled: true,        // wired via auto-trader-multi-cron
   };

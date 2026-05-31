@@ -30,6 +30,7 @@ import { makeDecision, setCooldown, padCryptoGates, warmCooldownCache } from "./
 import { placeBuyOrder } from "./crypto/execution.mts";
 import { handleBuyLifecycle, handleSellLifecycle, checkExitConditions } from "./crypto/order-lifecycle.mts";
 import { resolvePendingPaperPositions } from "./crypto/paper-resolver.mts";
+import { probeProvisionalOutcome } from "./shared/provisional-outcome.mts";
 import { fetchYesMidpoint } from "./crypto/live-price.mts";
 import { markRunStart, markRunFinish, getCryptoRunStatus } from "./crypto/run-state.mts";
 import {
@@ -951,7 +952,7 @@ async function getStatus(config: ReturnType<typeof getTraderConfig>, category: s
     // Past-endDate paper positions awaiting Polymarket resolution. simVersion
     // 3 has no simulator fallback — positions stay open until Gamma publishes
     // outcomePrices ∈ {0,1}.
-    base.pending = getCryptoPendingPositions(session);
+    base.pending = await getCryptoPendingPositions(session);
     // Active positions still in the trading window (with live-gate snapshot).
     base.openDetails = getCryptoOpenActive(
       session,
@@ -1048,7 +1049,13 @@ function getWeatherOpenActive(
 async function getWeatherPendingForSettlement(paperMode: boolean) {
   const all = await getPendingPositions(paperMode);
   const ready = all.positions.filter((p: any) => p.isReady);
-  return { count: ready.length, nextReconcileAt: ready[0]?.reconcileAfter ?? null, positions: ready };
+  // Provisional won/lost from the bucket sub-market's CURRENT Gamma
+  // outcomePrices (real data, cached 90s) — same as crypto.
+  const enriched = await Promise.all(ready.map(async (p: any) => ({
+    ...p,
+    provisionalOutcome: await probeProvisionalOutcome(p.conditionId, p.direction),
+  })));
+  return { count: enriched.length, nextReconcileAt: enriched[0]?.reconcileAfter ?? null, positions: enriched };
 }
 
 // Pending paper-position view for the crypto bot.
@@ -1058,40 +1065,46 @@ async function getWeatherPendingForSettlement(paperMode: boolean) {
 // Gamma; when the market settles the position closes on the next tick. There
 // is no simulator fallback — a position can sit here for the full UMA
 // resolution window (5–60 min typical, occasionally hours during disputes).
-function getCryptoPendingPositions(session: SessionState) {
+async function getCryptoPendingPositions(session: SessionState) {
   const now = Date.now();
-  const past = session.openPositions
-    .filter((p) => p.endDate && new Date(p.endDate).getTime() < now)
-    .map((p) => {
-      const endTs = new Date(p.endDate!).getTime();
-      const ageMs = now - endTs;
-      // Per-position diagnostic: explains *why* the resolver hasn't closed
-      // this position yet, so the operator can distinguish "UMA still
-      // voting" from "legacy position lacks conditionId".
-      let waitReason: string;
-      if (!p.conditionId) {
-        waitReason = "missing conditionId (legacy position — predates resolver wiring)";
-      } else if (ageMs < 5 * 60_000) {
-        waitReason = "UMA settlement window — typical 5–15 min after endDate";
-      } else if (ageMs < 60 * 60_000) {
-        waitReason = "extended UMA window — Polymarket not yet reporting closed";
-      } else {
-        waitReason = "long wait (>1h) — possible UMA dispute / market not finalised";
-      }
-      return {
-        market:             p.market,
-        title:              (p as any).title ?? null,
-        direction:          p.direction,
-        size:               p.costBasis,
-        endDate:            p.endDate!,
-        marketPriceAtEntry: p.marketPriceAtEntry ?? null,
-        predictedProb:      p.predictedProb ?? null,
-        ageMs,
-        hasConditionId:     !!p.conditionId,
-        waitReason,
-      };
-    })
-    .sort((a, b) => a.endDate.localeCompare(b.endDate));
+  const pastPositions = session.openPositions
+    .filter((p) => p.endDate && new Date(p.endDate).getTime() < now);
+
+  // Probe each pending market's CURRENT Gamma outcomePrices in parallel to
+  // surface a provisional won/lost even before UMA finalises (cached 90s).
+  const past = await Promise.all(pastPositions.map(async (p) => {
+    const endTs = new Date(p.endDate!).getTime();
+    const ageMs = now - endTs;
+    // Per-position diagnostic: explains *why* the resolver hasn't closed
+    // this position yet, so the operator can distinguish "UMA still
+    // voting" from "legacy position lacks conditionId".
+    let waitReason: string;
+    if (!p.conditionId) {
+      waitReason = "missing conditionId (legacy position — predates resolver wiring)";
+    } else if (ageMs < 5 * 60_000) {
+      waitReason = "UMA settlement window — typical 5–15 min after endDate";
+    } else if (ageMs < 60 * 60_000) {
+      waitReason = "extended UMA window — Polymarket not yet reporting closed";
+    } else {
+      waitReason = "long wait (>1h) — possible UMA dispute / market not finalised";
+    }
+    const provisionalOutcome = await probeProvisionalOutcome(p.conditionId, p.direction);
+    return {
+      market:             p.market,
+      title:              (p as any).title ?? null,
+      direction:          p.direction,
+      size:               p.costBasis,
+      endDate:            p.endDate!,
+      marketPriceAtEntry: p.marketPriceAtEntry ?? null,
+      predictedProb:      p.predictedProb ?? null,
+      ageMs,
+      hasConditionId:     !!p.conditionId,
+      waitReason,
+      // "won" | "lost" | "pending" — provisional, from current outcomePrices.
+      provisionalOutcome,
+    };
+  }));
+  past.sort((a, b) => a.endDate.localeCompare(b.endDate));
   return {
     count: past.length,
     nextReconcileAt: past[0]?.endDate ?? null,

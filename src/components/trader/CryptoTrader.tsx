@@ -97,6 +97,7 @@ interface PendingPosition {
   ageMs: number;
   hasConditionId?: boolean;
   waitReason?: string;
+  provisionalOutcome?: "won" | "lost" | "pending";
 }
 
 function formatAgeAgo(ms: number): string {
@@ -347,6 +348,7 @@ export default function CryptoTrader({ bankroll }: { bankroll?: number }) {
               ? "⚠ missing conditionId"
               : "awaiting Polymarket resolution",
             isReady: p.hasConditionId !== false,
+            provisionalOutcome: p.provisionalOutcome,
           }))}
           footnote="Polymarket BTC up/down markets settle through UMA (oracle propose → 2h dispute window → finalize). Typical close 5min–4h after endDate. The resolver re-checks every 3 min and auto-closes once Gamma reports closed=true AND umaResolutionStatus=resolved AND outcomePrices ∈ {0,1}. Click '⟳ Reconcile pending' for a per-position live Gamma probe — it shows exactly which gate is still blocking."
         />

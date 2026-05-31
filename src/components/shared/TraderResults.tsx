@@ -526,6 +526,10 @@ export interface PendingPositionLite {
   whenText: string;
   /** When true the row gets the green "ready" border. */
   isReady?: boolean;
+  /** Provisional win/loss from the CURRENT Gamma outcomePrices, before the
+   *  official UMA resolution closes the position. "won"/"lost" render a small
+   *  coloured badge; "pending"/undefined render nothing (not yet decided). */
+  provisionalOutcome?: "won" | "lost" | "pending";
 }
 
 export interface PendingPositionsCardProps {
@@ -577,6 +581,22 @@ export function PendingPositionsCard(p: PendingPositionsCardProps) {
           )}
           {pos.predictionText && (
             <span className="ts-pending-pred">{pos.predictionText}</span>
+          )}
+          {(pos.provisionalOutcome === "won" || pos.provisionalOutcome === "lost") && (
+            <span
+              title="Előzetes eredmény a Polymarket aktuális piaci árából (outcomePrices) — a hivatalos UMA-zárás előtt. Valós piaci adat, nem szimuláció."
+              style={{
+                fontSize: "0.68rem",
+                fontWeight: 700,
+                whiteSpace: "nowrap",
+                padding: "1px 6px",
+                borderRadius: 4,
+                color: pos.provisionalOutcome === "won" ? "var(--accent)" : "var(--danger)",
+                border: `1px solid ${pos.provisionalOutcome === "won" ? "var(--accent)" : "var(--danger)"}`,
+              }}
+            >
+              {pos.provisionalOutcome === "won" ? "✓ áll: nyer" : "✗ áll: veszít"}
+            </span>
           )}
           <span className="ts-pending-size">{pos.sizeText}</span>
           <span className="ts-pending-when">{pos.whenText}</span>

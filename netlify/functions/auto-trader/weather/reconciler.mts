@@ -363,6 +363,7 @@ export async function getPendingPositions(paperMode: boolean = true) {
     nextReconcileAt: sorted[0].weatherMeta!.reconcileAfter,
     positions: sorted.map(p => ({
       market:         p.market,
+      conditionId:    p.conditionId ?? null,
       city:           p.weatherMeta!.city,
       date:           p.weatherMeta!.date,
       bucket:         p.weatherMeta!.bucketLabel,

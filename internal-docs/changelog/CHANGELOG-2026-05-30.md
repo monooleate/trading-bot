@@ -49,3 +49,24 @@ A `findWeatherMarketsDetailed` a `/events?order=volume24hr&ascending=false`-szal
 ### Hatás
 
 A bot most **37–46 future-dated weather-piacot lát folyamatosan** (London, Paris, Seoul, Toronto, Seattle, NYC, São Paulo, Shenzhen, …) szemben a korábbi ~2-vel. Korábbi belépés (nagyobb forecast-edge a window előtt, mielőtt a piac beárazódik) + sokkal több trade-lehetőség. `tsc` + `build` zöld.
+
+---
+
+## (c) — Pending pozíciók provisional nyer/veszít badge (crypto + weather + sports)
+
+### Trigger
+
+User: a „pending paper positions past endDate — awaiting Polymarket resolution" dobozban látszódjon, hogy nyert vagy vesztett, ha lehetséges — **minden** Polymarket-botra.
+
+### Megoldás — valós piaci adatból (nem szimuláció)
+
+Egy „pending" pozíció past-endDate, de a Gamma még nem jelentett végleges resolution-t (UMA propose→dispute→finalize ablak). A kimenetel viszont általában **már eldőlt**: a beárazódott piac a nyertes kimenetelt ≈1-re, a vesztest ≈0-ra árazza, jóval az UMA-véglegesítés előtt. A `outcomePrices` a **valós Polymarket-piac** ára (Gamma) — ugyanaz a forrás, amiből a bot a **tényleges** zárást is csinálja (a 2026-05-10 simV3-fix óta paper PnL == live PnL, valós resolution-only). A badge csak **korábban** olvassa ki.
+
+- Új **`shared/provisional-outcome.mts`** — `probeProvisionalOutcome(conditionId, direction)`: a piac **closed-filter NÉLKÜLI** `outcomePrices`-át kéri (így a past-endDate de még nyitott piac is ad adatot), 90s Blobs-cache-sel. Tiszta classifier (`classifyProvisional`): `YES = outcomePrices[0]`; `YES ≥ 0.9` → YES nyer, `YES ≤ 0.1` → NO nyer, közte → „pending". Új `provisional-outcome.test.mts` (12 case) pin-eli a leképezést.
+- **Crypto** (`getCryptoPendingPositions`), **Weather** (`getWeatherPendingForSettlement` + `reconciler.getPendingPositions` most `conditionId`-t is ad), **Sports** (új `getSportsPending` + új `pending` mező a statusban + a SportsTrader most külön **PendingPositionsCard**-ot renderel, az open card pedig csak az aktív, még-nem-lejárt pozíciókat mutatja) — mind a shared helpert hívja, pozíciónként párhuzamosan.
+- **Frontend**: a megosztott `PendingPositionsCard` új badge-et renderel: **✓ áll: nyer** (zöld) / **✗ áll: veszít** (piros), tooltippel hogy valós piaci adat. A 3 trader (Crypto/Weather/Sports) átadja a `provisionalOutcome`-ot.
+- **HL-perp / F-Arb**: nem alkalmazható — ezek perp-ár / funding alapján zárnak, nincs Polymarket-UMA „pending" fogalmuk.
+
+### Verifikáció
+
+`provisional-outcome.test.mts` 12 case zöld; `tsc --noEmit` + `npm run build` zöld.
