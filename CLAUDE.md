@@ -374,20 +374,20 @@ netlify deploy --prod --dir=dist
 
 ---
 
-## AKTUÁLIS ÁLLAPOT (2026-05-30)
+## AKTUÁLIS ÁLLAPOT (2026-06-04)
 
 **Élő deploy:** `mj-trading.netlify.app`. Paper mode, simVersion 3 (crypto), v2 (HL).
 
 ### 4 fő bot státusz
 
-> **Megjegyzés (2026-05-29):** mind a 4 sort frissítettük élő pull-lal (HL-audit + weather cron-fix + crypto deploy-gap audit + F-Arb audit kapcsán). Mind a 4 bot 2026-05-29-én re-validálva.
+> **Megjegyzés (2026-06-04):** a 06-04 auditok + fixek után **mind az 5 bot (crypto/weather/HL/F-Arb/sports) RESETELVE tiszta lapra** (user-kérés: „nullázd mindenhol a kereskedések múltbeli eredményeit") — a tőke megtartva, a trade-history/PnL/IC-kalibráció/open pozíciók nullázva, mind fut (cron ON, egyik sem stopped). A lenti sorok a **reset előtti audit-állapotot** (PnL/trades) dokumentálják a tanulság kedvéért; az **élő számok mostantól 0 closed / PnL $0 / bankroll = start**.
 
 | Bot | Bankroll | PnL | Trades | Open | Megjegyzés |
 |-----|---------|-----|--------|------|-------|
-| **Crypto** | $250 → **$250.00** (reset) | **$0** | **0 closed** | 0 open | **05-29 élő (45. session)**: 45-trade audit — adatintegritás hibátlan (Gamma 16/16, PnL 45/45 bit-pontos, bankroll reconcile 0.0000), de a Sprint 41-42B fixek **2 hétig élesítetlenek** voltak (a 05-15 deploy elbukott: top-level `signal-combiner-threshold.test.mts` function-bundling hiba) → a bot $250→$109-re vérzett lapos-zaj predikciókon (22% WR, PF 0.72). **Build-fix deployolva** + session **resetelve** tiszta lapra ($250/0) + Normál preset (combinerConfidenceMin 0.05) + combinerKBlindDownweight 0.5. |
-| **Weather** | $250 → **$241.50** | **-$8.50** | **7 closed (57.1% WR)** | 0 open | **05-30 diagnózis**: a Sprint 43 cron-fix óta 0 trade — **NEM hiba**: a fix óta 1 ablakban (05-30) csak Shenzhen (lefedetlen volt) + London (lefedett, de már beárazódott, no edge) piac volt. A bot fut + helyesen skippel. **Shenzhen lefedettség hozzáadva** (ZGSZ, 27→28 város). (changelog 2026-05-30 (a)) |
-| **HL Perp** | $200 → **$196.45** | **-$3.55** | **22 closed (6W/16L)** | 0 open | **05-29 élő audit**: history valid (bankroll-rekonciliáció bit-pontos), de 🔴 consecutive-loss **deadlock** (12 napja állt) → **lejavítva Sprint 42G** (auto-recovery + resume fix). 🟠 long-bias (22/22 LONG, 27% WR) → B18 vizsgálat. |
-| **F-Arb** | $200 → **$200** (saját bankroll) | $0 | 0 closed | 0 open | **05-29 élő**: cron fut (5 coin / 3 min), 0 trade (a spreadek negatívak/küszöb-alattiak). **Sprint 44**: bidirekcionális (reverse arb paperben aktív, live-gated → B20). **Sprint 45**: **saját bankroll** — már NEM osztozik a HL-directional sessionön (külön $200-as tőke, a funding-PnL a saját bankrolljába folyik). |
+| **Crypto** | **$350** (start = current) | **$0** | **0 closed** | 0 open | **06-04 RESET tiszta lapra** a 10-trade audit után (Gamma 10/10 valid, mind NO-ra zárult egy BTC-lejtmenetben, 7/10 bukás YES-bias miatt). **Knob:** `combinerConfidenceMin` 0.05→**0.08** (near-noise threshold-trade-ek skippelnek), `combinerKBlindDownweight` 0.5. „Mindig fordítva" toggle **elvetve** (70% WR de PnL ~−$30, regime-fit n=10) → helyette **B21** (K-anchored combiner). B21 diagnózis igazolt: vol_div K-aware, de a 7 K-vak jel **eldilúálja** + intermittens **σ-glitch** (495% @ 64k). (changelog 2026-06-04) |
+| **Weather** | **$250** (start = current) | **$0** | **0 closed** | 0 open | **06-04 RESET tiszta lapra** a 25-trade audit után (PF 0.39, calibDev 0.40, flippelt PnL +$87 → a 80% intuíció helyes). Gyökérok: bucket-matcher max-disagreement = adverse selection. Fix elhalasztva (user) → **B22** (invert-toggle) + **B23** (gyökérok). (changelog 2026-06-04 (b)) |
+| **HL Perp** | **$200** (start = current) | **$0** | **0 closed** | — | **06-04 RESET tiszta lapra**. Korábbi: 🔴 consecutive-loss deadlock → Sprint 42G fix; 🟠 long-bias (22/22 LONG, 27% WR) → **B18** vizsgálat (30+ trade precondition). |
+| **F-Arb** | **$200** (saját bankroll) | **$0** | 0 closed | 0 open | **06-04 RESET + Sprint 47 fix**: a 0 trade strukturális bug volt (sizing-floor + 10× túl magas spread-küszöb) → sizing bump-to-min + minPositionUSDC $25 + minSpread 17.5%/yr + sanity-cap 438%/yr. Szimuláció: SOL ~$40-on nyitna. (changelog 2026-06-04 (b)) |
 
 ### Mit fix utoljára (45. session, 2026-05-29 (c))
 

@@ -15,7 +15,7 @@ import { alertError, alertLiveBlocked } from "../../shared/telegram.mts";
 import { computeLiveReadiness, shouldForcePaper, type LiveReadinessReport } from "../../shared/live-readiness.mts";
 import type { HlCoin } from "../types.mts";
 import { scanFundings } from "./fr-scanner.mts";
-import { detectArbOpportunity, rankOpportunities } from "./arb-detector.mts";
+import { detectArbOpportunity, rankOpportunities, computeArbPositionSize } from "./arb-detector.mts";
 import { openArbPosition, closeArbPosition } from "./fr-executor.mts";
 import {
   loadArbSession,
@@ -386,7 +386,11 @@ async function runFundingArbInner(): Promise<any> {
       const oiCap = opp.openInterestUSD > 0
         ? Math.min(opp.openInterestUSD * 0.001, headroom)
         : headroom;
-      const sizeUSDC = Math.min(headroom * 0.5, oiCap);
+      // Conservative half-headroom sizing with a bump-to-min floor — see
+      // computeArbPositionSize. Fixes the structural blocker where a small
+      // bankroll's first position ($200 × 40% × 0.5 = $40) never cleared the
+      // per-position minimum (confirmed live: BTC → "Size $40 < min $50").
+      const sizeUSDC = computeArbPositionSize(headroom, oiCap, config.minPositionUSDC);
       if (sizeUSDC < config.minPositionUSDC) {
         coinGates.push({
           label: ARB_GATE_LABELS[7],

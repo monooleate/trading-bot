@@ -89,3 +89,29 @@ export function detectArbOpportunity(d: FundingData, config: FrArbConfig): ArbOp
 export function rankOpportunities(opps: ArbOpportunity[]): ArbOpportunity[] {
   return [...opps].sort((a, b) => b.score - a.score);
 }
+
+/**
+ * Conservative position sizing with a bump-to-min floor (2026-06-04).
+ *
+ * Base rule: deploy half the remaining capital headroom, capped at the
+ * OI-derived ceiling (we never become a meaningful share of the book).
+ *
+ * The half-headroom rule starves the FIRST position on a small bankroll:
+ * e.g. $200 bankroll × 40% cap × 0.5 = $40, below a $50-era minimum, so the
+ * bot could never open at all even when a coin passed every viability gate.
+ * If half-headroom undershoots the minimum but there is genuinely enough
+ * headroom AND OI capacity for a full minimum-size position, size up to the
+ * minimum instead. Returns a value < minPositionUSDC only when the headroom
+ * or OI capacity truly cannot support one (→ caller skips).
+ */
+export function computeArbPositionSize(
+  headroom: number,
+  oiCap: number,
+  minPositionUSDC: number,
+): number {
+  let size = Math.min(headroom * 0.5, oiCap);
+  if (size < minPositionUSDC && headroom >= minPositionUSDC && oiCap >= minPositionUSDC) {
+    size = minPositionUSDC;
+  }
+  return size;
+}

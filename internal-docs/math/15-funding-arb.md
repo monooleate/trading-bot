@@ -63,7 +63,8 @@ loadArbSession       computeLiveReadiness()    scanFundings([5 coins])
                 for opp of ranked:
                   if maxArbPositions reached: break
                   if openCoinSet.has(opp.coin): continue
-                  sizeUSDC = min(headroom × 0.5, openInterest × 0.1%)
+                  sizeUSDC = computeArbPositionSize(headroom, oiCap, minPositionUSDC)
+                             ← bump-to-min ha headroom & oiCap ≥ min (2026-06-04)
                   if sizeUSDC < minPositionUSDC: skip
                   openArbPosition(opp, sizeUSDC, entryDecision)
                              │     ← HL IOC SHORT + Binance spot BUY
@@ -137,7 +138,7 @@ spreadAnnualized = spread × 8760 × 100   // %/yr
 
 | Gate | Default | Magyarázat |
 |------|---------|------------|
-| `spread >= minSpreadHourly` | 0.0001 (0.01%/h) | Pozitív + fee-aware küszöb |
+| `spread >= minSpreadHourly` | **0.00002 (0.002%/h ≈ 17.5%/yr)** | Pozitív + fee-aware küszöb. 2026-06-04 recalibrálva 0.0001-ről (a régi 87.6%/yr soha nem teljesült; reális spread 3.6–31%/yr). |
 | `breakEvenDays <= maxHoldDays` | ≤ 14d | `breakEvenH = (feeRoundtripHl + feeRoundtripBinance) / spread` — fee-recovery |
 | `openInterestUSD >= minOpenInterestUSD` | $5M | Likviditás floor (slippage) |
 
@@ -153,14 +154,14 @@ A 8 gate sorrendben — a `EntryDecisionSnapshot.gates[]` ezeket építi
 
 | # | Gate | Forrás | Default | Bukás |
 |---|------|--------|---------|-------|
-| 1 | Spread ≥ küszöb | `opp.spread >= minSpreadHourly` | 0.0001/h | (arb-detector korábban filterezi) |
-| 2 | Spread ≤ sanity cap | `opp.spread <= maxSpreadHourly` | 0.5%/h | "Spread sanity cap … likely feed glitch" |
+| 1 | Spread ≥ küszöb | `opp.spread >= minSpreadHourly` | **0.00002/h** (17.5%/yr) | (arb-detector korábban filterezi) |
+| 2 | Spread ≤ sanity cap | `opp.spread <= maxSpreadHourly` | **0.05%/h** (438%/yr) | "Spread sanity cap … likely feed glitch". 2026-06-04 szigorítva 0.5%/h-ról (a 2952%/yr glitch átment). |
 | 3 | Break-even hold ≤ max | `totalFees / spread <= maxHoldDays` | – | "Break-even hold Xd > max Yd" |
 | 4 | Open interest ≥ küszöb | `opp.openInterestUSD >= minOpenInterestUSD` | $5M | (arb-detector) |
 | 5 | Per-coin uniqueness | `!openCoinSet.has(opp.coin)` | – | A coinra már van nyitott pozíció |
 | 6 | **Coin-capacity (cross-position)** ✦ | `openCoinSet.has(coin) === false` (lockstep #5-tel) | – | "Már van nyitott F-Arb pozíció <COIN>-n" |
 | 7 | Pozíció szám < max | `openArbPositions(session).length < maxArbPositions` | 3 | "Max arb positions reached" |
-| 8 | Capital cap (sizing) | `sizeUSDC >= minPositionUSDC AND headroom >= 0` | $50 min, 40% bankroll cap | "Size $X < min $50" |
+| 8 | Capital cap (sizing) | `sizeUSDC >= minPositionUSDC AND headroom >= 0` | **$25 min**, 40% bankroll cap | "Size $X < min $25" |
 
 ✦ Új gate a 2026-05-14e cross-position consistency sweep-ből — lásd §10 F9. Lockstep a #5 "Per-coin uniqueness" gate-tel; informational defense-in-depth, expliciten kommunikálja az F-Arb sajátos kapacitás-szemantikáját (1 HL-short + 1 Binance-long páros / coin).
 
@@ -172,11 +173,22 @@ headroom   = maxCapital − deployedCapital(session)
 oiCap      = openInterestUSD > 0
              ? min(openInterestUSD × 0.001, headroom)    // 0.1% of OI
              : headroom
-sizeUSDC   = min(headroom × 0.5, oiCap)                  // 50% of headroom
+sizeUSDC   = computeArbPositionSize(headroom, oiCap, minPositionUSDC)
+//           base = min(headroom × 0.5, oiCap)            // 50% of headroom
+//           bump-to-min: ha base < min DE headroom ≥ min ÉS oiCap ≥ min
+//                        → size = minPositionUSDC (különben skip)
 ```
 
 A `0.001 × OI` cap garantálja, hogy soha nem leszünk a könyv mérhető része
 (pl. $2.4B BTC OI → max $2.4M position; nem fogjuk a piacot mozdítani).
+
+**Bump-to-min (2026-06-04, Sprint 47):** a konzervatív `headroom × 0.5` szabály
+kis bankrollon kiéheztette az **első** pozíciót — pl. $200 × 40% × 0.5 = $40,
+ami a régi $50 floor alatt volt → a bot **soha** nem nyitott, akkor sem ha egy
+coin minden viability gate-en átment (élő bizonyíték: BTC → „Size $40 < min $50").
+Ha a fél-headroom a minimum alatt van, **de** van elég headroom ÉS OI-kapacitás
+egy teljes minimum-pozícióra, a méret a minimumra emelődik. Ez + a `minPositionUSDC`
+$50→$25 csökkentés oldotta fel a strukturális blokkolót.
 
 ---
 

@@ -130,7 +130,7 @@ const SCHEMA: Record<string, FieldSpec> = {
   //   effective_ic[s] = n_s/(n_s+k) × realized + k/(n_s+k) × prior
   // Magas k = lassan reagál a realized adatokra (konzervatív), alacsony k =
   // gyorsan a realized-re ugrik (kis sample-en zaj-szenzitív).
-  useRealizedIC:             { default: 0,    min: 0,    max: 1,    label: "Use realized IC (per-bot)",     step: 1,     unit: "bool", category: "common", group: "Signal calibration", help: "OFF = a signal-combiner a statikus akadémiai priorokat használja (orderflow 0.09, vol_div 0.06, stb.). ON = a closedTrades-ből számolt realized IC keveredik be Bayes-shrinkage-zel — kalibrálja a botot a saját live track-record-jához. Crypto + HL bot-on hat, ?category=cat paraméterrel a combiner-hívásban." },
+  useRealizedIC:             { default: 0,    min: 0,    max: 1,    label: "Use realized IC (per-bot)",     step: 1,     unit: "bool", category: "common", group: "Signal calibration", help: "OFF = a signal-combiner a statikus akadémiai priorokat használja (orderflow 0.09, vol_div 0.06, stb.). ON = a closedTrades-ből számolt realized IC keveredik be Bayes-shrinkage-zel — a bot a saját track-record-jához kalibrálja a jelek súlyát (a tartósan rossz jelek, pl. contrarian, automatikusan negatív súlyt kapnak → invertálódnak). ⚠️ Csak a crypto és HL botra van hatása; a többi botnál (weather, F-Arb, sports) a kapcsoló látszik, de nem aktív. A hatás fokozatos: ~30+ trade kell hogy a realizált IC felülírja a priort (lásd Shrinkage K)." },
   calibrationShrinkageK:     { default: 30,   min: 5,    max: 100,  label: "Shrinkage K (prior weight)",    step: 5,     unit: "n",    category: "common", group: "Signal calibration", help: "Bayes-shrinkage konstans. Magasabb K = a prior lassabban olvad fel (n=30 trade-nél 50/50, n=200-nál ~87/13 a realized javára). Alacsonyabb K = gyorsabb realized-átállás, de zaj-szenzitív. 30 az 50-trade küszöbnél értelmes kezdő (50/50-nél nagyjából egyensúlyi)." },
   // Time-decay half-life for realized IC computation. 0 = uniform weighting
   // (uses ALL trades equally — current pre-2026-05-14 behavior). >0 enables
@@ -156,7 +156,7 @@ const SCHEMA: Record<string, FieldSpec> = {
   hlMaxEdgeCap:                { default: 0.40, min: 0.10, max: 0.95, label: "Sanity cap (max gross edge)",   step: 0.01,  unit: "frac", category: "hyperliquid", group: "Sanity gates", help: "HL signal.edge plafonja. Edge 0.40 = a combiner 70% biztos a directional view-ban. Felette ~mindig model-error." },
   hlWatchExtremeEdgeThreshold: { default: 0.20, min: 0.05, max: 0.50, label: "WATCH + extreme edge cap",      step: 0.01,  unit: "frac", category: "hyperliquid", group: "Sanity gates", help: "Ha a combiner WATCH-ot ajánl + edge > ez, vétó. Azonos logika a crypto bot-éval." },
   // ─── Funding Arb knobs ──────────────────────────────────────────
-  frMinSpreadHourly:         { default: 0.0001, min: 0.00001, max: 0.005, label: "Min spread (hourly)",         step: 0.00005, unit: "frac", category: "funding-arb", group: "Risk & sizing", help: "Minimum HL/Binance funding rate különbség óránként amitől entry-zünk. 0.0001 = 0.01%/h = ~88%/yr break-even reverse." },
+  frMinSpreadHourly:         { default: 0.00002, min: 0.00001, max: 0.005, label: "Min spread (hourly)",        step: 0.00001, unit: "frac", category: "funding-arb", group: "Risk & sizing", help: "Minimum HL/Binance funding rate különbség óránként amitől entry-zünk. 0.00002 = 0.002%/h ≈ 17.5%/yr. A 0.29% roundtrip fee + 14d hold valódi break-even ~7.5%/yr; a reális cross-venue spread 3.6–31%/yr. (A régi 0.0001 = ~88%/yr soha nem teljesült → 0 trade.)" },
   frMinOpenInterestUSD:      { default: 5000000, min: 1000000, max: 100000000, label: "Min open interest",       step: 500000,  unit: "USD",  category: "funding-arb", group: "Risk & sizing", help: "Minimum HL OI a coin-on ($M-ban). Védi a botot a vékony piacoktól ahol a slippage felemészti a spread-et." },
   frMaxHoldDays:             { default: 14,   min: 1,     max: 60,       label: "Max hold (days)",              step: 1,     unit: "days",  category: "funding-arb", group: "Risk & sizing", help: "Ennyi nap után zárjuk a pozíciót függetlenül a spread-től. Védi a botot a stale-positionoktól (pl. funding regime váltás után)." },
   frMaxCapitalPct:           { default: 0.40, min: 0.05,  max: 0.80,     label: "Max capital allocated",        step: 0.05,  unit: "frac",  category: "funding-arb", group: "Risk & sizing", help: "A bankroll maximum hány %-a lehet egyszerre arb pozíciókban. 40% default = még marad room a HL perp + crypto bot számára." },
@@ -164,7 +164,7 @@ const SCHEMA: Record<string, FieldSpec> = {
   // F-Arb sanity gate — feed-glitch detector. A funding rate-ek a valóságban
   // max ~0.1%/h-ra mennek fel; 0.5%/h fölött ~mindig NaN / stale cache /
   // decimal-place error a feed-en.
-  frMaxSpreadHourly:         { default: 0.005, min: 0.001, max: 0.05,    label: "Spread sanity cap (max h)",    step: 0.0005, unit: "frac", category: "funding-arb", group: "Sanity gates", help: "Funding spread hard plafonja. 0.005 = 0.5%/h ≈ 4380%/yr — a valóságban soha nem éri el normál market feed-en. Felette feed-glitch (NaN, stale cache, decimal-place bug)." },
+  frMaxSpreadHourly:         { default: 0.0005, min: 0.0002, max: 0.05,  label: "Spread sanity cap (max h)",    step: 0.0001, unit: "frac", category: "funding-arb", group: "Sanity gates", help: "Funding spread hard plafonja. 0.0005 = 0.05%/h ≈ 438%/yr — ~14× a legszélesebb reális spread (SOL ~31%/yr) felett, de elkapja a feed-glitch osztályt (pl. 2026-06-04: BTC 0.337%/h = 2952%/yr glitch). A régi 0.5%/h túl laza volt, átengedte." },
   // ─── Sports knobs ───────────────────────────────────────────────
   sportsEdgeThreshold:       { default: 0.10, min: 0.02,  max: 0.40,     label: "Edge threshold (net)",         step: 0.005, unit: "frac",  category: "sports", group: "Risk & sizing", help: "Pinnacle-derived true probability és Polymarket-ár közti minimum edge fee után." },
   sportsMaxPositionUSD:      { default: 20,   min: 2,     max: 200,      label: "Max position size",            step: 1,     unit: "USD",   category: "sports", group: "Risk & sizing", help: "Egy sports trade max USD értéke." },
@@ -349,38 +349,38 @@ export const PRESETS: Record<string, CategoryPresets> = {
   "funding-arb": {
     loose: {
       label: "Lazább",
-      description: "Spread ≥0.005%/h (~43%/yr), OI floor $2M, max 60 nap hold. Sanity cap enyhébb (1%/h). Több arb sample a paper IC-hez. Vékonyabb piacokon is enged.",
+      description: "Spread ≥0.001%/h (~8.8%/yr), OI floor $2M, max 60 nap hold. Sanity cap 0.1%/h. Több arb sample a paper IC-hez. Vékonyabb piacokon is enged. (2026-06-04 recalibrálva a reális 3.6–31%/yr spreadekhez.)",
       values: {
-        frMinSpreadHourly:     0.00005,
+        frMinSpreadHourly:     0.00001,  // 0.001%/h ≈ 8.8%/yr (schema min)
         frMinOpenInterestUSD:  2000000,
         frMaxHoldDays:         60,
         frMaxCapitalPct:       0.50,
         frMaxOpenPositions:    5,
-        frMaxSpreadHourly:     0.010,  // 1%/h sanity (loose)
+        frMaxSpreadHourly:     0.001,    // 0.1%/h sanity (loose)
       },
     },
     normal: {
       label: "Normál",
-      description: "Spread ≥0.01%/h (~88%/yr), OI floor $5M, 14 nap hold. Sanity cap 0.5%/h feed-glitch védelem. A 2026-05-10 audit default — atomic 2-leg open + asymmetric close slippage.",
+      description: "Spread ≥0.002%/h (~17.5%/yr), OI floor $5M, 14 nap hold. Sanity cap 0.05%/h feed-glitch védelem. (2026-06-04 recalibrálva: a régi ~88%/yr küszöb strukturálisan 0 trade-et adott.)",
       values: {
-        frMinSpreadHourly:     0.0001,
+        frMinSpreadHourly:     0.00002,  // 0.002%/h ≈ 17.5%/yr
         frMinOpenInterestUSD:  5000000,
         frMaxHoldDays:         14,
         frMaxCapitalPct:       0.40,
         frMaxOpenPositions:    3,
-        frMaxSpreadHourly:     0.005,
+        frMaxSpreadHourly:     0.0005,   // 0.05%/h ≈ 438%/yr
       },
     },
     strict: {
       label: "Szigorú",
-      description: "Spread ≥0.05%/h (~438%/yr), OI floor $20M, 7 nap hold. Sanity cap 0.3%/h (szigorúbb glitch detector). Csak az extrém-spread eseményeket fogjuk (post-listing pump, leveraged-token squeeze).",
+      description: "Spread ≥0.005%/h (~44%/yr), OI floor $20M, 7 nap hold. Sanity cap 0.03%/h (szigorúbb glitch detector). Csak az erős-spread eseményeket fogjuk (post-listing pump, leveraged-token squeeze).",
       values: {
-        frMinSpreadHourly:     0.0005,
+        frMinSpreadHourly:     0.00005,  // 0.005%/h ≈ 44%/yr
         frMinOpenInterestUSD:  20000000,
         frMaxHoldDays:         7,
         frMaxCapitalPct:       0.25,
         frMaxOpenPositions:    2,
-        frMaxSpreadHourly:     0.003,
+        frMaxSpreadHourly:     0.0003,   // 0.03%/h ≈ 263%/yr
       },
     },
   },

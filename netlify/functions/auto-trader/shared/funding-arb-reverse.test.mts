@@ -14,7 +14,7 @@
 //
 // Run: npx tsx netlify/functions/auto-trader/shared/funding-arb-reverse.test.mts
 
-import { detectArbOpportunity } from "../hyperliquid/funding-arb/arb-detector.mts";
+import { detectArbOpportunity, computeArbPositionSize } from "../hyperliquid/funding-arb/arb-detector.mts";
 import { accrueFunding, creditArbPnl, resetArbSession, topupArbSession, DEFAULT_ARB_BANKROLL } from "../hyperliquid/funding-arb/fr-session.mts";
 import type { FundingData, FrArbConfig, ArbSessionState, ArbPosition } from "../hyperliquid/funding-arb/types.mts";
 
@@ -167,6 +167,33 @@ const basePos = (over: Partial<ArbPosition>): ArbPosition => ({
   const s5 = topupArbSession(s4, 100);
   expect(approx(s5.bankrollCurrent, 457.5, 1e-6) && approx(s5.bankrollStart, 450, 1e-6),
     "topup.additive", `expected current 457.5 / start 450, got ${s5.bankrollCurrent}/${s5.bankrollStart}`);
+}
+
+// ── Sizing: bump-to-min floor (2026-06-04 structural blocker fix) ───────────
+{
+  // The smoking gun: $200 bankroll × 40% cap = $80 headroom on an empty book.
+  // Half-headroom = $40. With a $50 min the old code skipped forever; the
+  // bump-to-min lifts it to exactly the minimum since headroom/OI both allow.
+  const s1 = computeArbPositionSize(80, 1_000_000, 50);
+  expect(approx(s1, 50, 1e-9), "size.bumpToMin", `headroom $80, min $50 → bump to $50, got ${s1}`);
+
+  // New $25 min on the same $80 headroom: half-headroom $40 already clears
+  // the floor, so NO bump — conservative size wins.
+  const s2 = computeArbPositionSize(80, 1_000_000, 25);
+  expect(approx(s2, 40, 1e-9), "size.noBumpNeeded", `headroom $80, min $25 → keep $40, got ${s2}`);
+
+  // OI capacity below the minimum must NOT be bumped — we'd become too large
+  // a share of a thin book. Returns the sub-min value so the caller skips.
+  const s3 = computeArbPositionSize(80, 20, 50);
+  expect(approx(s3, 20, 1e-9), "size.oiCapBlocks", `oiCap $20 < min $50 → no bump, got ${s3}`);
+
+  // Headroom below the minimum (cap nearly exhausted) → no bump, caller skips.
+  const s4 = computeArbPositionSize(30, 1_000_000, 50);
+  expect(s4 < 50, "size.headroomBlocks", `headroom $30 < min $50 → sub-min (skip), got ${s4}`);
+
+  // OI cap binds below half-headroom but still ≥ min → conservative size = oiCap.
+  const s5 = computeArbPositionSize(200, 60, 25);
+  expect(approx(s5, 60, 1e-9), "size.oiCapBinds", `min(100, 60) = 60, got ${s5}`);
 }
 
 // ── Report ──────────────────────────────────────────────────────────────────
