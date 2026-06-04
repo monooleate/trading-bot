@@ -409,13 +409,42 @@ async function getVolSignal(
     // 1. Realized vol annualizált (jelenlegi RV15 logika érintetlen).
     const closes = await fetchCloses(20);
     if (closes.length < 5) return { prob: null, detail: { error: "no price data" } };
-    const returns = closes.slice(1).map((c, i) => Math.log(c / closes[i]));
+    // B21 (2026-06-04) σ-glitch guard. The 20-sample minutely realized-vol
+    // is dominated by its single largest |return|: one spurious ~3%/min
+    // print inflates the annualized σ ~10× (observed 46.9% → 495.5% on
+    // repeat calls for the SAME market), which collapses the BS-digital
+    // fairYes toward 0.5 for EVERY strike — the K-aware signal silently
+    // dies and the bot trades flat noise. Two guards:
+    //   (1) winsorize each per-minute log-return to ±2.5% (no normal BTC
+    //       minute moves that much; beyond it is almost always a feed
+    //       glitch), damping single-bar leverage on the variance; and
+    //   (2) if the annualized σ still lands outside a sane BTC band
+    //       [10%, 200%], treat the reading as unreliable and return null.
+    //       A MISSING vol signal is safe (no K-anchor → combiner stays near
+    //       0.5 → the confidence gate blocks the trade); a GLITCHED one is
+    //       not (it flattens fairYes and fabricates edge).
+    const RET_CLIP = 0.025;
+    const returns = closes.slice(1).map((c, i) => {
+      const r = Math.log(c / closes[i]);
+      return Math.max(-RET_CLIP, Math.min(RET_CLIP, r));
+    });
     const mean = returns.reduce((s, v) => s + v, 0) / returns.length;
     const sigmaAnnual = Math.sqrt(
       (returns.reduce((s, v) => s + (v - mean) ** 2, 0) / returns.length) * 365 * 24 * 60,
     );
     if (!Number.isFinite(sigmaAnnual) || sigmaAnnual <= 0) {
       return { prob: null, detail: { error: "sigma invalid", sigmaAnnual } };
+    }
+    const SIGMA_MIN = 0.10, SIGMA_MAX = 2.0;
+    if (sigmaAnnual < SIGMA_MIN || sigmaAnnual > SIGMA_MAX) {
+      return {
+        prob: null,
+        detail: {
+          skipped: "sigma out of sane band — glitch guard (B21)",
+          sigmaAnnual: (sigmaAnnual * 100).toFixed(1) + "%",
+          band: `[${SIGMA_MIN * 100}%, ${SIGMA_MAX * 100}%]`,
+        },
+      };
     }
 
     // 2. Spot ár (S) — a legfrissebb close.
@@ -515,6 +544,23 @@ async function loadKBlindDownweight(): Promise<number> {
     const ov = await mod.loadRuntimeOverrides();
     if (typeof ov.combinerKBlindDownweight === "number" && Number.isFinite(ov.combinerKBlindDownweight)) {
       return Math.max(0, Math.min(1, ov.combinerKBlindDownweight));
+    }
+    return 1.0;
+  } catch {
+    return 1.0;
+  }
+}
+
+// B21 (2026-06-04): load the K-anchor strength knob. Default 1.0 = anchoring
+// ON (threshold markets only). The diagnosis proved the K-blind downweight
+// alone is insufficient — the IC-weighted average still floors the combined
+// toward 0.5 — so anchoring is enabled by default. Safe-fallback on outage.
+async function loadKAnchorStrength(): Promise<number> {
+  try {
+    const mod: any = await import("./trader-settings.mts");
+    const ov = await mod.loadRuntimeOverrides();
+    if (typeof ov.combinerKAnchorStrength === "number" && Number.isFinite(ov.combinerKAnchorStrength)) {
+      return Math.max(0, Math.min(1, ov.combinerKAnchorStrength));
     }
     return 1.0;
   } catch {
@@ -1088,11 +1134,22 @@ type MarketKind = "threshold" | "directional";
 // `kBlindDownweight` (optional, default 1.0 = no change): the multiplier
 // applied to K_BLIND_SIGNALS' IC on threshold markets. Settings-tunable
 // via `combinerKBlindDownweight` (range [0, 1]).
+// B21 (2026-06-04) log-odds helpers for K-anchored combining.
+function clampProb01(p: number): number { return Math.max(1e-4, Math.min(1 - 1e-4, p)); }
+function logit(p: number): number { const c = clampProb01(p); return Math.log(c / (1 - c)); }
+function sigmoid(x: number): number { return 1 / (1 + Math.exp(-x)); }
+
 function combine(
   signals: Record<string, number | null>,
   icMap?: Record<string, number>,
   marketKind: MarketKind = "directional",
   kBlindDownweight: number = 1.0,
+  // B21: on threshold markets, anchor the combined probability to the
+  // K-aware vol_divergence signal (log-odds base) and let the other
+  // signals only TILT it (bounded). s=1 → fully anchored, s=0 → legacy
+  // weighted average. Default 0 keeps existing callers unchanged; the
+  // handler loads the Settings knob (default 1.0) and passes it.
+  kAnchorStrength: number = 0,
 ) {
   const valid: Record<string, number> = {};
   for (const [k, v] of Object.entries(signals)) {
@@ -1133,6 +1190,40 @@ function combine(
 
   let combined = 0;
   for (const k of names) combined += weights[k] * valid[k];
+
+  // B21 (2026-06-04) K-anchoring. On threshold (BTC-above-K) markets the
+  // ONLY properly K-aware signal is vol_divergence (Black-Scholes digital
+  // on the literal strike). A plain IC-weighted average lets the ~7 other
+  // signals — which cluster near 0.5 on threshold markets because they
+  // carry no strike information — FLOOR the combined toward 0.5 even when
+  // vol_div is at 0.001 (diagnosed 2026-06-04: vol_div 0.001 but combined
+  // 0.461 on above-70k → catastrophic YES-bias on deep-OTM calls). Anchor
+  // in log-odds space: vol_div's log-odds is the base, the other signals
+  // add a BOUNDED IC-weighted log-odds tilt, so they ADJUST the anchor but
+  // can never drag it back to 0.5. Fires only on threshold markets when
+  // vol_div is present — zero effect on directional/up-or-down markets and
+  // when vol_div is null (e.g. σ-glitch guard tripped → no anchor → the
+  // average stays near 0.5 → confidence gate blocks).
+  const anchor = valid["vol_divergence"];
+  if (
+    marketKind === "threshold" &&
+    kAnchorStrength > 0 &&
+    typeof anchor === "number" && Number.isFinite(anchor)
+  ) {
+    let tiltSum = 0, tiltW = 0;
+    for (const k of names) {
+      if (k === "vol_divergence") continue;
+      const ic = icFor(k); // K-blind downweight already folded in
+      tiltSum += ic * logit(valid[k]);
+      tiltW   += ic;
+    }
+    const meanTiltLogit = tiltW > 0 ? tiltSum / tiltW : 0;
+    const TILT_CAP = 1.5; // ≤ ±1.5 logit: the panel can nudge ~±0.3 prob, not flip the anchor
+    const boundedTilt = Math.max(-TILT_CAP, Math.min(TILT_CAP, meanTiltLogit));
+    const anchoredProb = sigmoid(logit(anchor) + boundedTilt);
+    const s = Math.max(0, Math.min(1, kAnchorStrength));
+    combined = (1 - s) * combined + s * anchoredProb;
+  }
 
   const avgIC = names.reduce((s, k) => s + icFor(k), 0) / n;
   const effN  = Math.max(1, n * 0.6);
@@ -1216,6 +1307,7 @@ export default async function handler(req: Request, _ctx: Context) {
     // on threshold (BTC-above-K) markets; up-or-down / directional markets
     // are unaffected regardless of the setting.
     const kBlindDownweight = await loadKBlindDownweight();
+    const kAnchorStrength  = await loadKAnchorStrength();
     const marketKind: MarketKind = parseThresholdK(market.slug) !== null
       ? "threshold"
       : "directional";
@@ -1290,7 +1382,7 @@ export default async function handler(req: Request, _ctx: Context) {
       } catch { /* swallow — fall back to static priors */ }
     }
 
-    const combo = combine(raw_signals, effectiveICMap, marketKind, kBlindDownweight);
+    const combo = combine(raw_signals, effectiveICMap, marketKind, kBlindDownweight, kAnchorStrength);
     const rec   = recommend(combo.combined, combo.ir, combo.kelly_q);
     const active = Object.values(raw_signals).filter(v => v !== null).length;
 

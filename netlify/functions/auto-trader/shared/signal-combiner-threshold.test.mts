@@ -148,11 +148,17 @@ function expect(cond: boolean, test: string, message: string) {
 
   type MarketKind = "threshold" | "directional";
 
+  // B21 (2026-06-04) log-odds helpers — MUST stay in sync with signal-combiner.mts.
+  const clampProb01 = (p: number) => Math.max(1e-4, Math.min(1 - 1e-4, p));
+  const logit = (p: number) => { const c = clampProb01(p); return Math.log(c / (1 - c)); };
+  const sigmoid = (x: number) => 1 / (1 + Math.exp(-x));
+
   function combine(
     signals: Record<string, number | null>,
     icMap: Record<string, number> | undefined,
     marketKind: MarketKind,
     kBlindDownweight: number,
+    kAnchorStrength: number = 0,
   ) {
     const valid: Record<string, number> = {};
     for (const [k, v] of Object.entries(signals)) {
@@ -189,6 +195,28 @@ function expect(cond: boolean, test: string, message: string) {
 
     let combined = 0;
     for (const k of names) combined += weights[k] * valid[k];
+
+    // B21 K-anchoring (mirror of signal-combiner.mts).
+    const anchor = valid["vol_divergence"];
+    if (
+      marketKind === "threshold" &&
+      kAnchorStrength > 0 &&
+      typeof anchor === "number" && Number.isFinite(anchor)
+    ) {
+      let tiltSum = 0, tiltW = 0;
+      for (const k of names) {
+        if (k === "vol_divergence") continue;
+        const ic = icFor(k);
+        tiltSum += ic * logit(valid[k]);
+        tiltW   += ic;
+      }
+      const meanTiltLogit = tiltW > 0 ? tiltSum / tiltW : 0;
+      const TILT_CAP = 1.5;
+      const boundedTilt = Math.max(-TILT_CAP, Math.min(TILT_CAP, meanTiltLogit));
+      const anchoredProb = sigmoid(logit(anchor) + boundedTilt);
+      const s = Math.max(0, Math.min(1, kAnchorStrength));
+      combined = (1 - s) * combined + s * anchoredProb;
+    }
 
     return { combined, weights };
   }
@@ -258,6 +286,90 @@ function expect(cond: boolean, test: string, message: string) {
   const rNeg = combine(signals, undefined, "threshold", -0.5);
   expect(Math.abs(rNeg.combined - r4.combined) < 1e-9, t,
     `downweight=-0.5 must clamp to 0; got combined ${rNeg.combined.toFixed(4)} vs full-suppress ${r4.combined.toFixed(4)}`);
+
+  // ── B21 K-anchoring (threshold markets) ──
+  const ta = "combine-k-anchoring";
+  // Diagnosed 2026-06-04 (above-70k, BTC≈$63,900): vol_div=0.001 (correct,
+  // deep-OTM) but the 7 other signals sit ~0.5 → the legacy IC-weighted
+  // average floors combined at ~0.46, fabricating a huge YES edge.
+  const otm = {
+    vol_divergence: 0.001,
+    orderflow: 0.50, apex_consensus: 0.50, cond_prob: 0.50,
+    momentum: 0.50, contrarian: 0.50, funding_rate: 0.50, pairs_spread: 0.50,
+  };
+  const legacyOtm   = combine(otm, undefined, "threshold", 0.5, 0);   // anchoring off
+  const anchoredOtm = combine(otm, undefined, "threshold", 0.5, 1.0); // anchoring full
+  expect(legacyOtm.combined > 0.40, ta,
+    `legacy average floors deep-OTM near 0.5 (the bug); got ${legacyOtm.combined.toFixed(4)}`);
+  expect(anchoredOtm.combined < 0.05, ta,
+    `anchored must track vol_div (0.001), not the flat panel; got ${anchoredOtm.combined.toFixed(4)}`);
+
+  // Directional market: anchoring never applies even at strength 1.0.
+  const dirAnchor = combine(otm, undefined, "directional", 0.5, 1.0);
+  const dirLegacy = combine(otm, undefined, "directional", 0.5, 0);
+  expect(Math.abs(dirAnchor.combined - dirLegacy.combined) < 1e-9, ta,
+    `directional market must ignore anchoring; s=1 ${dirAnchor.combined.toFixed(4)} vs s=0 ${dirLegacy.combined.toFixed(4)}`);
+
+  // Bounded directional tilt: a YES-leaning panel nudges the anchor UP a
+  // little, but cannot flip a 0.001 anchor to a coin flip.
+  const otmYesLean = { ...otm, orderflow: 0.75, apex_consensus: 0.70, cond_prob: 0.68 };
+  const anchoredYesLean = combine(otmYesLean, undefined, "threshold", 0.5, 1.0);
+  expect(anchoredYesLean.combined > anchoredOtm.combined, ta,
+    `YES-leaning panel must tilt anchor UP; flat ${anchoredOtm.combined.toFixed(4)} lean ${anchoredYesLean.combined.toFixed(4)}`);
+  expect(anchoredYesLean.combined < 0.5, ta,
+    `bounded tilt cannot flip a 0.001 anchor past 0.5; got ${anchoredYesLean.combined.toFixed(4)}`);
+
+  // Deep-ITM symmetry: vol_div=0.97 + flat panel → anchored stays high.
+  const anchoredItm = combine({ ...otm, vol_divergence: 0.97 }, undefined, "threshold", 0.5, 1.0);
+  expect(anchoredItm.combined > 0.90, ta,
+    `anchored deep-ITM must track vol_div (0.97), not floor to 0.5; got ${anchoredItm.combined.toFixed(4)}`);
+
+  // s=0 equals legacy average exactly (backward-compat with pre-B21 callers).
+  expect(Math.abs(combine(otm, undefined, "threshold", 0.5, 0).combined - legacyOtm.combined) < 1e-9, ta,
+    `kAnchorStrength=0 must equal legacy average`);
+}
+
+// ── B21 σ-glitch guard (getVolSignal pipeline) ──────────────────────────
+// Mirrors the σ stabilization in signal-combiner.mts getVolSignal: winsorize
+// per-minute log-returns to ±2.5%, annualize, then NULL the reading if σ
+// lands outside the sane BTC band [10%, 200%]. A single spurious print
+// inflates the 20-sample σ ~10× (observed 46.9% → 495.5%), which would
+// otherwise collapse fairYes toward 0.5 for every strike.
+{
+  const t = "vol-sigma-glitch-guard";
+  const RET_CLIP = 0.025;
+  const SIGMA_MIN = 0.10, SIGMA_MAX = 2.0;
+
+  function sigmaGuarded(closes: number[]): { sigma: number; guarded: boolean } {
+    const returns = closes.slice(1).map((c, i) => {
+      const r = Math.log(c / closes[i]);
+      return Math.max(-RET_CLIP, Math.min(RET_CLIP, r));
+    });
+    const mean = returns.reduce((s, v) => s + v, 0) / returns.length;
+    const sigma = Math.sqrt(
+      (returns.reduce((s, v) => s + (v - mean) ** 2, 0) / returns.length) * 365 * 24 * 60,
+    );
+    return { sigma, guarded: sigma < SIGMA_MIN || sigma > SIGMA_MAX };
+  }
+
+  // Sane minutely series (~0.05%/min) → σ in band, signal kept.
+  const sane: number[] = [64000];
+  for (let i = 1; i < 20; i++) sane.push(sane[i - 1] * (1 + (i % 2 ? 0.0005 : -0.0005)));
+  const rs = sigmaGuarded(sane);
+  expect(!rs.guarded, t, `sane series must pass the band (σ=${(rs.sigma * 100).toFixed(1)}%)`);
+  expect(rs.sigma >= SIGMA_MIN && rs.sigma <= SIGMA_MAX, t, `sane σ in band, got ${(rs.sigma * 100).toFixed(1)}%`);
+
+  // One spurious +6%/min print (feed glitch). Even after winsorization the
+  // 20-sample σ blows past 200% → guarded → getVolSignal returns null →
+  // no K-anchor → combiner stays ~0.5 → confidence gate blocks (safe).
+  const glitch = [...sane];
+  glitch[10] = glitch[9] * 1.06;
+  const rg = sigmaGuarded(glitch);
+  expect(rg.guarded, t, `6%/min glitch must trip the band guard (σ=${(rg.sigma * 100).toFixed(1)}%)`);
+
+  // Winsorization bounds the raw 6% print to the ±2.5% cap.
+  const clipped = Math.max(-RET_CLIP, Math.min(RET_CLIP, Math.log(1.06)));
+  expect(Math.abs(clipped - RET_CLIP) < 1e-9, t, `6% return winsorized to +2.5% cap, got ${clipped.toFixed(4)}`);
 }
 
 // ─── CLI report ───────────────────────────────────────────────────────────

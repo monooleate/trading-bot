@@ -266,6 +266,29 @@ A 3 helyet együtt kell változtatni — ezt a test-suite kötelezővé teszi.
 
 ---
 
+## K-anchoring + σ-glitch guard (B21, 2026-06-04)
+
+A 2026-06-04 crypto-audit + diagnózis kimutatta, hogy threshold (BTC-above-K) piacokon a combiner kimenet **lapos ~0.46 marad** K-tól függetlenül, **annak ellenére** hogy a `combinerKBlindDownweight` már 0.5-ön állt. Két független ok, két fix:
+
+### 1. σ-glitch guard (`getVolSignal`)
+
+A 20-mintás minutely realized-vol egyetlen kiugró return-re érzékeny: egy ~3%/perc spurious print az annualizált σ-t ~10×-esére dobja (mért: 46.9% → **495.5%** ugyanazon piacra ismételt híváskor), és magas σ mellett a BS-digital `fairYes = N(d₂)` **minden K-ra 0.5-höz lapul** — a K-aware jel csendben elhal.
+
+- **Winsorize**: minden per-perc log-return `[−2.5%, +2.5%]`-ra vágva a variancia előtt.
+- **Sáv-guard**: ha az annualizált σ ∉ `[10%, 200%]` → a jel `prob: null` (kimarad a tickből). Indok: a hiányzó jel **biztonságos** (nincs anchor → combiner ~0.5 → confidence gate blokkol), a glitch-elt jel **nem** (hamis edge-et gyárt).
+
+### 2. K-anchored combiner mód (`combine()`)
+
+Threshold piacon a combined valószínűség **log-odds térben a vol_divergence-hez horgonyzódik** — a 8 jel egyenrangú IC-súlyozott átlaga helyett:
+
+$$\text{combined} = (1-s)\cdot\bar{p}_{\text{avg}} + s\cdot\text{sigmoid}\!\left(\operatorname{logit}(p_{\text{vol}}) + \operatorname{clip}_{\pm1.5}\!\Big(\tfrac{\sum_k \text{IC}_k\,\operatorname{logit}(p_k)}{\sum_k \text{IC}_k}\Big)\right)$$
+
+ahol $p_{\text{vol}}$ a vol_divergence (K-aware horgony), $k$ a többi 7 jel, $s$ = `combinerKAnchorStrength` (0..1, default **1.0**). A többi jel **bounded tiltet** (±1.5 logit ≈ ±0.3 prob) ad → igazítja a horgonyt, de soha nem floorolja vissza 0.5-höz.
+
+**Hatás (unit-tesztben pinned):** vol_div=0.001 + 7 jel ~0.5 → legacy **0.46** (a bug) → anchored **< 0.05**. Deep-ITM 0.97 → anchored > 0.90. **Csak threshold piacon** aktív + csak ha vol_div jelen van → zero regresszió az up-or-down / directional trade-típuson. → **[sprints.md B21](../roadmap/sprints.md)** ✅ implementálva.
+
+---
+
 ## Forrás
 
 - Grinold, R.C. & Kahn, R.N. (1994). *Active Portfolio Management*. Probus Publishing.

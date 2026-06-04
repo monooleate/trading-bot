@@ -73,6 +73,15 @@ const SCHEMA: Record<string, FieldSpec> = {
   // up-or-down or other directional markets — zero regression risk on existing
   // bot trade types. See `sprints.md` "Hatás-elemzés" for impact math.
   combinerKBlindDownweight:{ default: 1.0,  min: 0,       max: 1,       label: "K-blind signal downweight (threshold markets)", step: 0.05, unit: "frac", category: "crypto", group: "Signal toggles", help: "BTC-above-K threshold piacokon a 4 K-blind signal (momentum, contrarian, funding_rate, pairs_spread) IC-súlya × ez a szorzó. Default 1.0 = nincs változás. 0.5 = felére csökkenti a K-blind hozzájárulást → vol_divergence + per-market jelek dominálnak. Csak threshold piacokon hat, up-or-down + general piacokon nincs változás." },
+  // B21 (2026-06-04): K-anchoring threshold (BTC-above-K) piacokon. A 06-04-i
+  // diagnózis igazolta, hogy a K-blind downweight önmagában NEM elég — az
+  // IC-súlyozott átlag még 0.5-downweight mellett is 0.5 felé floorolja a
+  // combinedet (vol_div 0.001 de combined 0.461 above-70k-n). Az anchoring
+  // log-odds térben a vol_divergence-t veszi alapnak, a többi 7 jel csak
+  // korlátozott (±1.5 logit) tiltet ad → a combined a vol_div-et követi.
+  // 1.0 = teljes horgony (default), 0 = legacy átlag. Csak threshold piacon
+  // hat + csak ha a vol_div jelen van (σ-glitch guard null-ja kikapcsolja).
+  combinerKAnchorStrength:{ default: 1.0,   min: 0,       max: 1,       label: "K-anchor strength (threshold markets)", step: 0.05, unit: "frac", category: "crypto", group: "Signal toggles", help: "BTC-above-K threshold piacokon a combined valószínűséget a K-aware vol_divergence-hez horgonyozza (log-odds alap), a többi 7 jel csak korlátozottan igazít rajta. 1.0 = teljes horgony (a vol_div BS-digital fair-value-ját követi), 0 = régi súlyozott átlag. Megoldja a 'lapos ~0.46 minden strike-ra' bug-ot. Csak threshold piacon hat, up-or-down + general piacokon nincs változás." },
   cryptoMaxOpenPositions:{ default: 5,      min: 1,       max: 20,      label: "Max open positions",           step: 1,     unit: "n",    category: "crypto", group: "Risk & sizing", help: "Egyszerre max ennyi nyitott crypto paper pozíció. Védi a bankroll-t a túlexpozíciótól ha sok piac van egyszerre nyitva. 5 default = $250 paper-en bőven elég." },
   cryptoMinActiveSignals:{ default: 2,      min: 1,       max: 8,       label: "Min active signals",           step: 1,     unit: "n",    category: "crypto", group: "Signal toggles", help: "Minimum hány signal-nak kell konvergálnia (8-ból). 2 = laza, 4 = óvatos, 6 = csak magas-konfidencia trade-ek." },
   // ─── Crypto sanity gates (2026-05-12 §k) ─────────────────────────
@@ -206,6 +215,7 @@ export const PRESETS: Record<string, CategoryPresets> = {
       values: {
         edgeThreshold:         0.08,
         combinerConfidenceMin: 0.02,
+        combinerKAnchorStrength: 1.0,
         minPositionSizeUSDC:   0.20,
         maxKellyFraction:      0.05,
         sessionLossLimit:      30,
@@ -223,6 +233,7 @@ export const PRESETS: Record<string, CategoryPresets> = {
       values: {
         edgeThreshold:         0.15,
         combinerConfidenceMin: 0.05,
+        combinerKAnchorStrength: 1.0,
         minPositionSizeUSDC:   0.50,
         maxKellyFraction:      0.08,
         sessionLossLimit:      20,
@@ -240,6 +251,7 @@ export const PRESETS: Record<string, CategoryPresets> = {
       values: {
         edgeThreshold:         0.25,
         combinerConfidenceMin: 0.10,
+        combinerKAnchorStrength: 1.0,
         minPositionSizeUSDC:   2.00,
         maxKellyFraction:      0.05,
         sessionLossLimit:      15,

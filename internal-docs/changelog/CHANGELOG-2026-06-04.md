@@ -134,3 +134,43 @@ Auth-olt `POST /auto-trader-api {action:"reset"}` mind az 5 boton; a `bankroll` 
 - `internal-docs/changelog/CHANGELOG-2026-06-04.md` — ez a szekció
 
 **Kód-változtatás (c)-ben nem történt** — read-only diagnózis + session-reset (auth-olt API) + doksi.
+
+---
+
+# CHANGELOG 2026-06-04 (d) — B21 implementáció: σ-glitch guard + K-anchored combiner
+
+> A (c) diagnózis után a user „mehet" → a B21 fix implementálva (kód + tesztek). **Deploy szükséges** az élesedéshez.
+
+## (1) σ-glitch guard — `getVolSignal` ([signal-combiner.mts](../../netlify/functions/signal-combiner.mts))
+
+A diagnózis igazolta, hogy a 20-mintás minutely realized-vol egyetlen kiugró return-re ~10×-eset ugrik (46.9%→495.5% ugyanazon piacra), ami a BS-digital fairYes-t minden strike-on 0.5-höz lapítja. Két védőréteg:
+
+1. **Winsorize**: minden per-perc log-return ±2.5%-ra vágva (a valódi BTC-perc ritkán mozdul ennyit; afölött ~mindig feed-glitch) → egyetlen rossz bar variancia-leverage-e csillapítva.
+2. **Sávon-kívül → null**: ha az annualizált σ a sane [10%, 200%] sávon kívül esik → `prob: null` (a vol_div jel kimarad a tickből). **Miért null és nem clamp**: hiányzó jel **biztonságos** (nincs K-anchor → a combiner ~0.5 → a confidence gate blokkol), egy glitch-elt jel **nem** (flat fairYes + hamis edge).
+
+## (2) K-anchored combiner mód — `combine()`
+
+Threshold (BTC-above-K) piacon a combined valószínűség **log-odds térben a vol_divergence-hez horgonyzódik**: `combined = sigmoid(logit(vol_div) + boundedTilt)`, ahol `boundedTilt` a többi 7 jel IC-súlyozott log-odds-átlaga ±1.5 logitra vágva. Így a 7 K-vak/gyenge jel **igazítja** a horgonyt (±~0.3 prob), de soha nem floorolja vissza 0.5-höz. A `kAnchorStrength` (0..1) blendel a régi átlaggal: **1.0 = teljes horgony** (default), 0 = legacy. Csak threshold piacon + csak ha vol_div jelen van (a σ-guard null-ja kikapcsolja → safe fallback).
+
+**Igazolt hatás (unit-tesztben pinned):** a diagnosztikus eset (vol_div=0.001, 7 jel ~0.5) — legacy combined **0.46** (a bug) → anchored **< 0.05** (követi a vol_div-et). Deep-ITM (0.97) → anchored > 0.90. YES-lean panel bounded UP-tilt, de 0.001 horgonyt nem flippel 0.5 fölé. Directional piacon az anchoring **nem** aktív (zero regresszió az up-or-down trade-típuson).
+
+## (3) Settings + presetek + tesztek
+
+- Új SCHEMA-knob `combinerKAnchorStrength` ([trader-settings.mts](../../netlify/functions/trader-settings.mts), default 1.0, range [0,1], step 0.05, „Signal toggles" csoport). Mind a 3 crypto preset (Lazább/Normál/Szigorú) `combinerKAnchorStrength: 1.0` (korrektség-fix, nem kockázat-dial).
+- Új `loadKAnchorStrength()` loader (default 1.0) + handler wiring (`combine(..., kAnchorStrength)`).
+- 11 új teszt-case a [`signal-combiner-threshold.test.mts`](../../netlify/functions/auto-trader/shared/signal-combiner-threshold.test.mts)-ben (6 anchoring + 3 σ-guard + 2 backward-compat). `npx tsx` zöld, `tsc --noEmit` tiszta, `npm run build` zöld, mind a 7 shared-teszt zöld.
+
+## Follow-up (B21-ben rögzítve)
+
+A 20-mintás minutely σ inherensen zajos — egy ≥~1%/perc mozgás már null-ozhatja a vol_div jelet (konzervatív: a bot ilyenkor kivár, de csökkenti a crypto-aktivitást). Robusztusabb σ-becslő (hosszabb ablak / EWMA / MAD) külön finomítás, ha a deploy utáni adat indokolja.
+
+## Fájlok (d)
+
+- `netlify/functions/signal-combiner.mts` — σ-guard + log-odds helperek + `combine()` anchoring + `loadKAnchorStrength()` + handler wiring
+- `netlify/functions/trader-settings.mts` — `combinerKAnchorStrength` SCHEMA + 3 crypto preset
+- `netlify/functions/auto-trader/shared/signal-combiner-threshold.test.mts` — +11 case (anchoring + σ-guard)
+- `internal-docs/roadmap/sprints.md` — B21 → ✅ IMPLEMENTED
+- `internal-docs/math/10-signal-combiner.md` — K-anchoring + σ-guard szekció
+- `CLAUDE.md` — crypto sor (B21 implementálva)
+
+**⚠️ Deploy:** a fix a következő `netlify deploy --prod` után él. A `combinerKAnchorStrength` default 1.0 → deploy után automatikusan ON, override nélkül.
