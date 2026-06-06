@@ -364,6 +364,14 @@ Lásd §4.3 részletesen.
 
 **Detection**: nehéz utólag detektálni; a `recentLogs`-ban a `volGate` mező egyezzen paper/live között.
 
+### §5.8 — F-Arb edge-tracker all-zero display (pre-2026-06-07)
+
+**Bug**: az `edge-tracker.mts` `tradesFromSession` funding-arb ága **nem létező mezőneveket** olvasott (`hlAvgPrice`/`hlSize`/`realizedPnl`/`hlSide`) — az `ArbPosition` valós mezői `hlEntryPrice`/`sizeCoins`/`closeFundingNet`/`direction`. Minden zárt F-Arb trade `entryPrice=0, shares=0, pnl=0`-ként jelent meg, **akkor is, ha valós méret + funding-PnL volt rajta**.
+
+**Fix**: 2026-06-07 — mezőnevek javítva (→ sprints.md B25).
+
+**Detection**: az `edge-tracker?category=funding-arb` minden trade-je csupa nulla (entry/shares/pnl=0, direction mind "NO"), DE a `multi-status` `funding-arb` ágában `bankrollCurrent ≠ bankrollStart` és/vagy `sessionPnL ≠ 0`. **Anti-következtetés**: ne állítsd hogy „az F-Arb nem kereskedik" pusztán az edge-tracker nullák alapján — mindig kereszt-ellenőrizd a `multi-status` bankroll/PnL-jét. Ha az is 0 + bankroll = start, akkor tényleg 0 trade; ha nem, akkor display-bug.
+
 ---
 
 ## §6 — Modifikációs javaslatok (mit mondj az operátornak)

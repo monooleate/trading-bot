@@ -17,6 +17,10 @@ export interface SportsConfig {
   maxPositionUSDC:     number;     // default 20
   /** Minimum $ for an entry — under this we skip rather than over-trade. */
   minPositionUSDC:     number;     // default 1
+  /** Longshot floor (2026-06-06): minimum Polymarket price of the bet side
+   *  (YES or NO). 0 = off. Filters sub-floor lottery tickets where the
+   *  3.6-4% roundtrip fee dominates the tiny payoff and variance is high. */
+  minPrice:            number;     // default 0 (off)
   /** Session daily loss limit — auto-stop when sessionLoss exceeds. */
   sessionLossLimit:    number;     // default 30
   /** Whether the session loss limit is enforced at all. Default: OFF in
@@ -55,6 +59,7 @@ export function getSportsConfig(): SportsConfig {
     maxKellyFraction: parseFloat(process.env.SPORTS_MAX_KELLY        || "0.05"),
     maxPositionUSDC:  parseFloat(process.env.SPORTS_MAX_POSITION_USD || "20"),
     minPositionUSDC:  parseFloat(process.env.SPORTS_MIN_POSITION_USD || "1"),
+    minPrice:         parseFloat(process.env.SPORTS_MIN_PRICE || "0"),
     sessionLossLimit: parseFloat(process.env.SPORTS_SESSION_LOSS_LIMIT || "30"),
     minVolume24h:     parseFloat(process.env.SPORTS_MIN_VOLUME_24H   || "5000"),
     minHoursToEnd:    parseFloat(process.env.SPORTS_MIN_HOURS_TO_END || "2"),
@@ -78,6 +83,7 @@ export async function getEffectiveSportsConfig(): Promise<SportsConfig> {
     return {
       ...env,
       edgeThreshold:    ov.sportsEdgeThreshold   ?? env.edgeThreshold,
+      minPrice:         ov.sportsMinPrice        ?? env.minPrice,
       maxPositionUSDC:  ov.sportsMaxPositionUSD  ?? env.maxPositionUSDC,
       maxOpenPositions: ov.sportsMaxOpenPositions ?? env.maxOpenPositions,
       minHoursToEnd:    ov.sportsMinHoursToEnd   ?? env.minHoursToEnd,

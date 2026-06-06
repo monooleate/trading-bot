@@ -123,6 +123,14 @@ const SCHEMA: Record<string, FieldSpec> = {
   weatherCronEnabled:     { default: 1,    min: 0,    max: 1,    label: "Enable scheduled cron runs",    step: 1,     unit: "bool", category: "weather", group: "Scheduling", help: "A weather trader a auto-trader-multi-cron fan-out-ban 3 percenként fut és nyithat új paper pozíciókat. Default ON (2026-05-14 óta) — paper mode-ban biztonságos, math validálva a session 35 audit-on. Csak akkor kapcsold OFF-ba ha tudatosan szüneteltetni akarod a botot (a többi 3 bot mind ALWAYS ON, ez a kapcsoló az egyetlen kategorizált pause-mechanizmus weather-en). Megj. (2026-05-29): a régi különálló */5 weather-cron a legacy schedule() wrapper miatt sosem regisztrálódott — most a */3 multi-cron hajtja." },
   weatherMarketDisagreeMaxC: { default: 2.0, min: 0.5, max: 5.0, label: "Max market disagreement",       step: 0.1,   unit: "°C",   category: "weather", group: "Risk & sizing", help: "Skip a trade-et ha a bot predikciója >ennyi °C-kal eltér a piac modális (legmagasabban árazott) bucketjétől. Lényeg: a >2°C disagreement gyakran model hiba (rossz station, stale forecast), nem alfa. 2.0 = ~3.6°F = általában 1-2 bucket spread." },
   weatherMaxOpenPositions:   { default: 5,    min: 1,   max: 20,  label: "Max open positions",            step: 1,     unit: "n",    category: "weather", group: "Risk & sizing", help: "Egyszerre max ennyi nyitott weather pozíció. 5 default = a 8-10 város × 5-7 nap × 8 bucket-ből bőven elég jó konvergens fogadásra." },
+  // ─── Weather adverse-selection fix (B22/B23, 2026-06-06) ───────────────
+  // A 2026-06-04 (n=25) + 2026-06-06 (n=11) flip-auditok kimutatták: a
+  // bucket-matcher a max-|edge| (= max market-disagreement) bucketet választja,
+  // de a next-day temp piac jól kalibrált → a max-eltérés tipikusan modell-hiba,
+  // nem alfa. Két lever: B22 (vak flip, kísérleti) + B23 (szelekciós-torzítás
+  // shrink, a gyökérok-fix). A doc szerint B23 a preferált; B22 csak gyors hedge.
+  weatherSelectionShrink:    { default: 0,    min: 0,   max: 2.0, label: "Selection-bias shrink (B23)",   step: 0.1,   unit: "ratio", category: "weather", group: "Risk & sizing", help: "GYÖKÉROK-FIX (B23): a matchBucket a legnagyobb |edge|-ű bucketet választja N közül → optimizer's curse (a kiválasztott edge felfelé torzít). Ez a knob a √(2·ln N)·σ_edge szelekciós-zaj-becslést vonja le a gross edge-ből (×ez a szorzó), mielőtt a net-edge gate dönt. 0 = OFF (régi viselkedés). 1.0 = teljes egy-szigmás szelekciós korrekció (a Bonferroni-idioma weather-megfelelője). 0.5 = félerős. Hatás: a vak max-disagreement contrarian trade-ek kiesnek, a valódi nagy-edge-ek maradnak." },
+  weatherInvertDirection:    { default: 0,    min: 0,   max: 1,   label: "⚠️ EXPERIMENTAL: invert (fade)", step: 1,     unit: "bool", category: "weather", group: "Risk & sizing", help: "KÍSÉRLETI (B22): ha ON, a bot MINDIG a modell ellenkező oldalára fogad (YES↔NO flip). A 2026-06-04 (+$87/25tr) + 2026-06-06 (+$32/11tr) flip-auditok alapján a weather-modell in-sample anti-edge volt (a bucket-matcher adverse selection-je miatt). Band-aid: ha a B23 shrink jól sikerül, EZT kapcsold KI (különben a jó tippeket fade-elné). Ne futtasd élesen B23-mal egyszerre validáció nélkül. Default OFF." },
   // ─── Tier 1 (32. session) belső konstansok expose-olva ──────────────
   // A Black-Scholes vol_divergence + collinearity matrix + Bonferroni IC
   // threshold számára. Default = a Tier 1 hardcoded értékei, vagyis a
@@ -182,6 +190,13 @@ const SCHEMA: Record<string, FieldSpec> = {
   sportsSessionLossLimitEnabled: { default: 0, min: 0,    max: 1,        label: "Session loss limit enabled",   step: 1,     unit: "bool",  category: "sports", group: "Risk & sizing", help: "0 = a session loss limit KI van kapcsolva (paper default — korlátlan kísérletezés), 1 = bekapcsolva (a fenti USD-küszöbnél auto-stop). Paper módban alapból 0; live-ban a bot env-defaultja bekapcsolja. A botot a limit kikapcsolása automatikusan újraindítja, ha korábban a limit állította le." },
   sportsMinHoursToEnd:       { default: 2,    min: 0,     max: 72,       label: "Min hours to end-date",        step: 1,     unit: "h",     category: "sports", group: "Market filter", help: "Csak olyan piacokat fogad el, ahol legalább ennyi óra van a settlement-ig. Védi a botot az utolsó-pillanat liquidity-drop-tól." },
   sportsMaxHoursToEnd:       { default: 72,   min: 6,     max: 8760,     label: "Max hours to end-date",        step: 6,     unit: "h",     category: "sports", group: "Market filter", help: "Csak olyan piacokat fogad el, ahol nem több mint ennyi óra van a settlement-ig. Default 72h (3 nap) = a 3 open slot 3 napon belül felszabadul. Növeld ha hosszabb-lejáratú edge-eket akarsz (pl. season-long futures), csökkentsd ha csak match-day moneyline kell." },
+  // Longshot floor (2026-06-06): a 2026-06-06 sports-audit (n=15, 7% WR,
+  // −$32.29) kimutatta, hogy a bot extrém longshotokra fogad (bet-side ár
+  // 0.016–0.135), ahol a modell 25%-ot jósol de a realizált ~7% (≈ piaci ár).
+  // A flip sem segít (−$9.55), mert a 3.6-4% roundtrip fee a tiny-payoff
+  // oldalon felemészti a nyereséget. A floor a sub-küszöb lottószelvényeket
+  // szűri (mindkét oldal: longshot-YES ÉS upset-NO).
+  sportsMinPrice:            { default: 0,    min: 0,     max: 0.5,      label: "Min bet-side price (longshot floor)", step: 0.005, unit: "frac", category: "sports", group: "Risk & sizing", help: "A megfogadott oldal (YES vagy NO) Polymarket-árának minimuma. 0 = OFF (régi viselkedés). 0.05 = sub-5¢ longshotok kihagyása (a 2026-06-06 audit 15 trade-jéből 10-et szűrt volna). 0.10 = csak ≥10¢-os oldal. A piaci ár ≈ a piac-implied valószínűség a megfogadott oldalra; alacsony ár = lottószelvény, ahol a fee dominál és a variancia magas. Szimmetrikus: a longshot-YES-t és az upset-NO-t is kapja." },
 };
 
 // ─── Preset definitions ───────────────────────────────────────────────
@@ -276,6 +291,7 @@ export const PRESETS: Record<string, CategoryPresets> = {
         weatherExitBeforeMin:    30,
         weatherMaxPositionUSD:   15,
         weatherMaxOpenPositions: 8,
+        weatherSelectionShrink:  0,     // OFF — több paper trade a kalibrációhoz
       },
     },
     normal: {
@@ -289,6 +305,7 @@ export const PRESETS: Record<string, CategoryPresets> = {
         weatherExitBeforeMin:    45,
         weatherMaxPositionUSD:   25,
         weatherMaxOpenPositions: 5,
+        weatherSelectionShrink:  0.5,   // félerős szelekciós-torzítás korrekció (B23)
       },
     },
     strict: {
@@ -302,6 +319,7 @@ export const PRESETS: Record<string, CategoryPresets> = {
         weatherExitBeforeMin:    60,
         weatherMaxPositionUSD:   40,
         weatherMaxOpenPositions: 3,
+        weatherSelectionShrink:  1.0,   // teljes egy-szigmás szelekciós korrekció (B23)
       },
     },
   },
@@ -408,6 +426,7 @@ export const PRESETS: Record<string, CategoryPresets> = {
         sportsMaxHoursToEnd:    120,  // 5 days
         sportsSessionLossLimit: 50,
         sportsSessionLossLimitEnabled: 0,   // OFF — unbounded paper experimentation
+        sportsMinPrice:         0.03,  // csak a sub-3¢ extrém lottószelvényeket szűri
       },
     },
     normal: {
@@ -421,6 +440,7 @@ export const PRESETS: Record<string, CategoryPresets> = {
         sportsMaxHoursToEnd:    72,   // 3 days
         sportsSessionLossLimit: 30,
         sportsSessionLossLimitEnabled: 0,   // OFF in paper (default)
+        sportsMinPrice:         0.05,  // sub-5¢ longshot floor (audit: 10/15 trade szűrve)
       },
     },
     strict: {
@@ -434,6 +454,7 @@ export const PRESETS: Record<string, CategoryPresets> = {
         sportsMaxHoursToEnd:    24,   // 1 day
         sportsSessionLossLimit: 20,
         sportsSessionLossLimitEnabled: 1,   // ON — strict preset enforces the stop
+        sportsMinPrice:         0.08,  // csak ≥8¢ oldal — a chalk-fade fókusz
       },
     },
   },

@@ -148,24 +148,36 @@ function tradesFromSession(s: SessionLike, fallbackCategory: string): ClosedTrad
       }
     }
   }
-  // Funding-arb session shape: positions[] with optional closedAt + realizedPnL
+  // Funding-arb session shape: positions[] with optional closedAt.
+  // Field names must match the actual ArbPosition shape
+  // (funding-arb/types.mts): hlEntryPrice / sizeCoins / sizeUSDC /
+  // closeFundingNet / direction("forward"|"reverse") / entrySpread.
+  // 2026-06-06 fix: this branch previously read a guessed shape
+  // (hlAvgPrice / hlSize / realizedPnl / hlSide) that ArbPosition never had,
+  // so every closed F-Arb trade rendered as all-zeros in the Edge Tracker
+  // even though the positions carried real size + funding PnL. The PnL
+  // figure is the funding-only net after fees (price legs are delta-neutral,
+  // so there is no meaningful entry/exit price PnL — exitPrice stays 0).
+  // Direction: forward = HL-short leg → "NO"; reverse = HL-long → "YES",
+  // mirroring the closed-trade projection in funding-arb/index.mts.
   if (Array.isArray(s.positions)) {
     for (const p of s.positions as any[]) {
       if (!p?.closedAt) continue;
+      const sizeUSDC = Number(p.sizeUSDC ?? 0);
+      const fundingNet = Number(p.closeFundingNet ?? p.realizedPnl ?? p.realizedPnL ?? 0);
       out.push({
         market:               p.coin || p.symbol || "funding-arb",
-        direction:            (p.hlSide || "SHORT") === "SHORT" ? "NO" : "YES",
-        entryPrice:           p.hlAvgPrice ?? 0,
-        exitPrice:            p.hlExitPrice ?? p.hlAvgPrice ?? 0,
-        shares:               p.hlSize ?? 0,
-        pnl:                  p.realizedPnl ?? p.realizedPnL ?? 0,
-        pnlPct:               0,
+        direction:            p.direction === "reverse" ? "YES" : "NO",
+        entryPrice:           p.hlEntryPrice ?? 0,
+        exitPrice:            0,
+        shares:               p.sizeCoins ?? 0,
+        pnl:                  fundingNet,
+        pnlPct:               sizeUSDC > 0 ? (fundingNet / sizeUSDC) * 100 : 0,
         openedAt:             p.openedAt || new Date().toISOString(),
         closedAt:             p.closedAt,
         category:             "funding-arb" as any,
-        predictedProb:        p.expectedApy,
         marketPriceAtEntry:   p.entrySpread,
-        edgeAtEntry:          p.expectedApy ?? 0,
+        edgeAtEntry:          p.entrySpread ?? 0,
       });
     }
   }

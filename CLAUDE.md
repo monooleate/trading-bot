@@ -374,20 +374,25 @@ netlify deploy --prod --dir=dist
 
 ---
 
-## AKTUÁLIS ÁLLAPOT (2026-06-04)
+## AKTUÁLIS ÁLLAPOT (2026-06-07)
 
 **Élő deploy:** `mj-trading.netlify.app`. Paper mode, simVersion 3 (crypto), v2 (HL).
 
-### 4 fő bot státusz
+### Legutóbbi munka (46. session, 2026-06-07) — flip-audit + 4 adverse-selection fix
 
-> **Megjegyzés (2026-06-04):** a 06-04 auditok + fixek után **mind az 5 bot (crypto/weather/HL/F-Arb/sports) RESETELVE tiszta lapra** (user-kérés: „nullázd mindenhol a kereskedések múltbeli eredményeit") — a tőke megtartva, a trade-history/PnL/IC-kalibráció/open pozíciók nullázva, mind fut (cron ON, egyik sem stopped). A lenti sorok a **reset előtti audit-állapotot** (PnL/trades) dokumentálják a tanulság kedvéért; az **élő számok mostantól 0 closed / PnL $0 / bankroll = start**.
+A user kérte mind az 5 bot flip-elemzését („jobban járnánk-e az ellentétes oldalon?"). Friss post-reset paper-adat (06-04 óta). **Flip-eredmény:** Weather −$87.88 → **+$32.38** (erős, de 2 confident-NO trade-ben koncentrált); Sports −$32.29 → −$9.55 (jobb, de **még mindig mínusz** — longshot-túlbecslés, nem flip-ügy); HL ≈ nulla (LONG-bias, B18); Crypto n=1; **F-Arb valójában rendben kereskedik** (+$0.22 net funding, a 0-érték csak edge-tracker display-bug volt). **4 fix implementálva (mind default OFF/0 → deploy + operátor-aktiválás-függő):** B22 weather invert-toggle, **B23 weather selection-bias shrink (preferált)**, sports `sportsMinPrice` longshot-floor, F-Arb edge-tracker mezőnév-fix. Új follow-up: **B26** (F-Arb ~$26.8 bankroll-gap). `tsc`+build+8-case új teszt+regresszió zöld. Részletek: [changelog 2026-06-07](internal-docs/changelog/CHANGELOG-2026-06-07.md) · sprints.md B22/B23/B24/B25/B26.
+
+### 4 fő bot státusz (élő, 2026-06-07 — friss post-reset adat)
+
+> A 06-04 reset óta a botok újra kereskedtek. A lenti számok **élő** pull-ok (multi-status + edge-tracker). A részletes flip-elemzés a 2026-06-07 changelogban.
 
 | Bot | Bankroll | PnL | Trades | Open | Megjegyzés |
 |-----|---------|-----|--------|------|-------|
-| **Crypto** | **$350** (start = current) | **$0** | **0 closed** | 0 open | **06-04 RESET tiszta lapra** a 10-trade audit után (Gamma 10/10 valid, mind NO-ra zárult BTC-lejtmenetben, 7/10 bukás YES-bias miatt). **Knob:** `combinerConfidenceMin` 0.05→**0.08**, `combinerKBlindDownweight` 0.5. „Mindig fordítva" toggle **elvetve** (70% WR de PnL ~−$30, regime-fit n=10). **B21 ✅ IMPLEMENTÁLVA** (deploy-függő): σ-glitch guard (winsorize ±2.5% + null a [10%,200%] sávon kívül) + **K-anchored combiner** (vol_div = log-odds horgony, default `combinerKAnchorStrength=1.0`) — a lapos ~0.46 bug megoldva (vol_div 0.001 → anchored <0.05). A 0.08-as gate enyhíthető Normálra a deploy + validáció után. (changelog 2026-06-04 (d)) |
-| **Weather** | **$250** (start = current) | **$0** | **0 closed** | 0 open | **06-04 RESET tiszta lapra** a 25-trade audit után (PF 0.39, calibDev 0.40, flippelt PnL +$87 → a 80% intuíció helyes). Gyökérok: bucket-matcher max-disagreement = adverse selection. Fix elhalasztva (user) → **B22** (invert-toggle) + **B23** (gyökérok). (changelog 2026-06-04 (b)) |
-| **HL Perp** | **$200** (start = current) | **$0** | **0 closed** | — | **06-04 RESET tiszta lapra**. Korábbi: 🔴 consecutive-loss deadlock → Sprint 42G fix; 🟠 long-bias (22/22 LONG, 27% WR) → **B18** vizsgálat (30+ trade precondition). |
-| **F-Arb** | **$200** (saját bankroll) | **$0** | 0 closed | 0 open | **06-04 RESET + Sprint 47 fix**: a 0 trade strukturális bug volt (sizing-floor + 10× túl magas spread-küszöb) → sizing bump-to-min + minPositionUSDC $25 + minSpread 17.5%/yr + sanity-cap 438%/yr. Szimuláció: SOL ~$40-on nyitna. (changelog 2026-06-04 (b)) |
+| **Crypto** | $350 → **$307.40** | **−$22.57** | **1 closed** | 1 open | n=1 (above-62k YES@0.22, bukott). Nincs következtetés. B21 K-anchoring telepítve; 10–30 trade kell. `combinerConfidenceMin` **élőben 0.05** (a 06-04-i 0.08 override nincs élben — reset törölte). |
+| **Weather** | $250 → **$132.21** | **−$87.88** | **11 closed** | 3 open | 27% WR. **Flip +$32.38** (2 confident-NO trade hajtja). **B22 + B23 ✅ implementálva** (default OFF) — B23 (selection-shrink) a preferált. |
+| **HL Perp** | $200 → **$199.40** | **−$0.60** | **20 closed** | 0 open | ≈ breakeven. LONG n=10 W=2 (−$4.61) vs SHORT n=10 W=7 (+$4.01) → **B18** long-bias (regime: BTC 66k→61k). Nem flip-ügy. |
+| **F-Arb** | $200 → **$173.41** | **+$0.22** (net funding) | **38 closed** | 0 open | **Rendben kereskedik** (Sprint 47 működött). A 0-érték az edge-trackerben **display-bug volt** → **B25 ✅ fixelve**. Új flag: bankroll-gap ~$26.8 (current $173.41 vs várt $200.22) → **B26**. |
+| **Sports** | $450 → **$417.71** | **−$32.29** | **15 closed** | 3 open | 7% WR (1/15). Flip −$9.55 (még mindig mínusz). Gyökérok: extrém longshot-túlbecslés → **`sportsMinPrice` floor ✅ implementálva** (default OFF). n=15 kis minta. |
 
 ### Mit fix utoljára (45. session, 2026-05-29 (c))
 

@@ -307,7 +307,7 @@ const isUpperTail = /\bor\s+(higher|above|more)\b/i.test(label);
 
 ## 7. Decision engine — gate-ek
 
-A `makeWeatherDecision()` 8 gate-en keresztül engedi át a trade-et. Mind a 8 megjelenik a UI "Why?" popoverében (pass/fail + actual + required + hint).
+A `makeWeatherDecision()` 9 gate-en keresztül engedi át a trade-et. Mind megjelenik a UI "Why?" popoverében (pass/fail + actual + required + hint).
 
 | # | Gate | Default küszöb | Mit néz | Bukás reason |
 |---|------|----------------|---------|--------------|
@@ -315,12 +315,23 @@ A `makeWeatherDecision()` 8 gate-en keresztül engedi át a trade-et. Mind a 8 m
 | 2 | Idő settlementig ≥ küszöb | `exitBeforeMin = 45 min` | `(endDate - now) / 60_000` | Túl közeli endDate — nincs idő reagálni |
 | 3 | Forecast model frissesség | `nearBoundary = next run < 15 min` | `detectModelLag()` | Modell-határ — várjuk az új run-t |
 | 4 | Net edge ≥ küszöb | `edgeThreshold = 0.12` | `\|prob - price\| - feePct` | Edge alacsony, no-trade |
+| 4b | **Szelekciós torzítás (adverse-selection)** ✦✦ | `selectionShrink = 0` (OFF; normal preset 0.5) | `max(0, gross − shrink·√(2·ln N)·σ_edge) − fee ≥ threshold` | "Selection-bias: shrunk net edge < threshold — vak max-disagreement" |
 | 5 | Sanity cap (gross ≤ cap) | `maxEdgeCap = 0.40` | `\|prob - price\|` | "Too good to be true" — modell-hiba |
 | 6 | Market disagreement ≤ küszöb | `marketDisagreeMaxC = 2.0°C` | `\|predTempC − marketModalTempC\|` | A bot túl messzire jósol a market modális bucketjétől — valószínűbb modellhiba mint alfa |
 | 7 | Kelly méret ≤ cap | `KELLY_CAP = 0.15` | `clamp(Kelly, 0, 0.15)` | Strukturálisan nem bukhat el (clamp), de a UI ezzel mutatja a sizing-ot |
 | 8 | **Monotonicitás (egyéb nyitott pozíciók)** ✦ | csak YES kandidátus | `Σ predictedProb(YES nyitott pozíciók ugyanazon city::date) + cand ≤ 1.0` | "Σ P(YES) > 100% — modell-ellentmondás" |
 
 ✦ Új gate a 2026-05-14e cross-position consistency sweep-ből — lásd §13.8. Polymarket weather event = negRisk csoport (bucket-ek kölcsönösen kizárók), ezért Σ YES ≤ 1.0 matematikailag kötelező. NO kandidátusoknál pass (egy NO implicit lefedi az összes többi bucket-et).
+
+✦✦ Új gate a 2026-06-07 flip-auditból (B23) — lásd §7.B. A `matchBucket` N bucketből a **max-|edge|**-űt választja → optimizer's curse: a kiválasztott edge felfelé torzít. A gate a `√(2·ln N)·σ_edge × selectionShrink` szelekciós-zaj-becslést levonja, és a maradék net edge-nek is el kell érnie a küszöböt. Default OFF (0); a normal preset 0.5, strict 1.0. Degradál (shrink=0 vagy N<2 → n/a pass).
+
+### 7.A B22 — invert-direction toggle (kísérleti)
+
+A net-edge gate-nél a `direction` választása opcionálisan **flippel** (`weatherInvertDirection` knob, default OFF). A 2026-06-04 (n=25) + 2026-06-06 (n=11) flip-auditok szerint a bucket-matcher max-disagreement választása in-sample anti-edge volt, így a modell fade-elése (azonos $ tét) profitált (+$87, +$32). **Band-aid** — a B23 (selection-shrink) a preferált gyökérok-fix; ha az jól sikerül, a B22-t ki kell kapcsolni (különben a jó tippeket fade-elné). A flip a net-edge gate után történik, így a Kelly `probSide` + cross-position gate az effektív oldalon fut. → sprints.md B22.
+
+### 7.B B23 — selection-bias shrink (optimizer's curse, gyökérok)
+
+A `matchBucket` szándékosan a legnagyobb |edge|-ű bucketet adja vissza ("by design we want non-modal bets when the market under-prices them"). N noisy edge-becslés maximuma viszont **felfelé torzít** (winner's curse / optimizer's curse). Mivel a next-day temp piac jól kalibrált, a kiválasztott edge nagyrészt szelekciós zaj, nem alfa — ez a 27–32% WR strukturális oka. A korrekció a szelekciós zajt az N elem várható maximumával becsüli (`√(2·ln N)·σ_edge`) és levonja a gross edge-ből a net-edge újratesztelése előtt. Ugyanaz a familywise-idioma, mint a Bonferroni IC-küszöb a codebase máshol. → sprints.md B23.
 
 ### Az 5-ös market-disagreement gate (2026-05-11 óta)
 

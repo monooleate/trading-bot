@@ -374,19 +374,36 @@ A korábbi B9 (Topup action) átkerült a "📋 Next sprint candidates" szekció
 - **Várt hatás:** threshold-predikciók a `[0.05, 0.95]` sávot fedik moneyness szerint a mai `[0.43, 0.51]` helyett → a bot újra **valódi-edge threshold-trade-eket** nyit helyes iránnyal, ahelyett hogy vagy zaj-tradel, vagy a 0.08-as gate miatt néma.
 - **NEM ez (2026-06-04 user-felvetés):** blanket „reverse direction" toggle a Settingsbe. Az audit kimutatta: a fordítás 70% WR-t adna, **DE PnL-ben még mindig veszteséges (~−$30, payoff-aszimmetria miatt)**, és csak egyetlen lejtmenet-rezsimre illesztett szerencse (n=10). A principled megoldás a modell K-érzékennyé tétele — egy korrekt K-aware model OTM-en magától NO-t mond (a nyerő irány), vak megfordítás nélkül. Lásd a playbook §8.2/§8.9 spekulatív-irány-tiltását (vö. B18).
 
-### B22 — Weather invert-direction toggle (kísérleti) 🟡
+### B22 — Weather invert-direction toggle (kísérleti) ✅ IMPLEMENTED 2026-06-07 🟡
 
+- **Implementálva (2026-06-07):** `weatherInvertDirection` (0/1) Settings-knob, default **OFF**, „⚠️ EXPERIMENTAL: invert (fade)" címke. A [`decision-engine.mts`](../../netlify/functions/auto-trader/weather/decision-engine.mts) `direction`-választása a net-edge gate-nél flip-el (`baseDirection` → invert), a Kelly `probSide` + cross-position gate automatikusan a flippelt oldalon fut. Env: `WEATHER_INVERT_DIRECTION`. 2026-06-06 friss flip-audit (n=11) megerősítette: **−$87.88 → +$32.38** (de a swing 2 confident-NO trade-ben koncentrált — lásd changelog). **Default OFF marad** — B23 a preferált; csak akkor kapcsold ON, ha tudatos kísérleti hedge. Teszt: `adverse-selection-fixes.test.mts` (2 B22 case).
 - **Trigger:** 2026-06-04 weather-audit (25 closed trade). Eredeti 32% WR / **−$150.17**; flippelt (azonos dolláros tét) **68% WR / +$87** (júniusi regime ~86%). A user kérte: Settings-gomb, ami mindig a modell ELLENKEZŐJÉT nyitja.
 - **Crypto-tól ELTÉRŐEN itt a flip PnL-POZITÍV in-sample** (+$87 vs a crypto B21 −$30-a) — valódi anti-edge, nem csak win-rate illúzió. OK: a [`bucket-matcher.mts:187`](../../netlify/functions/auto-trader/weather/bucket-matcher.mts) max-|edge| (= max-disagreement) bucket-választása adverse selection → a piacot fade-elni (flip) profitált.
 - **Mit kell:** `weatherInvertDirection` (0/1) Settings-knob, default OFF, explicit „EXPERIMENTAL / fade-the-model" címke. Megfordítja a [`decision-engine.mts:223`](../../netlify/functions/auto-trader/weather/decision-engine.mts) `direction`-választást + a Kelly `probSide` oldalt + a cross-position (Σ P(YES) ≤ 1) gate-et. ~30 LOC + 1 séma-mező + teszt.
 - **Fenntartások:** kis minta (n=25, profit 4 trade-ben koncentrált); regime-függő; **band-aid** — ha B23 (gyökérok) megoldódik, a flip elromlik (jó tippet fade-elne). → B23 a preferált irány; B22 csak gyors kísérleti hedge.
 - **Precondition:** nincs (paper). **Becslés:** ~fél nap. **Státusz:** 2026-06-04 user → „weathert hagyd most ki" — nem indítva.
 
-### B23 — Weather bucket-matcher: max-disagreement adverse-selection fix 🟠
+### B23 — Weather bucket-matcher: max-disagreement adverse-selection fix ✅ IMPLEMENTED 2026-06-07 🟠
 
+- **Implementálva (2026-06-07):** `weatherSelectionShrink` (0–2.0) Settings-knob — optimizer's-curse korrekció. A `matchBucket` N bucketből a max-|edge|-űt választja → a kiválasztott edge felfelé torzít. Új gate a [`decision-engine.mts`](../../netlify/functions/auto-trader/weather/decision-engine.mts)-ben (a net-edge gate után): a `√(2·ln N)·σ_edge × shrink` szelekciós-zaj-becslést levonja a gross edge-ből, és a maradék net edge-nek is el kell érnie a küszöböt. Default **0 (OFF)** env-en; presetek: loose 0, **normal 0.5**, strict 1.0. Env: `WEATHER_SELECTION_SHRINK`. A Bonferroni-IC-idioma weather-megfelelője. **Degradál:** shrink=0 vagy N<2 → pass (n/a). A B22 (flip) ezt feleslegessé teszi, de a kettő komponálható (B23 kevesebbet tradel, B22 flippel). Teszt: `adverse-selection-fixes.test.mts` (3 B23 case: no-op, kills-noise, survives-standout).
 - **Trigger:** ugyanaz a 2026-06-04 audit. A `matchBucket` a **legnagyobb |edge|-ű** (= a piactól leginkább eltérő) bucketet választja, és arra fogad, hogy a modellnek van igaza — de a next-day temp piaca jól kalibrált, így a max-eltérés tipikusan **modell-hiba**, nem alfa. Ez a 32% WR strukturális oka.
 - **Mit kell:** (1) NE a max-|edge| bucketet válassza vakon — pl. modal-közeli + edge-súlyozott szelekció, vagy a disagreement-gate (jelenleg 2°C) szigorítása. (2) Szélesebb σ (a tail-ek túl vékonyak: a modell 1–14%-ot adott bekövetkező bucketekre). (3) Esetleg forecast-bias korrekció. A B22 (flip) ezt **feleslegessé teszi**, ha jól sikerül.
 - **Precondition:** nincs (read-only diagnózis + paper-validáció). **Becslés:** ~1-2 nap. **Kapcsolat:** B15 (σ-kalibráció) sub-task-ja részben.
+
+### B24 — Sports longshot floor (min bet-side price) ✅ IMPLEMENTED 2026-06-07 🟠
+
+- **Trigger:** 2026-06-06 sports-audit (n=15, 7% WR, −$32.29). A bot extrém longshotokra fogad (bet-side ár 0.016–0.135), modell ~25%-ot jósol de a realizált ~7% (≈ piaci ár → efficient book). A flip sem segít (−$9.55), mert a 3.6-4% roundtrip fee a tiny-payoff oldalon felemészti a nyereséget; az egyetlen nyerő (+$246 longshot) flippelve −$20 lenne.
+- **Implementálva:** `sportsMinPrice` (0–0.5) Settings-knob + új gate a [`sports/decision-engine.mts`](../../netlify/functions/auto-trader/sports/decision-engine.mts)-ben (Gate 5b): a megfogadott oldal (`marketPriceForSide`) Polymarket-ára ≥ küszöb, különben skip. Szimmetrikus (longshot-YES ÉS upset-NO). Default **0 (OFF)** env-en; presetek: loose 0.03, normal 0.05, strict 0.08. Env: `SPORTS_MIN_PRICE`. Teszt: `adverse-selection-fixes.test.mts` (4 sports case). **Megj.:** a 0.05 floor a 15 trade-ből 10-et szűrt volna, de a 3 survivor is bukott + a nyerőt is kizárta → **risk-lever, nem garantált profit-fix**; n=15 kis minta.
+
+### B25 — F-Arb edge-tracker mezőnév-fix (display bug) ✅ IMPLEMENTED 2026-06-07 🟢
+
+- **Trigger:** 2026-06-06 audit — a `/trade/funding-arb` 38 zárt trade-je **csupa nullát** mutatott (entryPrice/shares/pnl=0). Gyökérok: az [`edge-tracker.mts`](../../netlify/functions/edge-tracker.mts) `tradesFromSession` funding-arb ága **nem létező mezőneveket** olvasott (`hlAvgPrice`/`hlSize`/`realizedPnl`/`hlSide`) — az `ArbPosition` valós mezői `hlEntryPrice`/`sizeCoins`/`closeFundingNet`/`direction`. A pozíciók **valósak** voltak (multi-status: bankroll 200→173.41, sessionPnL +$0.22, 38 closed) — a bot rendben kereskedik (Sprint 47 működött), csak a megjelenítés volt hibás.
+- **Implementálva:** mezőnevek javítva + `pnlPct = closeFundingNet/sizeUSDC×100`, direction `forward→NO / reverse→YES` (mint a `funding-arb/index.mts` projekció). Read-only display fix, nincs trade-logika változás.
+
+### B26 — F-Arb bankroll-rekonciliáció gap (~$26) 🟠 OPEN
+
+- **Trigger:** 2026-06-06 audit melléklelet — a multi-status szerint F-Arb bankrollCurrent **$173.41**, de sessionPnL csak **+$0.22** → `200 + 0.22 = 200.22` várt vs 173.41 valós = **~$26.8 eltérés** (0 open pozíció mellett). A `closeFundingNet` típus-komment szerint „net after fees", így a funding-net már fee-zett — a $26.8 drop forrása tisztázatlan (entry/exit fee + paper-slippage dupla-számolás gyanú a `creditArbPnl` / sizing útvonalon).
+- **Mit kell:** read-only session-blob inspekció (`hyperliquid-arb-session-v1` / `arb_paper`) → a per-position `sizeUSDC` foglalás + `closeFundingNet` + bankroll-mutáció követése. Ha dupla-fee → fix a `fr-executor.mts:closeArbPosition` / `fr-session.mts:creditArbPnl`-ben. **Precondition:** nincs. **Becslés:** ~fél nap.
 
 ---
 

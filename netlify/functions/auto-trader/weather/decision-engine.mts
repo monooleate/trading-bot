@@ -26,6 +26,15 @@ export interface WeatherConfig {
   marketDisagreeMaxC: number; // default 2.0
   // Max simultaneously-open weather positions. Caps the scan loop.
   maxOpenPositions: number;   // default 5
+  // ─── Adverse-selection fix (B22/B23, 2026-06-06) ──────────────────────
+  // selectionShrink (B23, root-cause): the bucket-matcher selects the
+  // max-|edge| bucket out of N, so the winning edge is upward-biased by the
+  // optimizer's curse. We subtract √(2·ln N)·σ_edge × selectionShrink from the
+  // gross edge before the net-edge gate decides. 0 = off (legacy behaviour).
+  selectionShrink: number;    // default 0
+  // invertDirection (B22, experimental): always bet the OPPOSITE side of the
+  // model. Band-aid for the in-sample anti-edge — prefer selectionShrink.
+  invertDirection: boolean;   // default false
 }
 
 export interface WeatherTradeDecision {
@@ -84,6 +93,8 @@ export function getWeatherConfig(): WeatherConfig {
     // before we treat it as model error rather than alpha.
     marketDisagreeMaxC: parseFloat(process.env.WEATHER_DISAGREE_MAX_C || "2.0"),
     maxOpenPositions:   parseInt(process.env.WEATHER_MAX_OPEN_POSITIONS || "5", 10),
+    selectionShrink:    parseFloat(process.env.WEATHER_SELECTION_SHRINK || "0"),
+    invertDirection:    process.env.WEATHER_INVERT_DIRECTION === "true",
   };
 }
 
@@ -113,6 +124,9 @@ export async function getEffectiveWeatherConfig(): Promise<WeatherConfig> {
         ? ov.weatherCronEnabled >= 0.5 : env.cronEnabled,
       marketDisagreeMaxC: ov.weatherMarketDisagreeMaxC ?? env.marketDisagreeMaxC,
       maxOpenPositions:   ov.weatherMaxOpenPositions   ?? env.maxOpenPositions,
+      selectionShrink:    ov.weatherSelectionShrink    ?? env.selectionShrink,
+      invertDirection:    ov.weatherInvertDirection !== undefined
+        ? ov.weatherInvertDirection >= 0.5 : env.invertDirection,
     };
   } catch {
     return env;
@@ -129,6 +143,13 @@ export const WEATHER_GATE_LABELS = [
   "Idő a settlementig ≥ küszöb",
   "Forecast model frissesség",
   "Net edge ≥ küszöb",
+  // Selection-bias / optimizer's-curse guard (B23, 2026-06-06). The
+  // bucket-matcher picks the max-|edge| bucket out of N, so the winning edge
+  // overstates the true edge. We shrink the gross edge by the expected
+  // selection-noise (√(2·ln N)·σ_edge × selectionShrink) and require the
+  // shrunk net edge to still clear the threshold. Passes (n/a) when the
+  // knob is 0 or fewer than 2 buckets competed.
+  "Szelekciós torzítás (adverse-selection)",
   "Sanity cap (gross edge ≤ cap)",
   "Market disagreement ≤ küszöb",
   "Kelly méret ≤ cap",
@@ -220,7 +241,16 @@ export function makeWeatherDecision(params: {
   // 4. Net edge ≥ threshold
   const grossEdge = Math.abs(match.edge);
   const netEdge   = grossEdge - config.roundtripFeePct;
-  const direction: "YES" | "NO" = match.edge > 0 ? "YES" : "NO";
+  // B22 (experimental, 2026-06-06): invertDirection flips the model's chosen
+  // side. The bucket-matcher's max-disagreement pick was in-sample anti-edge
+  // (+$87/25tr + $32/11tr flip), so fading it has paid. Applied here, before
+  // any downstream use (Kelly probSide, cross-position gate), so the whole
+  // decision operates on the effective side. The net-edge magnitude is
+  // direction-agnostic, so the gate is unaffected by the flip.
+  const baseDirection: "YES" | "NO" = match.edge > 0 ? "YES" : "NO";
+  const direction: "YES" | "NO" = config.invertDirection
+    ? (baseDirection === "YES" ? "NO" : "YES")
+    : baseDirection;
   const edgeOk = netEdge >= config.edgeThreshold;
   gates.push({
     label: "Net edge ≥ küszöb",
@@ -232,6 +262,47 @@ export function makeWeatherDecision(params: {
   if (!edgeOk) reasons.push(
     `Net edge ${(netEdge * 100).toFixed(1)}% < threshold ${(config.edgeThreshold * 100).toFixed(0)}% ` +
     `(gross ${(grossEdge * 100).toFixed(1)}% - fee ${(config.roundtripFeePct * 100).toFixed(1)}%)`,
+  );
+
+  // 4b. Selection-bias / optimizer's-curse guard (B23, 2026-06-06).
+  // The bucket-matcher returns the bucket with the largest |edge| out of N
+  // candidates (see bucket-matcher.mts:matchBucket). The max of N noisy edge
+  // estimates is upward-biased — that's the optimizer's curse / winner's
+  // curse. The next-day temperature market is well-calibrated, so most of
+  // that selected edge is selection noise, not alpha (this is the structural
+  // root of the 27-32% win rate). We estimate the selection noise as the
+  // expected maximum of N draws, √(2·ln N)·σ_edge, and subtract
+  // selectionShrink × that from the gross edge before re-testing the
+  // threshold. The same family-wise idea as the Bonferroni IC threshold
+  // elsewhere in the codebase. Degrades to a pass when the knob is 0 or
+  // fewer than 2 buckets competed (no dispersion to estimate).
+  const allEdges = (match.allProbs ?? []).map((p) => p.edge);
+  const nBuckets = allEdges.length;
+  let shrunkGross = grossEdge;
+  let selPenalty  = 0;
+  if (config.selectionShrink > 0 && nBuckets >= 2) {
+    const meanEdge = allEdges.reduce((s, e) => s + e, 0) / nBuckets;
+    const varEdge  = allEdges.reduce((s, e) => s + (e - meanEdge) * (e - meanEdge), 0) / nBuckets;
+    const sigmaEdge = Math.sqrt(Math.max(0, varEdge));
+    const expectedMax = Math.sqrt(2 * Math.log(nBuckets));  // E[max of N std-normals]
+    selPenalty  = config.selectionShrink * expectedMax * sigmaEdge;
+    shrunkGross = Math.max(0, grossEdge - selPenalty);
+  }
+  const shrunkNet = shrunkGross - config.roundtripFeePct;
+  const selectionActive = config.selectionShrink > 0 && nBuckets >= 2;
+  const selectionOk = !selectionActive || shrunkNet >= config.edgeThreshold;
+  gates.push({
+    label: "Szelekciós torzítás (adverse-selection)",
+    passed: selectionOk,
+    actual: selectionActive
+      ? `shrunk net ${(shrunkNet * 100).toFixed(2)}% (gross ${(grossEdge * 100).toFixed(1)}% − sel.penalty ${(selPenalty * 100).toFixed(1)}% − fee ${(config.roundtripFeePct * 100).toFixed(1)}%, N=${nBuckets})`
+      : `n/a (shrink ${config.selectionShrink === 0 ? "OFF" : `N=${nBuckets}<2`})`,
+    required: selectionActive ? `≥ ${(config.edgeThreshold * 100).toFixed(1)}%` : "—",
+    hint: "A bucket-matcher a max-|edge| bucketet választja N közül → optimizer's curse. A √(2·ln N)·σ_edge szelekciós-zajt levonjuk a gross edge-ből; ha a maradék net edge a küszöb alatt van, az a trade vak max-disagreement (modell-hiba), nem alfa.",
+  });
+  if (!selectionOk) reasons.push(
+    `Selection-bias: shrunk net edge ${(shrunkNet * 100).toFixed(1)}% < threshold ${(config.edgeThreshold * 100).toFixed(0)}% ` +
+    `(raw gross ${(grossEdge * 100).toFixed(1)}% − selection penalty ${(selPenalty * 100).toFixed(1)}% over N=${nBuckets} buckets)`,
   );
 
   // 5. Sanity cap (gross edge ≤ cap)

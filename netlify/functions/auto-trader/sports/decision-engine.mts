@@ -113,6 +113,22 @@ export function makeSportsDecision(input: DecideInput): SportsTradeDecision {
     required: `>= $${config.minPositionUSDC}`,
   });
 
+  // Gate 5b: longshot floor (2026-06-06). The 2026-06-06 audit (n=15, 7% WR,
+  // −$32.29) showed the bot bets extreme longshots (bet-side price 0.016–0.135)
+  // where the model predicts ~25% but the realized hit-rate is ~7% (≈ the
+  // market price — the book is efficient on these). Even flipping to NO didn't
+  // help (−$9.55) because the 3.6-4% roundtrip fee eats the tiny-payoff side.
+  // Skip any side priced below the floor. Symmetric: catches longshot-YES and
+  // upset-NO alike. Passes (n/a) when the knob is 0.
+  const minPriceOk = config.minPrice <= 0 || marketPriceForSide >= config.minPrice;
+  gates.push({
+    label:    "Min bet-side price (longshot floor)",
+    passed:   minPriceOk,
+    actual:   `${(marketPriceForSide * 100).toFixed(1)}¢ (${direction})`,
+    required: config.minPrice > 0 ? `>= ${(config.minPrice * 100).toFixed(1)}¢` : "n/a (off)",
+    hint:     "Sub-küszöb longshotok kihagyása — a roundtrip fee a tiny-payoff oldalon felemészti az edge-et, a variancia lottószelvény-jellegű.",
+  });
+
   // Gate 6: Cross-position outcome-sum (2026-05-14e). On a single match
   // (eventSlug) the outcomes (home/away/draw) are mutually exclusive, so
   // Σ predictedProb across YES positions must be ≤ 1.0 — otherwise the
