@@ -93,7 +93,9 @@ export function getWeatherConfig(): WeatherConfig {
     // before we treat it as model error rather than alpha.
     marketDisagreeMaxC: parseFloat(process.env.WEATHER_DISAGREE_MAX_C || "2.0"),
     maxOpenPositions:   parseInt(process.env.WEATHER_MAX_OPEN_POSITIONS || "5", 10),
-    selectionShrink:    parseFloat(process.env.WEATHER_SELECTION_SHRINK || "0"),
+    // Activated 2026-06-07 (operator request) — default ON at 0.5 (half-strength
+    // optimizer's-curse correction). Set WEATHER_SELECTION_SHRINK=0 to disable.
+    selectionShrink:    parseFloat(process.env.WEATHER_SELECTION_SHRINK || "0.5"),
     invertDirection:    process.env.WEATHER_INVERT_DIRECTION === "true",
   };
 }

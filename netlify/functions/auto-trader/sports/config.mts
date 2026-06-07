@@ -59,7 +59,9 @@ export function getSportsConfig(): SportsConfig {
     maxKellyFraction: parseFloat(process.env.SPORTS_MAX_KELLY        || "0.05"),
     maxPositionUSDC:  parseFloat(process.env.SPORTS_MAX_POSITION_USD || "20"),
     minPositionUSDC:  parseFloat(process.env.SPORTS_MIN_POSITION_USD || "1"),
-    minPrice:         parseFloat(process.env.SPORTS_MIN_PRICE || "0"),
+    // Activated 2026-06-07 (operator request) — default ON at 0.05 (skip
+    // sub-5¢ longshots). Set SPORTS_MIN_PRICE=0 to disable.
+    minPrice:         parseFloat(process.env.SPORTS_MIN_PRICE || "0.05"),
     sessionLossLimit: parseFloat(process.env.SPORTS_SESSION_LOSS_LIMIT || "30"),
     minVolume24h:     parseFloat(process.env.SPORTS_MIN_VOLUME_24H   || "5000"),
     minHoursToEnd:    parseFloat(process.env.SPORTS_MIN_HOURS_TO_END || "2"),

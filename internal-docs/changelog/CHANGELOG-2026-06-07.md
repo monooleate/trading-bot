@@ -53,6 +53,7 @@ A 2026-06-04 reset óta (ma 06-06/07) friss paper-adat halmozódott. Minden lez�
 - Új teszt: [`adverse-selection-fixes.test.mts`](../../netlify/functions/auto-trader/shared/adverse-selection-fixes.test.mts) — 8 case (2× B22, 3× B23, 4× sports min-price… összesen 8 expect-csoport), all passed.
 - Regresszió: `cross-position-gates`, `sports-loss-limit-topup`, `funding-arb-reverse` tesztek mind zöld.
 
-### Állapot (deploy-függő)
-- Mind a 4 lever **default OFF / 0** (kivéve a weather presetek shrink-értékei) → **zero behavior change deploy-ig + operátor-aktiválásig**. A flip (B22) és a shrink (B23) NEM egyszerre futtatandó validáció nélkül. Élesítés: `netlify deploy --prod` után a Settings-knobok / auth-olt API.
-- A részletes audit read-only volt; nincs reset/stop. A bot-sessionök érintetlenek.
+### Aktiválás + reset (operátor-kérés, 2026-06-07)
+- A user kérésére **B23 (weatherSelectionShrink) ON @ 0.5** + **sportsMinPrice ON @ 0.05** — env- ÉS SCHEMA-default ON-ra állítva (a knob/override továbbra is állítható; `WEATHER_SELECTION_SHRINK=0` / `SPORTS_MIN_PRICE=0` kikapcsolja). **B22 (invertDirection) marad OFF** (kísérleti, a user nem kérte).
+- **Push `main`-re → Netlify CD prod-deploy.** (A `netlify` CLI nincs lokálisan telepítve; a deploy a GitHub `main`-push CD-jén megy.)
+- **Reset:** mind az 5 bot trade-history + bankroll vissza a `bankrollStart`-ra (friss adatgyűjtés a módosítások után). A `reset` action JWT-auth-gated (`PROTECTED_ACTIONS`) → operátor-credential szükséges (UI „Reset" gomb vagy auth-olt API). Lásd a session-záró megjegyzést.
