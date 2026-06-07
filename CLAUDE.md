@@ -382,9 +382,9 @@ netlify deploy --prod --dir=dist
 
 A user kérte mind az 5 bot flip-elemzését („jobban járnánk-e az ellentétes oldalon?"). Friss post-reset paper-adat (06-04 óta). **Flip-eredmény:** Weather −$87.88 → **+$32.38** (erős, de 2 confident-NO trade-ben koncentrált); Sports −$32.29 → −$9.55 (jobb, de **még mindig mínusz** — longshot-túlbecslés, nem flip-ügy); HL ≈ nulla (LONG-bias, B18); Crypto n=1; **F-Arb valójában rendben kereskedik** (+$0.22 net funding, a 0-érték csak edge-tracker display-bug volt). **4 fix implementálva:** B22 weather invert-toggle (OFF), **B23 weather selection-bias shrink AKTÍV @ 0.5**, sports `sportsMinPrice` longshot-floor **AKTÍV @ 0.05**, F-Arb edge-tracker mezőnév-fix. Új follow-up: **B26** (F-Arb ~$26.8 bankroll-gap). `tsc`+build+8-case új teszt+regresszió zöld. **Push `main` → Netlify CD deploy; reset auth-gated (operátor-credential kell).** Részletek: [changelog 2026-06-07](internal-docs/changelog/CHANGELOG-2026-06-07.md) · sprints.md B22/B23/B24/B25/B26.
 
-### 4 fő bot státusz (élő, 2026-06-07 — friss post-reset adat)
+### 4 fő bot státusz (2026-06-07 — RESET tiszta lapra a fixek után)
 
-> A 06-04 reset óta a botok újra kereskedtek. A lenti számok **élő** pull-ok (multi-status + edge-tracker). A részletes flip-elemzés a 2026-06-07 changelogban.
+> **2026-06-07 04:54 UTC RESET:** mind az 5 bot tiszta lapra állítva (auth-olt API) a B23/sports-floor élesítése után, hogy a friss adat már az új gate-ekkel gyűljön. **Élő számok mostantól: 0 closed / bankroll = start** (crypto $350 / weather $250 / HL $200 / F-Arb $200 / sports $450). A lenti tábla a **reset ELŐTTI flip-audit-snapshotot** dokumentálja (ez alapozta meg a fixeket) — a részletes flip-elemzés a 2026-06-07 changelogban.
 
 | Bot | Bankroll | PnL | Trades | Open | Megjegyzés |
 |-----|---------|-----|--------|------|-------|
