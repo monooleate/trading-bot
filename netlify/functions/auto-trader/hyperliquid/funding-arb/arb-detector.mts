@@ -58,14 +58,21 @@ export function detectArbOpportunity(d: FundingData, config: FrArbConfig): ArbOp
     };
   }
 
-  // Fee-aware break-even: carry × holdHours must exceed total roundtrip fees
-  const totalFees     = config.feeRoundtripHl + config.feeRoundtripBinance;
-  const breakEvenH    = totalFees / Math.max(score, 1e-9);
+  // Fee-aware break-even: carry × holdHours must exceed the TOTAL roundtrip
+  // cost — fees PLUS the paper-mode price-leg slippage that closeArbPosition
+  // actually charges. 2026-06-07 (B26): the previous version counted only
+  // `feeRoundtripHl + feeRoundtripBinance` (0.29%) and ignored the paper
+  // slippage entirely, so the gate green-lit positions whose carry could
+  // never cover the real close cost (the 2026-06-06 fee-negative bug). The
+  // slippage term MUST match fr-executor's `paperSlippageRoundtrip`.
+  const totalCost     = config.feeRoundtripHl + config.feeRoundtripBinance
+                      + (config.paperMode ? config.paperSlippageRoundtrip : 0);
+  const breakEvenH    = totalCost / Math.max(score, 1e-9);
   const breakEvenDays = breakEvenH / 24;
   if (breakEvenDays > config.maxHoldDays) {
     return {
       ...base,
-      reason: `Break-even hold ${breakEvenDays.toFixed(1)}d > max ${config.maxHoldDays}d (carry too low vs fees)`,
+      reason: `Break-even hold ${breakEvenDays.toFixed(1)}d > max ${config.maxHoldDays}d (carry too low vs ${(totalCost * 100).toFixed(2)}% roundtrip cost)`,
     };
   }
 

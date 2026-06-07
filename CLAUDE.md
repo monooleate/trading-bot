@@ -391,7 +391,7 @@ A user kérte mind az 5 bot flip-elemzését („jobban járnánk-e az ellentét
 | **Crypto** | $350 → **$307.40** | **−$22.57** | **1 closed** | 1 open | n=1 (above-62k YES@0.22, bukott). Nincs következtetés. B21 K-anchoring telepítve; 10–30 trade kell. `combinerConfidenceMin` **élőben 0.05** (a 06-04-i 0.08 override nincs élben — reset törölte). |
 | **Weather** | $250 → **$132.21** | **−$87.88** | **11 closed** | 3 open | 27% WR. **Flip +$32.38** (2 confident-NO trade hajtja). **B23 selection-shrink AKTÍV @ 0.5** (2026-06-07); B22 invert implementálva de OFF. |
 | **HL Perp** | $200 → **$199.40** | **−$0.60** | **20 closed** | 0 open | ≈ breakeven. LONG n=10 W=2 (−$4.61) vs SHORT n=10 W=7 (+$4.01) → **B18** long-bias (regime: BTC 66k→61k). Nem flip-ügy. |
-| **F-Arb** | $200 → **$173.41** | **+$0.22** (net funding) | **38 closed** | 0 open | **Rendben kereskedik** (Sprint 47 működött). A 0-érték az edge-trackerben **display-bug volt** → **B25 ✅ fixelve**. Új flag: bankroll-gap ~$26.8 (current $173.41 vs várt $200.22) → **B26**. |
+| **F-Arb** | $200 (reset) | **$0** | 0 closed | 0 open | **B25 ✅** (edge-tracker mezőnév-fix) + **B26 ✅** (fee-negatív gyökérok: a break-even gate kihagyta a paper-slippage-et → most slippage-aware @ 0.4%, +sessionPnL nettó-fix). Mostantól csak profitábilis spreadeken nyit (~18%/yr floor). |
 | **Sports** | $450 → **$417.71** | **−$32.29** | **15 closed** | 3 open | 7% WR (1/15). Flip −$9.55 (még mindig mínusz). Gyökérok: extrém longshot-túlbecslés → **`sportsMinPrice` floor AKTÍV @ 0.05** (2026-06-07). n=15 kis minta. |
 
 ### Mit fix utoljára (45. session, 2026-05-29 (c))

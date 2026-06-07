@@ -216,14 +216,15 @@ export async function closeArbPosition(
   // booking it again would double-count. Paper has no real fills, so we
   // approximate the live-equivalent slippage as a flat cost.
   //
-  //   HL entry IOC at markPrice × 0.995 → 0.5% adverse
-  //   HL close IOC at closeRefPrice × 1.010 → 1.0% adverse
-  //   Binance MARKET BUY+SELL roundtrip → ~0.1% adverse (2 × 0.05%)
+  //   HL entry/close IOC + Binance market roundtrip.
   //
-  // Total paper slippage roundtrip ≈ 1.6% of notional. In a healthy carry
-  // (hourly spread × hold_hours > 1.6% + fees) this stays profitable.
+  // 2026-06-07 (B26): the roundtrip slippage is now `config.paperSlippageRoundtrip`
+  // (default 0.004 = 0.4%), shared with the arb-detector break-even gate so the
+  // bot never opens a position it can't profitably close. The old hardcoded
+  // 0.016 summed the IOC limit BANDS (worst-case marry prices) rather than the
+  // expected fills, structurally guaranteeing fee-negative trades.
   const paperSlippage = config.paperMode
-    ? pos.sizeUSDC * 0.016
+    ? pos.sizeUSDC * config.paperSlippageRoundtrip
     : 0;
   const netPnl = pos.accumulatedFunding - fees - paperSlippage;
 

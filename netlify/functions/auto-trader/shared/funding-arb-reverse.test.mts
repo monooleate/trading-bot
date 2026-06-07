@@ -39,6 +39,7 @@ const CFG = (paperMode: boolean): FrArbConfig => ({
   feeRoundtripHl:      0.0007,
   feeRoundtripBinance: 0.001,
   maxSpreadHourly:     0.005,
+  paperSlippageRoundtrip: 0.004,
 });
 
 const fd = (over: Partial<FundingData>): FundingData => ({

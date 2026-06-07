@@ -23,6 +23,10 @@ export function getFrArbConfig(): FrArbConfig {
     minSpreadToClose:    parseFloat(process.env.FR_MIN_SPREAD_TO_CLOSE    || "0.00005"),
     feeRoundtripHl:      parseFloat(process.env.FR_FEE_ROUNDTRIP_HL       || "0.0009"),   // 0.045% × 2
     feeRoundtripBinance: parseFloat(process.env.FR_FEE_ROUNDTRIP_BINANCE  || "0.002"),    // 0.1%  × 2
+    // 2026-06-07 (B26): realistic expected IOC slippage (roundtrip), down from
+    // the 0.016 limit-band worst-case. Used by BOTH the close charge and the
+    // break-even gate so they can't diverge.
+    paperSlippageRoundtrip: parseFloat(process.env.FR_PAPER_SLIPPAGE      || "0.004"),    // 0.4% roundtrip
     // 2026-06-04: tightened 0.5%/h → 0.05%/h. The old 0.5%/h cap (4380%/yr)
     // let a 2952%/yr feed glitch (BTC 0.337%/h on 06-04 06:42 UTC) pass
     // straight through to sizing. 0.05%/h (438%/yr) still sits ~14× above the
@@ -50,6 +54,7 @@ export async function getEffectiveFrArbConfig(): Promise<FrArbConfig> {
       maxCapitalPct:      ov.frMaxCapitalPct      ?? env.maxCapitalPct,
       maxArbPositions:    ov.frMaxOpenPositions   ?? env.maxArbPositions,
       maxSpreadHourly:    ov.frMaxSpreadHourly    ?? env.maxSpreadHourly,
+      paperSlippageRoundtrip: ov.frPaperSlippage  ?? env.paperSlippageRoundtrip,
     };
   } catch {
     return env;

@@ -133,6 +133,16 @@ export interface FrArbConfig {
   minSpreadToClose:   number;   // close when spread falls below this
   feeRoundtripHl:     number;   // HL taker+taker
   feeRoundtripBinance: number;  // Binance spot taker+taker
+  // Paper-mode price-leg slippage charged on close (roundtrip, fraction of
+  // notional). Live mode bakes slippage into fills, so this is paper-only.
+  // 2026-06-07 (B26): recalibrated 0.016 → 0.004. The old 0.016 summed the
+  // IOC LIMIT bands (HL entry 0.5% + close 1.0% + Binance 0.1%) as if every
+  // order filled at its worst marry-able price; real IOC fills on liquid
+  // BTC/ETH/SOL land near mid, so ~0.4% roundtrip is the realistic expected
+  // slippage. CRITICAL: the break-even gate (arb-detector) must use the SAME
+  // value as the close charge (fr-executor) — otherwise the bot opens trades
+  // it can't profitably close (the 2026-06-06 fee-negative bug).
+  paperSlippageRoundtrip: number;
   // Sanity ceiling on the observed spread. Real funding spreads ~max
   // around 0.1%/h even in extreme regimes; anything above 0.5%/h is
   // almost certainly a feed glitch (one side returned NaN, wrong tick,

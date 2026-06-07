@@ -148,15 +148,22 @@ async function readFundingArb(paperMode: boolean): Promise<Snapshot> {
   const positions = Array.isArray(s.positions) ? s.positions : [];
   const open = positions.filter((p: any) => !p.closedAt).length;
   const closed = positions.length - open;
+  const arbStart   = typeof s.bankrollStart   === "number" ? s.bankrollStart   : 200;
+  const arbCurrent = typeof s.bankrollCurrent === "number" ? s.bankrollCurrent : 200;
   return {
     category: "funding-arb",
     label: "Funding Arbitrage",
     found: true,
     paperMode: s.paperMode,
-    bankrollStart:   typeof s.bankrollStart   === "number" ? s.bankrollStart   : 200,
-    bankrollCurrent: typeof s.bankrollCurrent === "number" ? s.bankrollCurrent : 200,
+    bankrollStart:   arbStart,
+    bankrollCurrent: arbCurrent,
     bankrollShared:  false,
-    sessionPnL: typeof s.totalFundingAllTime === "number" ? s.totalFundingAllTime : 0,
+    // 2026-06-07 (B26): realised NET PnL = bankrollCurrent − bankrollStart
+    // (creditArbPnl books net-of-fees closeFundingNet into bankrollCurrent on
+    // every close). The old `totalFundingAllTime` reported GROSS funding only,
+    // hiding the fee/slippage drag — it showed +$0.22 while the bot was
+    // actually −$26.60 net.
+    sessionPnL: parseFloat((arbCurrent - arbStart).toFixed(4)),
     closedTrades: closed,
     openPositions: open,
     stopped: !!s.stopped,

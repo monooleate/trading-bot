@@ -53,6 +53,15 @@ A 2026-06-04 reset óta (ma 06-06/07) friss paper-adat halmozódott. Minden lez�
 - Új teszt: [`adverse-selection-fixes.test.mts`](../../netlify/functions/auto-trader/shared/adverse-selection-fixes.test.mts) — 8 case (2× B22, 3× B23, 4× sports min-price… összesen 8 expect-csoport), all passed.
 - Regresszió: `cross-position-gates`, `sports-loss-limit-topup`, `funding-arb-reverse` tesztek mind zöld.
 
+### B26 — F-Arb fee-negatív gyökérok + sessionPnL nettó-fix (operátor-kérés, 2026-06-07)
+
+A reset után a user kérte az F-Arb fee-negativitás javítását. **Gyökérok:** a break-even gate ([`arb-detector.mts`](../../netlify/functions/auto-trader/hyperliquid/funding-arb/arb-detector.mts)) csak a fee-t (0.29%) számolta, a `closeArbPosition` által ténylegesen leszámolt **paper-slippage-et (1.6%) kihagyta** → a bot olyan trade-eket nyitott, amiket nem tudott profitábilisan zárni. 3 fix:
+1. **Break-even gate slippage-aware**: `totalCost = fees + (paper ? paperSlippageRoundtrip : 0)`, a close-charge-dzsal **azonos** értékkel (új `FrArbConfig.paperSlippageRoundtrip` mező, mindkét helyen ugyanaz).
+2. **Paper-slippage 0.016 → 0.004** (0.4%): a régi 1.6% az IOC limit-band worst-case-t összegezte (minden order a legrosszabb marry-áron), nem a várható fillt; liquid BTC/ETH/SOL-on ~0.4% reális. Új `frPaperSlippage` Settings-knob + `FR_PAPER_SLIPPAGE` env. Live-ban 0 (a fills-be már be van árazva).
+3. **multi-status sessionPnL nettó**: `bankrollCurrent − bankrollStart` (creditArbPnl a nettót könyveli) a bruttó `totalFundingAllTime` helyett — eddig +$0.22-t mutatott, miközben a valós nettó −$26.60 volt.
+
+**Hatás:** a bot csak olyan spreadeken nyit, ahol a carry fedezi a teljes roundtrip-költséget (~18%/yr floor 14d holdnál) → ritkábban, de profitábilisan. `tsc`+build+`farb-breakeven.test.mts` (4 case)+`funding-arb-reverse` regresszió zöld. **B22 invert NEM aktiválva** (a B23-mal ellentmondásos lenne).
+
 ### Aktiválás + reset (operátor-kérés, 2026-06-07)
 - A user kérésére **B23 (weatherSelectionShrink) ON @ 0.5** + **sportsMinPrice ON @ 0.05** — env- ÉS SCHEMA-default ON-ra állítva (a knob/override továbbra is állítható; `WEATHER_SELECTION_SHRINK=0` / `SPORTS_MIN_PRICE=0` kikapcsolja). **B22 (invertDirection) marad OFF** (kísérleti, a user nem kérte).
 - **Push `main`-re → Netlify CD prod-deploy.** (A `netlify` CLI nincs lokálisan telepítve; a deploy a GitHub `main`-push CD-jén megy.)
