@@ -400,10 +400,11 @@ A korábbi B9 (Topup action) átkerült a "📋 Next sprint candidates" szekció
 - **Trigger:** 2026-06-06 audit — a `/trade/funding-arb` 38 zárt trade-je **csupa nullát** mutatott (entryPrice/shares/pnl=0). Gyökérok: az [`edge-tracker.mts`](../../netlify/functions/edge-tracker.mts) `tradesFromSession` funding-arb ága **nem létező mezőneveket** olvasott (`hlAvgPrice`/`hlSize`/`realizedPnl`/`hlSide`) — az `ArbPosition` valós mezői `hlEntryPrice`/`sizeCoins`/`closeFundingNet`/`direction`. A pozíciók **valósak** voltak (multi-status: bankroll 200→173.41, sessionPnL +$0.22, 38 closed) — a bot rendben kereskedik (Sprint 47 működött), csak a megjelenítés volt hibás.
 - **Implementálva:** mezőnevek javítva + `pnlPct = closeFundingNet/sizeUSDC×100`, direction `forward→NO / reverse→YES` (mint a `funding-arb/index.mts` projekció). Read-only display fix, nincs trade-logika változás.
 
-### B26 — F-Arb bankroll-rekonciliáció gap (~$26) 🟠 OPEN
+### B26 — F-Arb fee-negatív + sessionPnL bruttó/nettó display-eltérés 🟠 OPEN (diagnózis kész 2026-06-07)
 
-- **Trigger:** 2026-06-06 audit melléklelet — a multi-status szerint F-Arb bankrollCurrent **$173.41**, de sessionPnL csak **+$0.22** → `200 + 0.22 = 200.22` várt vs 173.41 valós = **~$26.8 eltérés** (0 open pozíció mellett). A `closeFundingNet` típus-komment szerint „net after fees", így a funding-net már fee-zett — a $26.8 drop forrása tisztázatlan (entry/exit fee + paper-slippage dupla-számolás gyanú a `creditArbPnl` / sizing útvonalon).
-- **Mit kell:** read-only session-blob inspekció (`hyperliquid-arb-session-v1` / `arb_paper`) → a per-position `sizeUSDC` foglalás + `closeFundingNet` + bankroll-mutáció követése. Ha dupla-fee → fix a `fr-executor.mts:closeArbPosition` / `fr-session.mts:creditArbPnl`-ben. **Precondition:** nincs. **Becslés:** ~fél nap.
+- **Diagnózis (a B25 edge-tracker-fix után megoldva):** az F-Arb edge-tracker most a valós `closeFundingNet` összeget mutatja: **−$26.60** 38 trade-en, ami **pontosan rekonciliál** a bankroll-droppal ($200 − $26.60 = $173.41). Vagyis a „gap" NEM könyvelési hiba a bankrollon — **az F-Arb valójában fee-negatív**: a betakarított funding-spread (~$0.22 bruttó) nem fedezi az entry/exit fee-t + paper-slippage-et 38 nyitás-zárás-cikluson.
+- **A valódi bug:** a **multi-status `sessionPnL = +$0.22`** a *bruttó* funding-accrual-t mutatja, miközben a tényleges nettó (closeFundingNet) **−$26.60**. A sessionPnL-nek a nettót kéne mutatnia (különben a UI nyereségesnek hazudja a fee-negatív botot).
+- **Mit kell:** (1) `sessionPnL` accounting fix az F-Arb session-managerben (bruttó→nettó). (2) Stratégiai: a `frMinSpreadHourly` (jelenleg ~17.5%/yr) emelése úgy, hogy a spread × hold-days fedezze a ~$0.70/trade fee-t — különben minden trade fee-negatív. **Precondition:** nincs. **Becslés:** ~fél nap (accounting) + spread-küszöb kalibráció (B-szintű).
 
 ---
 
