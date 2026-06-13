@@ -374,11 +374,15 @@ netlify deploy --prod --dir=dist
 
 ---
 
-## AKTUÁLIS ÁLLAPOT (2026-06-07)
+## AKTUÁLIS ÁLLAPOT (2026-06-13)
 
 **Élő deploy:** `mj-trading.netlify.app`. Paper mode, simVersion 3 (crypto), v2 (HL).
 
-### Legutóbbi munka (46. session, 2026-06-07) — flip-audit + 4 adverse-selection fix
+### Legutóbbi munka (47. session, 2026-06-13) — weather invert-mode (B22) sizing bug fix
+
+A user élesítette a weather `weatherInvertDirection` toggle-t (ellentétes oldal nyitása), és jelezte, hogy **a P&L rosszul számolódik ebben a módban**. Élő edge-tracker pull: **9 invert-trade, mind `shares:0` / `pnl:0`**, 0% WR — köztük 2 ténylegesen nyerő bucket is „loss"-ként. **Gyökérok:** a B22-implementáció a Kelly `probSide`-ot a **flippelt** (anti-edge) oldalon számolta → `rawKelly=0` → `positionSizeUSDC=0` → `shares=costBasis=0` → a reconciler minden inverted trade-et `pnl=0×exit−0=0`-val zárt, nyerő/vesztő egyaránt. **Fix:** a Kelly mostantól a `baseDirection` (modell-preferált, +edge) oldalon méretez → az invert egy *azonos méretű tükörfogadás* (pontosan amit a flip-audit mért); `invertDirection=OFF` esetén szigorú no-op. 2 új sizing-teszt (összesen 10 case) + `tsc`+build+regresszió zöld. **Push `main` → Netlify CD; a fix csak ÚJ trade-eket érint — tiszta invert-adathoz weather session reset ajánlott (auth-gated).** Részletek: [changelog 2026-06-13](internal-docs/changelog/CHANGELOG-2026-06-13.md) · sprints.md B22.
+
+### Korábbi munka (46. session, 2026-06-07) — flip-audit + 4 adverse-selection fix
 
 A user kérte mind az 5 bot flip-elemzését („jobban járnánk-e az ellentétes oldalon?"). Friss post-reset paper-adat (06-04 óta). **Flip-eredmény:** Weather −$87.88 → **+$32.38** (erős, de 2 confident-NO trade-ben koncentrált); Sports −$32.29 → −$9.55 (jobb, de **még mindig mínusz** — longshot-túlbecslés, nem flip-ügy); HL ≈ nulla (LONG-bias, B18); Crypto n=1; **F-Arb valójában rendben kereskedik** (+$0.22 net funding, a 0-érték csak edge-tracker display-bug volt). **4 fix implementálva:** B22 weather invert-toggle (OFF), **B23 weather selection-bias shrink AKTÍV @ 0.5**, sports `sportsMinPrice` longshot-floor **AKTÍV @ 0.05**, F-Arb edge-tracker mezőnév-fix. Új follow-up: **B26** (F-Arb ~$26.8 bankroll-gap). `tsc`+build+8-case új teszt+regresszió zöld. **Push `main` → Netlify CD deploy; reset auth-gated (operátor-credential kell).** Részletek: [changelog 2026-06-07](internal-docs/changelog/CHANGELOG-2026-06-07.md) · sprints.md B22/B23/B24/B25/B26.
 
@@ -389,7 +393,7 @@ A user kérte mind az 5 bot flip-elemzését („jobban járnánk-e az ellentét
 | Bot | Bankroll | PnL | Trades | Open | Megjegyzés |
 |-----|---------|-----|--------|------|-------|
 | **Crypto** | $350 → **$307.40** | **−$22.57** | **1 closed** | 1 open | n=1 (above-62k YES@0.22, bukott). Nincs következtetés. B21 K-anchoring telepítve; 10–30 trade kell. `combinerConfidenceMin` **élőben 0.05** (a 06-04-i 0.08 override nincs élben — reset törölte). |
-| **Weather** | $250 → **$132.21** | **−$87.88** | **11 closed** | 3 open | 27% WR. **Flip +$32.38** (2 confident-NO trade hajtja). **B23 selection-shrink AKTÍV @ 0.5** (2026-06-07); B22 invert implementálva de OFF. |
+| **Weather** | $250 (reset) | **$0** | 9 closed* | — | *A 9 closed mind **$0-méretű junk** a B22 sizing-bug miatt (2026-06-13 előtt) → reset ajánlott. **B22 invert most ON (élő)** + sizing-fix; **B23 selection-shrink AKTÍV @ 0.5**. A reset-előtti flip-audit: 27% WR, flip +$32.38. |
 | **HL Perp** | $200 → **$199.40** | **−$0.60** | **20 closed** | 0 open | ≈ breakeven. LONG n=10 W=2 (−$4.61) vs SHORT n=10 W=7 (+$4.01) → **B18** long-bias (regime: BTC 66k→61k). Nem flip-ügy. |
 | **F-Arb** | $200 (reset) | **$0** | 0 closed | 0 open | **B25 ✅** (edge-tracker mezőnév-fix) + **B26 ✅** (fee-negatív gyökérok: a break-even gate kihagyta a paper-slippage-et → most slippage-aware @ 0.4%, +sessionPnL nettó-fix). Mostantól csak profitábilis spreadeken nyit (~18%/yr floor). |
 | **Sports** | $450 → **$417.71** | **−$32.29** | **15 closed** | 3 open | 7% WR (1/15). Flip −$9.55 (még mindig mínusz). Gyökérok: extrém longshot-túlbecslés → **`sportsMinPrice` floor AKTÍV @ 0.05** (2026-06-07). n=15 kis minta. |

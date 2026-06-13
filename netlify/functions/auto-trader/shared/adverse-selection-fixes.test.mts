@@ -82,6 +82,41 @@ function runWeather(config: WeatherConfig, match: BucketMatch) {
   expect(flip.direction === "YES", "b22.flipYes", `invert should flip to YES, got ${flip.direction}`);
 }
 
+// ── 1b. B22 sizing: an inverted trade must bet REAL size (not $0) ────────────
+// Regression for the 2026-06-13 "invert mode books $0 PnL" bug: Kelly was
+// sized on the flipped (anti-edge) side → (probSide·b − q) < 0 → rawKelly = 0
+// → positionSizeUSDC = 0 → shares = costBasis = 0 → the reconciler closed
+// every position at pnl = 0×exit − 0 = 0, win or lose. Kelly must size on
+// baseDirection so the fade is a same-size mirror of the model's natural bet.
+{
+  const match = buildMatch(0.20, [0.20, -0.03, 0.05]);   // base YES ⇒ flip NO
+  const base = runWeather(weatherConfig({ invertDirection: false }), match);
+  const flip = runWeather(weatherConfig({ invertDirection: true  }), match);
+  expect(base.shouldTrade === true, "b22.baseTrades", `base should trade, got "${base.reason}"`);
+  expect(flip.shouldTrade === true, "b22.flipTrades", `flip should trade, got "${flip.reason}"`);
+  expect(flip.positionSizeUSDC > 0, "b22.flipNonZeroSize",
+    `inverted trade must have non-zero size, got ${flip.positionSizeUSDC}`);
+  expect(Math.abs(flip.positionSizeUSDC - base.positionSizeUSDC) < 1e-6, "b22.flipMirrorSize",
+    `inverted size (${flip.positionSizeUSDC}) should mirror base size (${base.positionSizeUSDC})`);
+}
+// Same invariant from the edge<0 side: base NO ⇒ flip YES must also bet real
+// size. Fixture is self-consistent (probYes 0.30 < price 0.50 ⇒ edge −0.20),
+// mirroring the real matcher where edge === probability − currentPrice.
+{
+  const match: BucketMatch = {
+    bucket: { currentPrice: 0.50, label: "20°C", tokenId: "tok-1" } as any,
+    probability: 0.30,
+    edge: -0.20,
+    allProbs: [-0.20, 0.03, 0.05].map((e, i) => ({
+      label: `b${i}`, prob: 0.1, price: 0.1, edge: e, lo: 0, hi: 1,
+    })),
+  };
+  const flip = runWeather(weatherConfig({ invertDirection: true }), match);
+  expect(flip.direction === "YES", "b22.flipYes2", `invert should flip to YES, got ${flip.direction}`);
+  expect(flip.positionSizeUSDC > 0, "b22.flipYesNonZeroSize",
+    `inverted YES trade must have non-zero size, got ${flip.positionSizeUSDC}`);
+}
+
 // ── 2. B23: selectionShrink=0 is a strict no-op (gate passes, "n/a") ─────────
 {
   const match = buildMatch(0.20, [0.20, -0.18, 0.17, -0.16, 0.15]);

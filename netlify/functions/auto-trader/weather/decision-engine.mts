@@ -354,12 +354,26 @@ export function makeWeatherDecision(params: {
   // Now: f = (p*b − q)/b, b = (1/bucketPrice) − 1, then confidence-scaled.
   // Direction-aware: YES side uses match.probability vs bucketPrice,
   // NO side uses (1 − match.probability) vs (1 − bucketPrice).
+  //
+  // B22 sizing fix (2026-06-13): Kelly sizes on the MODEL-PREFERRED side
+  // (`baseDirection`), NOT the executed side. The model's edge — and hence
+  // its conviction — always lives on baseDirection (by construction:
+  // baseDirection is the side where probSide > priceSide). When
+  // invertDirection is on, `direction` is the *flipped* side, which the model
+  // assigns a sub-fair-value probability → (probSide·b − q) < 0 → rawKelly
+  // clamps to 0 → positionSizeUSDC = 0. That was the live "invert mode books
+  // $0 PnL on every trade, win or loss" bug: shares = costBasis = 0, so the
+  // reconciler closed every position at pnl = 0×exit − 0 = 0 regardless of the
+  // bucket outcome. Sizing on baseDirection makes the fade a *same-size mirror*
+  // of the bet the model would otherwise have placed — exactly the
+  // apples-to-apples comparison the flip-audit measured. When invertDirection
+  // is off, baseDirection === direction, so this is a strict no-op.
   const bucketPrice = match.bucket.currentPrice;
   const probYes     = (typeof (match as any).probability === "number")
     ? (match as any).probability
     : bucketPrice + match.edge;  // fallback: matchProb = bucketPrice + edge
-  const probSide  = direction === "YES" ? probYes : 1 - probYes;
-  const priceSide = direction === "YES" ? bucketPrice : 1 - bucketPrice;
+  const probSide  = baseDirection === "YES" ? probYes : 1 - probYes;
+  const priceSide = baseDirection === "YES" ? bucketPrice : 1 - bucketPrice;
   const safePrice = Math.max(0.01, Math.min(0.99, priceSide));
   const b = (1 / safePrice) - 1;
   const rawKelly = b > 0 ? Math.max(0, (probSide * b - (1 - probSide)) / b) : 0;
