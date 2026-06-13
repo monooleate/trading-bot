@@ -88,6 +88,51 @@ garantálja, hogy `baseDirection` (a `match.edge` előjeléből) tényleg a +pro
   reset ajánlott** (auth-olt API, operátor-credential kell) — a fix után minden
   invert-trade valós méretet és valós W/L PnL-t kap.
 
+### Counterfactual — mi lett volna a 9 trade eredménye helyes méretezéssel? (user-kérés)
+
+A rögzített entry/exit árakból a dollár-PnL trade-enként `méret × szorzó`, ahol a
+szorzó árfüggetlen és pontos: nyerés → `(1−entry)/entry`, veszteség → `−1`.
+
+| # | Piac | Oldal | Entry | Kimenet | Szorzó |
+|---|------|-------|-------|---------|--------|
+| 1 | Hong Kong jún-12 | NO | 0.94 | veszt | −1.00 |
+| 2 | **Shenzhen jún-12** | NO | 0.814 | **nyer** | **+0.229** |
+| 3 | Seoul jún-12 | NO | 0.615 | veszt | −1.00 |
+| 4 | Madrid jún-11 | YES | 0.435 | veszt | −1.00 |
+| 5 | Hong Kong jún-11 | YES | 0.405 | veszt | −1.00 |
+| 6 | London jún-11 | YES | 0.385 | veszt | −1.00 |
+| 7 | Tokyo jún-11 | YES | 0.585 | veszt | −1.00 |
+| 8 | Seoul jún-11 | YES | 0.34 | veszt | −1.00 |
+| 9 | **Seoul jún-10** | YES | 0.99 | **nyer** | **+0.0101** |
+
+**7 veszteség, 2 nyerés (22% WR).** A 2 nyerés payoffja apró (Shenzhen +22.9%, Seoul
++1% — 0.99-en alig volt felfelé tér). A méret a Kelly-ből (`baseDirection`, $250
+bankroll, ¼-Kelly, 15% cap, $25 max-pozíció); a 4 legnagyobb-edge trade a $25 capba
+ütközik. Reprezentatív becslés (conf ≈ 0.75): veszteségek ≈ −$162, nyerések ≈ +$3.2 →
+**aggregált ≈ −$159** (compounding nélkül; reálisan **≈ −$130…−$160**, záró bankroll
+~$95–120).
+
+**Kulcs-tanulság:** az invert NEM keresett volna — a $0 valós veszteséget takart. A
+modell ezen a mintán **7/9-ben jól tippelt**, és a fade pont a jó tippeket fordította
+meg. Ez a B22 dokumentált kockázata, és mivel a **B23 selection-shrink AKTÍV @ 0.5**
+(javította a bucket-picket), a fade-elése visszaüt.
+
+### Operátor-akciók (auth-olt API, user-jóváhagyott — 2026-06-13)
+
+A counterfactual alapján a user kérésére:
+
+1. **`weatherInvertDirection` → OFF.** POST `trader-settings {weatherInvertDirection:0}`
+   → a Blobs-override törlődött (0 == default → prune). Igazolva: GET után az override
+   `<removed>`, effective `0`; és egy élő weather `run`-scan mind az 5 piacon „normal"
+   (nem inverted) irányt választott (`direction === baseDirection`), ami kizárja, hogy
+   a `WEATHER_INVERT_DIRECTION` env-var kényszerítené ON-ra. (Megj.: a Netlify Blobs
+   read-after-write néhány másodperc propagation-lag-et mutatott a POST után — a
+   második GET-re állt be.)
+2. **Weather session RESET** → POST `auto-trader {action:"reset",category:"weather",bankroll:250}`.
+   Tiszta lap: `bankrollStart 250 / current 250 / sessionPnL 0 / closed 0 / open 0`.
+   A 9 $0-junk-trade + 4 $0-open-pozíció törölve. Mostantól nem-inverted, valós-méretű
+   adat gyűlik.
+
 ### Maradó (analytics-only, NEM a bejelentett bug)
 
 - A pozíció `predictedProb` mezője inverted trade-en is a **YES-oldali** modell-prob
