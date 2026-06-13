@@ -251,6 +251,8 @@ A combiner-súlyozás (`w = ic × (1 + |demeaned| × 0.5)`) a normától távola
 
 A 2026-05-15 incidens 3 contrarian trade-jét a fix után a `Combiner confidence (|p − 0.5|)` gate (#3) automatikusan blokkolja Normal preset alatt, mert a K-érzékeny finalProb értékek **nem a noise-küszöb körül** lesznek (pl. ≈0.7 vagy ≈0.2), és a gate nem ezeket bünteti.
 
+> **cond_prob cross-strike contamination fix** → **[sprints.md B27](../roadmap/sprints.md)** ✅ 2026-06-14. A `getCondProbSignal` monotonicity-ága (`P(YES korábbi deadline) ≤ P(YES későbbi deadline)`) korábban **kulcsszó alapján** húzott be related piacokat, strike-szűrés nélkül → KÜLÖNBÖZŐ strike-okat hasonlított (above-60k vs above-66k), hamis violation-ökkel a −0.3 cap-re telítve a jelet (`cond_prob = 0.2`, konstans bearish ~0.17 súllyal). A fix: csak **azonos parsed strike K** (`parseThresholdK(m.slug) === selfK`); up-or-down piacon a monotonicity-ág kimarad (complement-only → ~0.5). Ez volt a 2026-06 crypto vesztő-széria egyik strukturális oka.
+
 > **K-blind signal re-weighting** → **[sprints.md Sprint 42A](../roadmap/sprints.md)** ✅ implementálva 2026-05-15 (speculative, default-off). A `combinerKBlindDownweight` Settings-knob default 1.0 (zero behavior change). 0.5-re állítva a 4 K-blind signal (momentum, contrarian, funding_rate, pairs_spread) IC-súlya feleződik **csak threshold piacokon** (`bitcoin-above-Nk-on-...`); up-or-down + directional piacokon nincs változás. Sprint 42 monitoring data alapján kapcsolható át, ha 10+ trade-en a finalProb még mindig 0.45-0.50 sávban ragad. Részletes hatás-elemzés a `sprints.md` aljának "Hatás-elemzés" szekciójában.
 
 ### Tesztek

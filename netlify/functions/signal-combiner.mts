@@ -747,13 +747,26 @@ async function getCondProbSignal(market: MarketInfo): Promise<{ prob: number | n
     const complementSigned = -dev;  // signed contribution toward p(YES)
 
     // 2. Search related markets for monotonicity violations
-    const q = market.question.toLowerCase();
-    const keywords = q.split(/\s+/).filter(w => w.length > 3).slice(0, 3);
+    //
+    // 2026-06-14 fix (cond_prob cross-strike contamination): the monotonicity
+    // invariant P(YES by earlier deadline) ≤ P(YES by later deadline) only
+    // holds for the SAME strike across different dates. The old code matched
+    // related markets by shared question keywords ("bitcoin", "above") with NO
+    // strike check, so it compared DIFFERENT strikes (e.g. above-60k @ ~0.84
+    // vs our above-66k @ ~0.10) as if they were the same series — generating
+    // huge spurious "violations" that saturated the signed shift at its −0.3
+    // cap. That pinned cond_prob to 0.2 (a constant bearish pull carrying
+    // ~0.17 combiner weight) and biased every BTC threshold market toward NO,
+    // contributing to the 2026-06 crypto losing streak. Now we only compare
+    // markets with the IDENTICAL parsed strike K, and skip the monotonicity
+    // component entirely for non-threshold markets (up-or-down has no strike →
+    // no monotonic family, so cond_prob falls back to the complement check).
+    const selfK = parseThresholdK(market.slug);
     let monotonSigned = 0;  // signed contribution from related markets
     let monotonAbsSum = 0;  // for detail display only
     let relatedCount = 0;
 
-    if (keywords.length > 0) {
+    if (selfK !== null) {
       try {
         const mRes = await fetch(
           `${GAMMA}/markets?active=true&closed=false&limit=30&order=volume24hr&ascending=false`,
@@ -764,8 +777,7 @@ async function getCondProbSignal(market: MarketInfo): Promise<{ prob: number | n
           const all = Array.isArray(mData) ? mData : (mData.markets || []);
           const related = all.filter((m: any) => {
             if (m.slug === market.slug) return false;
-            const mq = (m.question || "").toLowerCase();
-            return keywords.some(kw => mq.includes(kw));
+            return parseThresholdK(m.slug) === selfK;  // SAME strike only
           });
 
           for (const r of related.slice(0, 5)) {
@@ -803,7 +815,10 @@ async function getCondProbSignal(market: MarketInfo): Promise<{ prob: number | n
     if (totalMagnitude < 0.02) {
       return {
         prob: 0.5,
-        detail: { complement: complement.toFixed(3), monotonicity: "ok", related: relatedCount },
+        detail: {
+          complement: complement.toFixed(3), monotonicity: "ok",
+          strike: selfK, same_strike_related: relatedCount,
+        },
       };
     }
 
@@ -817,7 +832,8 @@ async function getCondProbSignal(market: MarketInfo): Promise<{ prob: number | n
         monoton_signed:    (monotonSigned    * 100).toFixed(1) + "¢",
         monoton_abs_sum:   (monotonAbsSum    * 100).toFixed(1) + "¢",
         net_signed:        (netSigned        * 100).toFixed(1) + "¢",
-        related: relatedCount,
+        strike:            selfK,
+        same_strike_related: relatedCount,
       },
     };
   } catch { return { prob: null, detail: null }; }
