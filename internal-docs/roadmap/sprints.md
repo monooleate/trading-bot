@@ -415,6 +415,12 @@ A korábbi B9 (Topup action) átkerült a "📋 Next sprint candidates" szekció
 - **Fix:** a related-szűrő mostantól csak **azonos parsed strike K** piacokat hasonlít (`parseThresholdK(m.slug) === selfK`); non-threshold (up-or-down) piacon a monotonicity-ág teljesen kimarad (nincs strike-család → cond_prob a complement-checkre esik vissza, ~0.5 neutrális). Detail mostantól kiírja a `strike` + `same_strike_related` mezőt (live-verifikálható). `tsc`+build zöld; live-verifikáció deploy után.
 - **Maradó (fix B → backlog candidate):** a WATCH / LOW-IR (alacsony combiner-bizalom) trade-ek átcsúsznak a kapun (a WATCH csak SKIP-en vétóz, az edge a 20%-os extrém-edge-veto alatt ül). Javaslat: a LOW-confidence trade blokkolódjon vagy erősen leméreteződjön. **Nincs még bevezetve** — külön sprint, ha az adat indokolja.
 
+### B28 — Weather longshot floor (min bet-side price) ✅ IMPLEMENTED 2026-06-15 🟠
+
+- **Trigger:** weather trade-history audit (changelog 2026-06-15). A post-reset 11-trade minta +$392.33-at hozott (PnL bit-pontosan validált, Polymarket Gamma cross-check: a Hong Kong 29°C bucket jún-14 ÉS jún-15 is YES-re resolvolt — valós). **DE** a profit ~98%-át **két mély-OTM tail-bucket** hajtotta: Hong Kong 29°C YES @ ~4.6¢ → +$335.94 és +$146.53.
+- **Probléma:** ezek a 4–6¢-os tail-bucketek paper-ben tökéletesen töltődnek a jegyzett áron, teljes mérettel (355 ill. 155 share), de **élesben a vékony order book miatt nem fillelhetők méretben** → a paper PnL (+157%) felfelé torzul nem-realizálható tail-találatoktól. Szimmetrikus probléma a NO-oldalon is (Seoul jún-13 NO @ 1.4¢ egy 99.6%-os bucketre — bukott). `evGap = −$486` is jelzi: a modell túlbecsüli a tail-edge-et.
+- **Fix:** új `minPrice` floor a [`weather/decision-engine.mts`](../../netlify/functions/auto-trader/weather/decision-engine.mts)-ben (új gate „Min bet-side price (longshot floor)", a Kelly-cap után): a megfogadott (executed `direction`) oldal market-ára < `minPrice` → blokk. Szimmetrikus (YES + NO). 0 = OFF. Új `weatherMinPrice` Settings-knob (default 0.05) + `WEATHER_MIN_PRICE` env; presetek: loose 0.03 / normal 0.05 / strict 0.08. A sports `sportsMinPrice` floor (B24) weather-megfelelője. Teszt: `adverse-selection-fixes.test.mts` (+4 B28 case: blocks-longshot-YES, blocks-upset-NO, off-noop, passes-sane). `tsc`+build zöld.
+
 ---
 
 ## ✅ Completed sprints (rolling 5 utolsó)

@@ -35,6 +35,12 @@ export interface WeatherConfig {
   // invertDirection (B22, experimental): always bet the OPPOSITE side of the
   // model. Band-aid for the in-sample anti-edge — prefer selectionShrink.
   invertDirection: boolean;   // default false
+  // minPrice (B28, 2026-06-15): longshot floor on the BET-SIDE market price.
+  // Deep-OTM tail buckets (e.g. a 5¢ "29°C" bucket) fill perfectly in paper
+  // mode but are barely fillable live (thin book) → paper PnL is inflated by
+  // tail hits that wouldn't realise at size. Skip any side priced below this.
+  // 0 = off (legacy behaviour). Mirrors the sports `minPrice` floor (B24).
+  minPrice: number;           // default 0.05
 }
 
 export interface WeatherTradeDecision {
@@ -97,6 +103,7 @@ export function getWeatherConfig(): WeatherConfig {
     // optimizer's-curse correction). Set WEATHER_SELECTION_SHRINK=0 to disable.
     selectionShrink:    parseFloat(process.env.WEATHER_SELECTION_SHRINK || "0.5"),
     invertDirection:    process.env.WEATHER_INVERT_DIRECTION === "true",
+    minPrice:           parseFloat(process.env.WEATHER_MIN_PRICE || "0.05"),
   };
 }
 
@@ -129,6 +136,7 @@ export async function getEffectiveWeatherConfig(): Promise<WeatherConfig> {
       selectionShrink:    ov.weatherSelectionShrink    ?? env.selectionShrink,
       invertDirection:    ov.weatherInvertDirection !== undefined
         ? ov.weatherInvertDirection >= 0.5 : env.invertDirection,
+      minPrice:           ov.weatherMinPrice        ?? env.minPrice,
     };
   } catch {
     return env;
@@ -155,6 +163,11 @@ export const WEATHER_GATE_LABELS = [
   "Sanity cap (gross edge ≤ cap)",
   "Market disagreement ≤ küszöb",
   "Kelly méret ≤ cap",
+  // Longshot floor (B28, 2026-06-15). Skip deep-OTM tail buckets whose
+  // BET-SIDE market price is below config.minPrice — those fill perfectly in
+  // paper but are barely fillable live, inflating paper PnL with tail hits
+  // that wouldn't realise at size. Symmetric (YES + NO). Passes (n/a) at 0.
+  "Min bet-side price (longshot floor)",
   // Cross-position consistency (2026-05-14e). Blocks an entry that would
   // push the sum of YES-side predicted probabilities over 1.0 on the same
   // (city, date) negRisk event. Bucket-markets in one event are mutually
@@ -388,6 +401,29 @@ export function makeWeatherDecision(params: {
     required: `≤ ${(KELLY_CAP * 100).toFixed(1)}%`,
     hint: "¼-Kelly × confidence + 15% hard cap, plus a maxPositionUSD floor.",
   });
+
+  // 7b. Longshot floor (B28, 2026-06-15). The 2026-06-15 weather audit showed
+  // the +$392 paper PnL was driven by two deep-OTM tail buckets (Hong Kong
+  // 29°C @ ~4.6¢, YES) that hit. Those fill perfectly in paper at the quoted
+  // price + full size, but a 5¢ tail bucket's live order book is too thin to
+  // fill $20 there — so paper PnL is inflated by tail wins that wouldn't
+  // realise live. We also saw the symmetric loss (Seoul NO @ 1.4¢ on a 99.6%
+  // bucket). Skip any side whose market price is below the floor. Uses the
+  // EXECUTED `direction` (not baseDirection) so it reflects the side actually
+  // bought; symmetric across YES/NO. Passes (n/a) when the knob is 0.
+  const betSidePrice = direction === "YES" ? bucketPrice : 1 - bucketPrice;
+  const minPriceOk = config.minPrice <= 0 || betSidePrice >= config.minPrice;
+  gates.push({
+    label: "Min bet-side price (longshot floor)",
+    passed: minPriceOk,
+    actual:   `${(betSidePrice * 100).toFixed(1)}¢ (${direction})`,
+    required: config.minPrice > 0 ? `≥ ${(config.minPrice * 100).toFixed(1)}¢` : "n/a (off)",
+    hint: "Mély-OTM tail-bucketek (pl. 5¢ ár) paper-ben tökéletesen töltődnek, élesben a vékony order book miatt nem — a paper PnL felfelé torzul a nem-realizálható tail-találatoktól. Szimmetrikus (YES + NO).",
+  });
+  if (!minPriceOk) reasons.push(
+    `Bet-side price ${(betSidePrice * 100).toFixed(1)}¢ < longshot floor ${(config.minPrice * 100).toFixed(1)}¢ ` +
+    `(${direction}) — deep-OTM bucket, not realistically fillable live`,
+  );
 
   // 8. Cross-position consistency (2026-05-14e). Polymarket weather events
   // are negRisk groups: all sub-buckets in one (city, date) event are

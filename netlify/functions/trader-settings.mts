@@ -131,6 +131,7 @@ const SCHEMA: Record<string, FieldSpec> = {
   // shrink, a gyökérok-fix). A doc szerint B23 a preferált; B22 csak gyors hedge.
   weatherSelectionShrink:    { default: 0.5,  min: 0,   max: 2.0, label: "Selection-bias shrink (B23)",   step: 0.1,   unit: "ratio", category: "weather", group: "Risk & sizing", help: "GYÖKÉROK-FIX (B23): a matchBucket a legnagyobb |edge|-ű bucketet választja N közül → optimizer's curse (a kiválasztott edge felfelé torzít). Ez a knob a √(2·ln N)·σ_edge szelekciós-zaj-becslést vonja le a gross edge-ből (×ez a szorzó), mielőtt a net-edge gate dönt. 0 = OFF (régi viselkedés). 1.0 = teljes egy-szigmás szelekciós korrekció (a Bonferroni-idioma weather-megfelelője). 0.5 = félerős (AKTÍV default 2026-06-07 óta). Hatás: a vak max-disagreement contrarian trade-ek kiesnek, a valódi nagy-edge-ek maradnak." },
   weatherInvertDirection:    { default: 0,    min: 0,   max: 1,   label: "⚠️ EXPERIMENTAL: invert (fade)", step: 1,     unit: "bool", category: "weather", group: "Risk & sizing", help: "KÍSÉRLETI (B22): ha ON, a bot MINDIG a modell ellenkező oldalára fogad (YES↔NO flip). A 2026-06-04 (+$87/25tr) + 2026-06-06 (+$32/11tr) flip-auditok alapján a weather-modell in-sample anti-edge volt (a bucket-matcher adverse selection-je miatt). Band-aid: ha a B23 shrink jól sikerül, EZT kapcsold KI (különben a jó tippeket fade-elné). Ne futtasd élesen B23-mal egyszerre validáció nélkül. Default OFF." },
+  weatherMinPrice:           { default: 0.05, min: 0,   max: 0.5, label: "Min bet-side price (longshot floor)", step: 0.005, unit: "frac", category: "weather", group: "Risk & sizing", help: "LONGSHOT FLOOR (B28): a megfogadott oldal (YES vagy NO) Polymarket-árának minimuma. 0 = OFF (régi viselkedés). 0.05 = sub-5¢ mély-OTM tail-bucketek kihagyása. A 2026-06-15 audit kimutatta, hogy a +$392 paper-profit ~98%-át két 4.6¢-os Hong Kong tail-bucket (29°C) hajtotta — ezek paper-ben tökéletesen töltődnek, de élesben a vékony order book miatt nem fillelhetők méretben → a paper PnL felfelé torzul. Szimmetrikus: a longshot-YES-t és az upset-NO-t is kapja. A sports `sportsMinPrice` floor (B24) weather-megfelelője." },
   // ─── Tier 1 (32. session) belső konstansok expose-olva ──────────────
   // A Black-Scholes vol_divergence + collinearity matrix + Bonferroni IC
   // threshold számára. Default = a Tier 1 hardcoded értékei, vagyis a
@@ -293,6 +294,7 @@ export const PRESETS: Record<string, CategoryPresets> = {
         weatherMaxPositionUSD:   15,
         weatherMaxOpenPositions: 8,
         weatherSelectionShrink:  0,     // OFF — több paper trade a kalibrációhoz
+        weatherMinPrice:         0.03,  // csak a sub-3¢ extrém tail-bucketeket szűri (B28)
       },
     },
     normal: {
@@ -307,6 +309,7 @@ export const PRESETS: Record<string, CategoryPresets> = {
         weatherMaxPositionUSD:   25,
         weatherMaxOpenPositions: 5,
         weatherSelectionShrink:  0.5,   // félerős szelekciós-torzítás korrekció (B23)
+        weatherMinPrice:         0.05,  // sub-5¢ mély-OTM tail-bucket floor (B28)
       },
     },
     strict: {
@@ -321,6 +324,7 @@ export const PRESETS: Record<string, CategoryPresets> = {
         weatherMaxPositionUSD:   40,
         weatherMaxOpenPositions: 3,
         weatherSelectionShrink:  1.0,   // teljes egy-szigmás szelekciós korrekció (B23)
+        weatherMinPrice:         0.08,  // szigorúbb tail-floor — csak ≥8¢ bucketek (B28)
       },
     },
   },

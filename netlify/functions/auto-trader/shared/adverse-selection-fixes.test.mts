@@ -162,6 +162,46 @@ function runWeather(config: WeatherConfig, match: BucketMatch) {
     `a lone large edge (small σ) should survive shrink, got passed=${g?.passed} actual=${g?.actual}`);
 }
 
+// ── 4b. B28: weather longshot floor (min bet-side price) ────────────────────
+// Regression for the 2026-06-15 audit: +$392 paper PnL was ~98% driven by two
+// deep-OTM tail buckets (Hong Kong 29°C @ ~4.6¢) that fill perfectly in paper
+// but aren't fillable at size live. The floor skips any side priced below it.
+function otmMatch(currentPrice: number, probability: number, edge: number): BucketMatch {
+  return {
+    bucket: { currentPrice, label: "29°C", tokenId: "tok-1" } as any,
+    probability, edge,
+    allProbs: [{ label: "b0", prob: probability, price: currentPrice, edge, lo: 0, hi: 1 }],
+  };
+}
+// Deep-OTM YES: bucketPrice 0.04, model 0.45 ⇒ edge +0.41 ⇒ exec YES @ 4¢.
+{
+  const d = runWeather(weatherConfig({ minPrice: 0.05 }), otmMatch(0.04, 0.45, 0.41));
+  const g = (d.gates ?? []).find((x) => x.label === MINPRICE_LABEL);
+  expect(!!g, "b28.gatePresent", "weather min-price gate must be present");
+  expect(d.direction === "YES", "b28.dirYes", `0.04 bucket, model 0.45 ⇒ YES, got ${d.direction}`);
+  expect(g?.passed === false, "b28.blocksLongshotYes", `4¢ YES side < 5¢ floor must fail, got ${g?.passed}`);
+  expect(d.shouldTrade === false, "b28.noTradeYes", "shouldTrade must be false under the floor");
+}
+// Upset NO: bucketPrice 0.97 ⇒ NO side price 0.03 ⇒ exec NO @ 3¢.
+{
+  const d = runWeather(weatherConfig({ minPrice: 0.05 }), otmMatch(0.97, 0.50, -0.47));
+  const g = (d.gates ?? []).find((x) => x.label === MINPRICE_LABEL);
+  expect(d.direction === "NO", "b28.dirNo", `0.97 bucket ⇒ NO, got ${d.direction}`);
+  expect(g?.passed === false, "b28.blocksUpsetNo", `3¢ NO side < 5¢ floor must fail, got ${g?.passed}`);
+}
+// minPrice=0 ⇒ strict no-op: the same deep-OTM bucket passes (n/a).
+{
+  const d = runWeather(weatherConfig({ minPrice: 0 }), otmMatch(0.04, 0.45, 0.41));
+  const g = (d.gates ?? []).find((x) => x.label === MINPRICE_LABEL);
+  expect(g?.passed === true, "b28.offPass", `minPrice=0 must pass (n/a), got ${g?.passed}`);
+}
+// Sane bucket (0.30) clears the floor.
+{
+  const d = runWeather(weatherConfig({ minPrice: 0.05 }), buildMatch(0.20, [0.20, -0.03, 0.05]));
+  const g = (d.gates ?? []).find((x) => x.label === MINPRICE_LABEL);
+  expect(g?.passed === true, "b28.passesSane", `30¢ YES side ≥ 5¢ floor must pass, got ${g?.passed}`);
+}
+
 // ── Sports fixtures ─────────────────────────────────────────────────────────
 function sportsMarket(yesPrice: number): SportsMarket {
   return {

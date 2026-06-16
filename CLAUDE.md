@@ -374,11 +374,15 @@ netlify deploy --prod --dir=dist
 
 ---
 
-## AKTUÁLIS ÁLLAPOT (2026-06-14)
+## AKTUÁLIS ÁLLAPOT (2026-06-15)
 
 **Élő deploy:** `mj-trading.netlify.app`. Paper mode, simVersion 3 (crypto), v2 (HL).
 
-### Legutóbbi munka (48. session, 2026-06-14) — crypto audit + flip-analízis + `cond_prob` strike-fix (B27) + reset
+### Legutóbbi munka (49. session, 2026-06-15) — weather trade-history audit + B28 longshot floor
+
+A user kérte a weather history ellenőrzését + a nagy nyeremények azonosítását. **Audit:** a 06-13-i reset óta 11 closed trade, +$392.33; PnL bit-pontosan reprodukálható (fee-mentes weather modell, eltérés +0.000), bankroll rekonciliál ($542.33). **Polymarket Gamma cross-check: a két nagy nyeremény VALÓS** — a Hong Kong 29°C bucket jún-14 ÉS jún-15 is YES-re resolvolt (+$335.94 @ ~5.6¢ és +$146.53 @ ~5.6¢ = a profit ~98%-a). **DE figyelmeztetés:** ezek mély-OTM tail-bucketek, amik paper-ben tökéletesen töltődnek, de élesben a vékony order book miatt nem fillelhetők méretben → a paper PnL (+157%) felfelé torzul (`evGap −$486` is jelzi). **Fix (B28, commit pusholva):** új `minPrice` longshot-floor a weather decision-engine-ben (gate a Kelly-cap után) — a megfogadott oldal market-ára < floor → blokk (szimmetrikus YES/NO). Új `weatherMinPrice` Settings-knob (default 0.05; loose 0.03 / normal 0.05 / strict 0.08) + `WEATHER_MIN_PRICE` env. A sports `sportsMinPrice` (B24) weather-megfelelője. +4 teszt-case, `tsc`+build zöld. A meglévő session **NEM** resetelve (a már realizált nyeremények valósak; a floor csak a JÖVŐBELI belépőkre hat). Részletek: [changelog 2026-06-15](internal-docs/changelog/CHANGELOG-2026-06-15.md) · sprints.md B28.
+
+### Korábbi munka (48. session, 2026-06-14) — crypto audit + flip-analízis + `cond_prob` strike-fix (B27) + reset
 
 A user kérte a `/trade/crypto/` ellenőrzését („itt tényleg az ellenkezőjére kellene fogadni"). **Validáció:** 12 closed trade, PnL bit-pontosan reprodukálható (−$120.38, eltérés +0.000), bankroll rekonciliál; de **17% WR, evGap −$234, 80% maxDD**. **Flip-analízis:** azonos tét ellentétes oldalon **+$80.57** (83% WR) — DE **regime-műtermék, nem stabil anti-edge**: a jel-szintű diagnózis kimutatta, hogy a modell MOST bullish (above-66k finalProb 0.39 vs market 0.19, az emelkedéssel összhangban), a 12 veszteség a jún-8…13-i bearish/counter-trend hétre esik. **A flip a visszapillantó-tükörre fogadna** (a weather B22-csapda). **Valódi bug (B27, commit pusholva):** a `cond_prob` jel a 3 nyitott snapshotban pontosan 0.200-ra telített (= −0.3 bearish cap), mert a related-piac monotonicity-check **kulcsszó alapján, strike-szűrés nélkül** húzott be piacokat → KÜLÖNBÖZŐ strike-okat hasonlított hamis violation-ökkel (~0.17 combiner-súly, konstans bearish lökés). **Fix:** csak azonos parsed strike K-t hasonlít; up-or-down piacon a monotonicity kimarad. **Jó hír:** a `vol_divergence` MOST K-aware és működik (B21 harap). **Crypto session RESET** ($350 tiszta lap) a deploy után. Maradó (fix B → backlog): a WATCH/LOW-IR trade-ek átcsúsznak a kapun. Részletek: [changelog 2026-06-14](internal-docs/changelog/CHANGELOG-2026-06-14.md) · sprints.md B27.
 
@@ -399,7 +403,7 @@ A user kérte mind az 5 bot flip-elemzését („jobban járnánk-e az ellentét
 | Bot | Bankroll | PnL | Trades | Open | Megjegyzés |
 |-----|---------|-----|--------|------|-------|
 | **Crypto** | $350 (RESET 06-14) | **$0** | 0 closed | 0 open | **RESET (2026-06-14)** a B27 cond_prob-fix után. A reset-előtti 12-trade minta: 17% WR / −$120.38 (PnL bit-pontosan validált). Flip +$80.57 volt, de **regime-műtermék** (a modell most bullish, jól áll) — **NINCS reverse-toggle**. **B27 cond_prob strike-fix élben**; B21 K-anchoring + vol_div K-aware harap. Fix B (WATCH/LOW-IR kapu) → backlog. |
-| **Weather** | $250 (RESET 06-13) | **$0** | 0 closed | 0 open | **B22 invert KIKAPCSOLVA (2026-06-13)** a sizing-bug + counterfactual után (jól méretezve −$130…−$160 lett volna; a modell 7/9-ben jól tippelt, fade visszaütött). Sizing-fix élben (`baseDirection`). **B23 selection-shrink AKTÍV @ 0.5**. Mostantól tiszta, nem-inverted adat gyűlik. |
+| **Weather** | $250 → **$542.33** | **+$392.33** | 11 closed | 4 open | 36% WR, profitFactor 4.17. **History VALÓS** (Gamma-validált), de a profit ~98%-a **2 mély-OTM Hong Kong 29°C tail-bucket** (@ ~5.6¢ → +$336, +$147) — paper-fill felfelé torzít (`evGap −$486`). **B28 longshot floor élben** (`weatherMinPrice` 0.05; sub-5¢ bucketek kihagyva) → realisztikusabb jövő-adat. Invert OFF (B22), sizing-fix + B23 @ 0.5 aktív. Nem resetelve. |
 | **HL Perp** | $200 → **$199.40** | **−$0.60** | **20 closed** | 0 open | ≈ breakeven. LONG n=10 W=2 (−$4.61) vs SHORT n=10 W=7 (+$4.01) → **B18** long-bias (regime: BTC 66k→61k). Nem flip-ügy. |
 | **F-Arb** | $200 (reset) | **$0** | 0 closed | 0 open | **B25 ✅** (edge-tracker mezőnév-fix) + **B26 ✅** (fee-negatív gyökérok: a break-even gate kihagyta a paper-slippage-et → most slippage-aware @ 0.4%, +sessionPnL nettó-fix). Mostantól csak profitábilis spreadeken nyit (~18%/yr floor). |
 | **Sports** | $450 → **$417.71** | **−$32.29** | **15 closed** | 3 open | 7% WR (1/15). Flip −$9.55 (még mindig mínusz). Gyökérok: extrém longshot-túlbecslés → **`sportsMinPrice` floor AKTÍV @ 0.05** (2026-06-07). n=15 kis minta. |

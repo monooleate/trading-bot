@@ -307,7 +307,7 @@ const isUpperTail = /\bor\s+(higher|above|more)\b/i.test(label);
 
 ## 7. Decision engine — gate-ek
 
-A `makeWeatherDecision()` 9 gate-en keresztül engedi át a trade-et. Mind megjelenik a UI "Why?" popoverében (pass/fail + actual + required + hint).
+A `makeWeatherDecision()` 10 gate-en keresztül engedi át a trade-et. Mind megjelenik a UI "Why?" popoverében (pass/fail + actual + required + hint).
 
 | # | Gate | Default küszöb | Mit néz | Bukás reason |
 |---|------|----------------|---------|--------------|
@@ -319,9 +319,12 @@ A `makeWeatherDecision()` 9 gate-en keresztül engedi át a trade-et. Mind megje
 | 5 | Sanity cap (gross ≤ cap) | `maxEdgeCap = 0.40` | `\|prob - price\|` | "Too good to be true" — modell-hiba |
 | 6 | Market disagreement ≤ küszöb | `marketDisagreeMaxC = 2.0°C` | `\|predTempC − marketModalTempC\|` | A bot túl messzire jósol a market modális bucketjétől — valószínűbb modellhiba mint alfa |
 | 7 | Kelly méret ≤ cap | `KELLY_CAP = 0.15` | `clamp(Kelly, 0, 0.15)` | Strukturálisan nem bukhat el (clamp), de a UI ezzel mutatja a sizing-ot |
+| 7b | **Min bet-side price (longshot floor)** ✦✦✦ | `minPrice = 0.05` (normal; loose 0.03, strict 0.08) | a megfogadott (`direction`) oldal market-ára ≥ `minPrice` | "Bet-side price < longshot floor — deep-OTM bucket, not realistically fillable live" |
 | 8 | **Monotonicitás (egyéb nyitott pozíciók)** ✦ | csak YES kandidátus | `Σ predictedProb(YES nyitott pozíciók ugyanazon city::date) + cand ≤ 1.0` | "Σ P(YES) > 100% — modell-ellentmondás" |
 
 ✦ Új gate a 2026-05-14e cross-position consistency sweep-ből — lásd §13.8. Polymarket weather event = negRisk csoport (bucket-ek kölcsönösen kizárók), ezért Σ YES ≤ 1.0 matematikailag kötelező. NO kandidátusoknál pass (egy NO implicit lefedi az összes többi bucket-et).
+
+✦✦✦ Új gate a 2026-06-15 weather-auditból (B28). A +$392 paper-profit ~98%-át két mély-OTM tail-bucket (Hong Kong 29°C @ ~4.6¢ YES) hajtotta — ezek paper-ben tökéletesen töltődnek, de élesben a vékony order book miatt nem fillelhetők méretben → a paper PnL felfelé torzul. A floor a megfogadott oldal market-árát nézi (szimmetrikus YES/NO), 0 = OFF. A sports `sportsMinPrice` (B24) weather-megfelelője. → sprints.md B28.
 
 ✦✦ Új gate a 2026-06-07 flip-auditból (B23) — lásd §7.B. A `matchBucket` N bucketből a **max-|edge|**-űt választja → optimizer's curse: a kiválasztott edge felfelé torzít. A gate a `√(2·ln N)·σ_edge × selectionShrink` szelekciós-zaj-becslést levonja, és a maradék net edge-nek is el kell érnie a küszöböt. Default OFF (0); a normal preset 0.5, strict 1.0. Degradál (shrink=0 vagy N<2 → n/a pass).
 
