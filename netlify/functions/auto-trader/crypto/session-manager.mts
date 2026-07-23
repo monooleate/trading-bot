@@ -177,6 +177,21 @@ export function stopSession(session: SessionState, reason: string): SessionState
 // hyperliquid/session-manager.mts so the four bots have identical
 // stop/resume semantics. Calibration alarms (set during the previous run)
 // are also cleared so a re-armed session can fire its own alert.
+//
+// `sessionLoss` MUST be reset here too. It is a monotonic GROSS-loss
+// odometer (sum of |pnl| of every losing trade, never credited by wins —
+// see closePosition above), and the runner auto-stops when it reaches
+// `sessionLossLimit`. Because resume left it untouched historically, a
+// session stopped by "Session loss limit reached" would immediately
+// re-stop on the next cron tick (sessionLoss still ≥ limit) — resume was
+// a silent no-op for the most common stop reason. Worse, a net-PROFITABLE
+// high-variance longshot book (many small losses, few big wins) inevitably
+// accrues gross loss past the limit and gets bricked despite positive net
+// PnL (live finding: crypto +$690 net, $1033 gross loss, permanently
+// stopped with no settings-only restart path since the knob max is $1000).
+// Resetting the odometer makes an explicit operator resume a real,
+// history-preserving unbrick — exactly as `resumeHlSession` already resets
+// the consecutive-loss counter. (Post-2026-07 profitability audit.)
 export function resumeSession(session: SessionState): SessionState {
   log("SESSION_START", session.paperMode, {
     event: "manual_resume",
@@ -187,6 +202,7 @@ export function resumeSession(session: SessionState): SessionState {
     ...session,
     stopped: false,
     stoppedReason: null,
+    sessionLoss: 0,
     calibrationAlertSentAt: null,
   };
 }

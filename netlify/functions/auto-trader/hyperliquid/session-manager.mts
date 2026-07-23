@@ -150,7 +150,13 @@ export function resumeHlSession(s: HlSessionState): HlSessionState {
   // silently fail to un-block the bot (it would skip every tick with
   // "N consecutive losses — pause required"). Resetting the count here makes
   // `resume` a real, history-preserving unbrick. (2026-05-29 audit.)
-  return { ...s, pausedUntil: null, consecutiveLosses: 0 };
+  //
+  // For the same reason we also reset `sessionLoss` (the monotonic gross-loss
+  // odometer the runner auto-stops on): a resume after a "Session loss limit
+  // reached" stop would otherwise re-stop on the next tick because sessionLoss
+  // stays ≥ limit. Mirrors crypto/session-manager.mts:resumeSession. (Post-
+  // 2026-07 profitability audit.)
+  return { ...s, pausedUntil: null, consecutiveLosses: 0, sessionLoss: 0 };
 }
 
 export function resetHlSession(paperMode: boolean, bankroll = DEFAULT_BANKROLL): HlSessionState {

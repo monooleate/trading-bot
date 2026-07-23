@@ -55,11 +55,32 @@ const fd = (over: Partial<FundingData>): FundingData => ({
 
 // ── Detector: FORWARD on positive spread ───────────────────────────────────
 {
+  // FORWARD carry = HL funding ALONE (the Binance spot leg pays none), NOT the
+  // spread — matches accrueFunding's effRate. Post-2026-07 audit fix: with
+  // hl=0.0008, binance=0.0001, score must be hlFunding 0.0008 (the raw spread
+  // 0.0007 is only informational). Pre-fix the score was the spread.
   const o = detectArbOpportunity(fd({ hlFundingHourly: 0.0008, binanceFundingHourly: 0.0001 }), CFG(true));
   expect(o.direction === "forward", "fwd.direction", `expected forward, got ${o.direction}`);
   expect(o.isViable, "fwd.viable", `expected viable; reason="${o.reason}"`);
-  expect(approx(o.score, 0.0007), "fwd.score", `expected score=spread=0.0007, got ${o.score}`);
+  expect(approx(o.score, 0.0008), "fwd.score", `expected score=hlFunding=0.0008, got ${o.score}`);
   expect(approx(o.spread, 0.0007), "fwd.spread", `got ${o.spread}`);
+}
+
+// ── Detector: FORWARD carry is HL funding ALONE, not the spread ─────────────
+// Regression for the post-2026-07 profitability audit. When Binance funding is
+// NEGATIVE the spread OVER-states forward carry (spread > hlFunding), because
+// the spot leg pays nothing. The gate must score on hlFunding, so a tiny-HL /
+// big-negative-Binance coin is REJECTED — not admitted on a spread it can never
+// actually earn (the structural −$9 forward bleed). This is the case the
+// spread-based gate wrongly green-lit.
+{
+  // hl +0.00003/h (tiny), binance −0.0002/h → spread +0.00023/h would clear the
+  // 0.0001 min on the OLD spread gate, but the real forward carry is 0.00003.
+  const o = detectArbOpportunity(fd({ hlFundingHourly: 0.00003, binanceFundingHourly: -0.0002 }), CFG(true));
+  expect(o.direction === "forward", "fwdCarry.direction", `expected forward, got ${o.direction}`);
+  expect(approx(o.score, 0.00003), "fwdCarry.score", `forward score must be hlFunding 0.00003, got ${o.score}`);
+  expect(!o.isViable, "fwdCarry.rejected",
+    `tiny HL funding must be rejected despite a wide positive spread; reason="${o.reason}"`);
 }
 
 // ── Detector: REVERSE on negative spread (paper) ────────────────────────────

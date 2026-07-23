@@ -149,17 +149,25 @@ async function runFundingArbInner(): Promise<any> {
       const nowAge = Date.now() - new Date(pos.openedAt).getTime();
       const current = fundingByCoin.get(pos.coin);
       const currentSpread = current ? (current.hlFundingHourly - current.binanceFundingHourly) : pos.entrySpread;
-      // Direction-aware carry: forward earns +spread-ish, reverse earns
-      // −spread. Close when the position's OWN carry decays/flips, not the
-      // raw spread (a reverse position should close when −spread drops, i.e.
-      // the spread rises back toward/through zero).
+      const currentHl     = current ? current.hlFundingHourly : pos.entryHlFunding;
       const posDir = pos.direction ?? "forward";
-      const carry  = posDir === "reverse" ? -currentSpread : currentSpread;
+      // Direction-aware carry MUST match accrueFunding's `effRate` (fr-session.mts):
+      // FORWARD earns HL funding ALONE (the Binance spot leg pays none), REVERSE
+      // earns binance − hl (= −spread). Using the raw spread for forward (the old
+      // bug) kept positions open on a healthy spread even after the actual HL
+      // income had decayed below cost.
+      const carry  = posDir === "reverse" ? -currentSpread : currentHl;
 
       let closeReason: string | null = null;
-      if (nowAge >= maxHoldMs)                   closeReason = `Max hold ${config.maxHoldDays}d reached`;
-      else if (carry < config.minSpreadToClose)  closeReason = `Carry dropped to ${(carry * 100).toFixed(4)}%/h (${posDir})`;
-      else if (carry < 0)                        closeReason = `Carry flipped negative (${posDir}) — position now pays`;
+      // Close ONLY on the time stop or when the position starts PAYING (carry < 0).
+      // The previous `carry < minSpreadToClose` early-close fired whenever carry
+      // dipped below the (higher) close floor while still POSITIVE — closing a
+      // profitable position before its funding could amortize the ~0.69% roundtrip
+      // cost, i.e. open-then-close churn, each cycle a locked-in loss. A
+      // positive-carry position now rides until maxHold or until carry flips
+      // negative. (Post-2026-07 profitability audit.)
+      if (nowAge >= maxHoldMs)   closeReason = `Max hold ${config.maxHoldDays}d reached`;
+      else if (carry < 0)        closeReason = `Carry flipped negative (${posDir}) — position now pays`;
 
       if (closeReason) {
         const closeResp = await closeArbPosition(pos, closeReason, config, current?.markPrice);
@@ -273,8 +281,13 @@ async function runFundingArbInner(): Promise<any> {
         hint: "Túl nagy carry tipikusan adat-hiba (NaN, stale cache, rossz decimal).",
       });
 
-      // Gate 3 — Fee-aware break-even hold (uses the direction-aware carry)
-      const totalFees = config.feeRoundtripHl + config.feeRoundtripBinance;
+      // Gate 3 — Fee-aware break-even hold (uses the direction-aware carry).
+      // Include the paper-mode slippage the close actually charges so the
+      // displayed break-even matches the DETECTOR's decision gate
+      // (arb-detector.mts) — previously this showed a rosier fees-only
+      // break-even (~0.29% vs the real ~0.69%). (Post-2026-07 audit.)
+      const totalFees = config.feeRoundtripHl + config.feeRoundtripBinance
+                      + (config.paperMode ? config.paperSlippageRoundtrip : 0);
       const breakEvenH = totalFees / Math.max(opp.score, 1e-9);
       const breakEvenDays = breakEvenH / 24;
       const beOk = spreadOk && breakEvenDays <= config.maxHoldDays;

@@ -208,6 +208,42 @@ async function loadAllLiveTrades(): Promise<ClosedTrade[]> {
   return lists.flat();
 }
 
+// Per-category starting bankroll, read from the same session blob the trades
+// come from. computeSummary needs it as the denominator for totalPnlPct /
+// maxDrawdownPct / kellyUsed / kellyEfficiency — it previously defaulted to a
+// hardcoded $150, so every percentage/Kelly stat was wrong for the $200–$450
+// bots (e.g. a −$285 sports loss on a $450 start was shown as −190% instead of
+// −63%). (Post-2026-07 profitability audit.)
+async function loadBankrollStart(storeName: string, key: string): Promise<number | null> {
+  try {
+    const store = getStore(storeName);
+    const raw = await store.get(key);
+    if (!raw) return null;
+    const s: any = JSON.parse(raw as string);
+    return typeof s.bankrollStart === "number" && Number.isFinite(s.bankrollStart) && s.bankrollStart > 0
+      ? s.bankrollStart
+      : null;
+  } catch { return null; }
+}
+
+// Resolve the denominator for computeSummary. A single category → its own
+// session start; "all" → the sum across every bot's start (matches the
+// home-page totals). Returns undefined when unknown, so the caller falls back
+// to computeSummary's own default rather than a wrong number.
+async function resolveBankrollStart(category: string, mode: string): Promise<number | undefined> {
+  const useLive = mode === "live";
+  const specs = category === "all"
+    ? STORE_SPECS
+    : STORE_SPECS.filter((s) => s.category === category);
+  if (specs.length === 0) return undefined;
+  const starts = await Promise.all(
+    specs.map((s) => loadBankrollStart(s.store, useLive ? s.liveKey : s.paperKey)),
+  );
+  const valid = starts.filter((n): n is number => typeof n === "number" && n > 0);
+  if (valid.length === 0) return undefined;
+  return valid.reduce((a, b) => a + b, 0);
+}
+
 // Legacy helper retained so older imports compile; routes via STORE_SPECS.
 async function loadTrades(keys: string[]): Promise<ClosedTrade[]> {
   const matches = STORE_SPECS.filter((s) => keys.includes(s.paperKey) || keys.includes(s.liveKey));
@@ -242,7 +278,11 @@ export default async function handler(req: Request, _ctx: Context) {
   const url = new URL(req.url);
   const mode = url.searchParams.get("mode") ?? "paper";
   const category = url.searchParams.get("category") ?? "all";
-  const days = url.searchParams.get("days") ?? "30";
+  // Default to ALL-TIME. The old 30-day default silently truncated the headline
+  // totalPnl so the operator saw only the trailing slice (e.g. sports −$47 vs
+  // the real −$285), diverging from the bankroll delta. Windowing is opt-in via
+  // &days=7|30|90. (Post-2026-07 profitability audit.)
+  const days = url.searchParams.get("days") ?? "all";
   const forceMock = url.searchParams.get("mock") === "1";
 
   try {
@@ -273,7 +313,13 @@ export default async function handler(req: Request, _ctx: Context) {
     trades = filterByDays(trades, days);
 
     // 5. Compute statistics (all pure functions, run in parallel would be overkill)
-    const summary = computeSummary(trades);
+    // Thread the real per-category starting bankroll into the summary so the
+    // percentage/Kelly stats are correct (not scaled to a phantom $150). Skip
+    // for mock data (no real session to key off). (Post-2026-07 audit.)
+    const bankrollStart = isMock ? undefined : await resolveBankrollStart(category, mode);
+    const summary = bankrollStart !== undefined
+      ? computeSummary(trades, bankrollStart)
+      : computeSummary(trades);
     const cumulativePnl = computeCumulativePnl(trades);
     const calibration = computeCalibration(trades);
     // Load Tier 1 Settings overrides (Bonferroni + collinearity threshold).

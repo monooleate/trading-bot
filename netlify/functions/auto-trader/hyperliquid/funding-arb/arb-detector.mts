@@ -8,14 +8,22 @@ export function detectArbOpportunity(d: FundingData, config: FrArbConfig): ArbOp
   const spread           = d.hlFundingHourly - d.binanceFundingHourly;
   const spreadAnnualized = spread * 8760 * 100;
 
-  // Direction-aware carry (2026-05-29, B20). The carry available to a
-  // delta-neutral position is symmetric in the spread:
-  //   FORWARD (HL-short + Binance-spot-long): collects +spread*-ish (gate),
-  //            realised carry = HL funding. Viable when spread ≥ min.
-  //   REVERSE (HL-long + Binance-perp-short): collects −spread. Viable when
-  //            −spread ≥ min, i.e. a strongly NEGATIVE spread.
-  // Pick the better-scoring side; both gate on the SAME minSpreadHourly.
-  const forwardScore = spread;
+  // Direction-aware carry (2026-05-29, B20; carry proxy fixed post-2026-07 audit).
+  //   FORWARD (HL-short + Binance-spot-long): the short RECEIVES HL funding when
+  //     it is positive; the Binance SPOT leg pays NO funding. So the realised
+  //     carry is HL funding ALONE — NOT the cross-venue spread. This MUST match
+  //     accrueFunding's `effRate` (fr-session.mts:170), which already accrues
+  //     hlRate-only for forward. Scoring forward on `spread` (the old bug)
+  //     over-stated carry whenever Binance funding was negative (spread >
+  //     hlFunding), so the gate/break-even admitted and held positions whose
+  //     true HL income could never cover the ~0.69% roundtrip cost → the
+  //     structurally net-negative forward book (the −$9 bleed).
+  //   REVERSE (HL-long + Binance-perp-short): both legs are perps, so carry =
+  //     binanceFunding − hlFunding = −spread (correct as-is).
+  // Pick the better-scoring side; both gate on the SAME minSpreadHourly. The
+  // raw `spread` is retained only as an informational "dislocated elsewhere"
+  // figure on the opportunity object.
+  const forwardScore = d.hlFundingHourly;
   const reverseScore = -spread;
   const direction: "forward" | "reverse" =
     reverseScore > forwardScore ? "reverse" : "forward";

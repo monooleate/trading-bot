@@ -20,6 +20,11 @@ export function getFrArbConfig(): FrArbConfig {
     // finer multi-position granularity.
     minPositionUSDC:     parseFloat(process.env.FR_MIN_POSITION_USDC      || "25"),
     maxHoldDays:         parseFloat(process.env.FR_MAX_HOLD_DAYS          || "14"),
+    // RETIRED (post-2026-07 audit): the `carry < minSpreadToClose` early-close
+    // caused open-then-close churn (it closed still-profitable positions before
+    // funding amortized the roundtrip cost). index.mts now closes only on
+    // maxHold or when carry flips negative, so this value is no longer read for
+    // logic — kept for config-shape/back-compat and test fixtures.
     minSpreadToClose:    parseFloat(process.env.FR_MIN_SPREAD_TO_CLOSE    || "0.00005"),
     feeRoundtripHl:      parseFloat(process.env.FR_FEE_ROUNDTRIP_HL       || "0.0009"),   // 0.045% × 2
     feeRoundtripBinance: parseFloat(process.env.FR_FEE_ROUNDTRIP_BINANCE  || "0.002"),    // 0.1%  × 2

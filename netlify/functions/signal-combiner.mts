@@ -1202,7 +1202,17 @@ function combine(
     weights[k] = w;
     totalW += w;
   }
-  for (const k of names) weights[k] = parseFloat((weights[k] / totalW).toFixed(4));
+  // Guard against sign-cancellation. Once realized-IC blending is enabled a
+  // signal can carry a NEGATIVE effective IC, so the weights become mixed-sign
+  // and totalW can collapse toward 0 (or flip negative) — normalizing by a
+  // near-zero denominator would blow `combined` far outside [0,1]. Fall back to
+  // equal weights when the net weight is degenerate. Strict no-op while every
+  // IC is a positive static prior. (Post-2026-07 profitability audit.)
+  if (!Number.isFinite(totalW) || Math.abs(totalW) < 1e-9) {
+    for (const k of names) weights[k] = parseFloat((1 / n).toFixed(4));
+  } else {
+    for (const k of names) weights[k] = parseFloat((weights[k] / totalW).toFixed(4));
+  }
 
   let combined = 0;
   for (const k of names) combined += weights[k] * valid[k];
@@ -1240,6 +1250,16 @@ function combine(
     const s = Math.max(0, Math.min(1, kAnchorStrength));
     combined = (1 - s) * combined + s * anchoredProb;
   }
+
+  // Load-bearing clamp: `combined` is consumed as a probability below — it
+  // drives the IR estimate and, critically, Kelly's `b = 1/p − 1`. With any
+  // negative effective IC the mixed-sign weighted average (and, in edge cases,
+  // the K-anchor blend) can land outside [0,1], which yields a negative Kelly
+  // `b` and corrupts edge sizing + direction downstream. Clamping to a strict
+  // open interval here is the prerequisite that makes enabling realized-IC
+  // safe; it is a no-op while all ICs are the positive static priors.
+  // (Post-2026-07 profitability audit.)
+  combined = Math.max(1e-4, Math.min(1 - 1e-4, combined));
 
   const avgIC = names.reduce((s, k) => s + icFor(k), 0) / n;
   const effN  = Math.max(1, n * 0.6);
