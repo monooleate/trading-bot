@@ -112,6 +112,21 @@ interface ProperScores {
   message: string;
 }
 
+interface CalibrationEval {
+  n: number;
+  minHistory: number;
+  applicable: boolean;
+  rawBrier: number;
+  calBrier: number;
+  rawLogScore: number;
+  calLogScore: number;
+  brierImprovement: number;
+  logImprovement: number;
+  fit: { a: number; b: number };
+  curve: { raw: number; cal: number }[];
+  message: string;
+}
+
 interface LedgerStats {
   category: string;
   total: number;
@@ -129,6 +144,7 @@ interface EdgeTrackerData {
   cumulativePnl: CumulativePoint[];
   calibration: CalibrationBucket[];
   properScores?: ProperScores;
+  calibrationEval?: CalibrationEval;
   ledgerStats?: LedgerStats | null;
   signalIC: SignalICResult[];
   calibrationHealth?: CalibrationHealth;
@@ -229,6 +245,7 @@ export default function EdgeTrackerPanel({ defaultCategory = "all" }: Props) {
 
           <SummaryCards s={data.summary} />
           {data.properScores && <ProperScoresCard ps={data.properScores} />}
+          {data.calibrationEval && <CalibrationEvalCard ce={data.calibrationEval} />}
           {data.ledgerStats && <LedgerStatsCard s={data.ledgerStats} />}
           {data.calibrationView && <CalibrationViewCard view={data.calibrationView} />}
           <CumulativePnlChart points={data.cumulativePnl} />
@@ -533,6 +550,49 @@ function UnderwaterDrawdownChart({
 }
 
 // ─── Chart 2: Calibration scatter ───────────────────────
+
+// ─── Calibration eval (walk-forward raw vs calibrated) ──
+// Model-discovery §7 #2 (measurement step). Shows whether a Platt calibrator
+// WOULD lower Brier/log-score, evaluated walk-forward (no leakage). Does NOT
+// change live decisions — a coach-mode signal for when to wire it in.
+function CalibrationEvalCard({ ce }: { ce: CalibrationEval }) {
+  const helps = ce.applicable && ce.brierImprovement > 0;
+  const W = 300, H = 160, PAD = 28;
+  const sx = (v: number) => PAD + v * (W - 2 * PAD);
+  const sy = (v: number) => H - PAD - v * (H - 2 * PAD);
+  return (
+    <div className="et-chart">
+      <div className="et-chart-header">
+        <h3>Calibration gain (walk-forward)</h3>
+        {ce.applicable && (
+          <span className="et-ps-n" style={{ color: helps ? COLORS.actual : COLORS.muted }}>
+            {helps ? `−${(ce.brierImprovement * 100).toFixed(1)}pp Brier` : "no gain"} · n={ce.n}
+          </span>
+        )}
+      </div>
+      {ce.applicable ? (
+        <>
+          <div className="et-kpi-grid et-ps-kpis">
+            <Card title="Brier raw" value={ce.rawBrier.toFixed(3)} sub="uncalibrated" color={COLORS.muted} />
+            <Card title="Brier calibrated" value={ce.calBrier.toFixed(3)} sub="Platt, walk-fwd" color={helps ? COLORS.actual : COLORS.muted} />
+            <Card title="Log raw" value={ce.rawLogScore.toFixed(3)} sub="uncalibrated" color={COLORS.muted} />
+            <Card title="Log calibrated" value={ce.calLogScore.toFixed(3)} sub="Platt, walk-fwd" color={ce.logImprovement > 0 ? COLORS.actual : COLORS.muted} />
+          </div>
+          <svg viewBox={`0 0 ${W} ${H}`} className="et-svg" style={{ maxWidth: 340 }}>
+            <line x1={sx(0)} y1={sy(0)} x2={sx(1)} y2={sy(1)} stroke={COLORS.border} strokeWidth={1} strokeDasharray="4 3" />
+            <polyline
+              points={ce.curve.map((p) => `${sx(p.raw)},${sy(p.cal)}`).join(" ")}
+              fill="none" stroke={COLORS.theoretical} strokeWidth={2}
+            />
+            <text x={W / 2} y={H - 6} fill={COLORS.muted} fontSize={9} textAnchor="middle" fontFamily="monospace">raw prob →</text>
+            <text x={10} y={H / 2} fill={COLORS.muted} fontSize={9} textAnchor="middle" fontFamily="monospace" transform={`rotate(-90 10 ${H / 2})`}>calibrated</text>
+          </svg>
+        </>
+      ) : null}
+      <div className="et-ps-msg">{ce.message}</div>
+    </div>
+  );
+}
 
 // ─── Prediction-ledger stats (unbiased dataset growth) ──
 // Model-discovery §2. Shows the forecast dataset accumulating — including the

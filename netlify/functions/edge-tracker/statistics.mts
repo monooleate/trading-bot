@@ -574,16 +574,14 @@ function isYesLikeDir(d: unknown): boolean {
 }
 
 /**
- * Proper-scoring evaluation of the forecast probabilities against realised
- * win/loss outcomes. Pure function; `binCount` controls the reliability
- * diagram / Murphy decomposition granularity (default 10 equal-width bins).
- * Trades without a finite `predictedProb` are skipped (not scored).
+ * Extract aligned (forecast P(win), outcome) pairs from closed trades that
+ * carry a finite predictedProb. `p_win` is direction-aware (YES/LONG use
+ * predictedProb; NO/SHORT use 1−predictedProb); outcome is 1 iff pnl>0.
+ * Order is preserved (caller sorts chronologically), so the same pairs feed
+ * both the proper-scoring harness (#1) and the walk-forward calibrator (#2).
+ * Shared single source of truth for "what forecast are we scoring".
  */
-export function computeProperScores(
-  trades: ClosedTrade[],
-  binCount: number = 10,
-): ProperScores {
-  const bc = Math.max(2, Math.floor(binCount));
+export function extractWinProbPairs(trades: ClosedTrade[]): { ps: number[]; ys: number[] } {
   const ps: number[] = [];
   const ys: number[] = [];
   for (const t of trades) {
@@ -594,6 +592,21 @@ export function computeProperScores(
     ps.push(Math.min(1, Math.max(0, pWin)));
     ys.push(t.pnl > 0 ? 1 : 0);
   }
+  return { ps, ys };
+}
+
+/**
+ * Proper-scoring evaluation of the forecast probabilities against realised
+ * win/loss outcomes. Pure function; `binCount` controls the reliability
+ * diagram / Murphy decomposition granularity (default 10 equal-width bins).
+ * Trades without a finite `predictedProb` are skipped (not scored).
+ */
+export function computeProperScores(
+  trades: ClosedTrade[],
+  binCount: number = 10,
+): ProperScores {
+  const bc = Math.max(2, Math.floor(binCount));
+  const { ps, ys } = extractWinProbPairs(trades);
   const n = ps.length;
 
   const empty: ProperScores = {

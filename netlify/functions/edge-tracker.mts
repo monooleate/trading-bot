@@ -18,6 +18,9 @@ import {
   computeCalibration,
   computeProperScores,
   computeSignalIC,
+} from "./edge-tracker/statistics.mts";
+import { computeCalibrationEval } from "./edge-tracker/calibration.mts";
+import {
   computeCalibrationHealth,
   computeSignalCollinearity,
   computeEdgeDecay,
@@ -351,6 +354,10 @@ export default async function handler(req: Request, _ctx: Context) {
     // combiner/calibration changes can be judged on a strictly-proper metric
     // instead of noisy PnL.
     const properScores = computeProperScores(trades);
+    // Post-hoc calibration eval (model-discovery §7 #2, measurement only):
+    // walk-forward raw-vs-calibrated Brier/log-score — tells the operator
+    // whether a Platt calibrator WOULD help, with NO live behaviour change.
+    const calibrationEval = computeCalibrationEval(trades);
 
     // Prediction-ledger stats (model-discovery §2): show the unbiased dataset
     // growing — total logged, resolved, and crucially skipped-resolved (the
@@ -441,6 +448,7 @@ export default async function handler(req: Request, _ctx: Context) {
         cumulativePnl,
         calibration,
         properScores,
+        calibrationEval,
         ledgerStats,
         signalIC,
         calibrationHealth,
