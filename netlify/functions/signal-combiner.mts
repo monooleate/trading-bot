@@ -14,6 +14,8 @@ import {
   type MarketMeta,
   type ResolutionRiskScore,
 } from "./_resolution-risk.js";
+// #5 HAR-RV vol engine (pure math; imported-only, no cycle). Default-off σ source.
+import { harRvSigma, type OHLC } from "./auto-trader/shared/har-rv.mts";
 
 const CORS = {
   "Access-Control-Allow-Origin":  "*",
@@ -277,6 +279,29 @@ async function fetchCloses(limit: number): Promise<number[]> {
   return [];
 }
 
+// #5 HAR-RV: daily OHLC bars (oldest→newest) for the persistence-aware σ.
+// Binance Futures 1d klines primary; CryptoCompare histoday fallback. Returns
+// [] on failure so getVolSignal falls back to the legacy 20-min RV.
+async function fetchDailyOHLC(days: number): Promise<OHLC[]> {
+  // 1. Binance Futures 1d klines: [openTime, open, high, low, close, ...]
+  try {
+    const r = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=1d&limit=${days}`, { signal: AbortSignal.timeout(6000) });
+    if (r.ok) {
+      const k = await r.json() as any[][];
+      return k.map((c) => ({ open: +c[1], high: +c[2], low: +c[3], close: +c[4] }));
+    }
+  } catch {}
+  // 2. CryptoCompare histoday
+  try {
+    const r = await fetch(`https://min-api.cryptocompare.com/data/v2/histoday?fsym=BTC&tsym=USD&limit=${days}`, { signal: AbortSignal.timeout(8000) });
+    if (r.ok) {
+      const d = await r.json() as any;
+      return (d.Data?.Data || []).map((c: any) => ({ open: +c.open, high: +c.high, low: +c.low, close: +c.close }));
+    }
+  } catch {}
+  return [];
+}
+
 // ─── 1. VOL DIVERGENCE SIGNAL — Black-Scholes digital option pricing ─────────
 //
 // 2026-05-11 (Tier 1) redesign: a korábbi képlet (`iv = 2|yp−0.5|/√T × 100`)
@@ -377,6 +402,11 @@ interface VolSignalOptions {
   /** Fetch the strike from Binance 1m kline at openedAt. If false, K=S
    *  fallback (ATM, signal ≈ 0.5). Saves 1 Binance call per signal. */
   strikeFetchEnabled?: boolean;
+  /** #5 vol engine for σ. "legacy" = 20-min minutely RV (default, unchanged);
+   *  "har-rv" = HAR-RV on daily Rogers–Satchell RV (persistence-aware, stabler
+   *  — the discovery §7 #5 upgrade). Default-off: flip via Settings `useHarRv`
+   *  after the #1 harness shows a threshold-market Brier gain. */
+  volEngine?: "legacy" | "har-rv";
 }
 
 async function getVolSignal(
@@ -429,11 +459,29 @@ async function getVolSignal(
       return Math.max(-RET_CLIP, Math.min(RET_CLIP, r));
     });
     const mean = returns.reduce((s, v) => s + v, 0) / returns.length;
-    const sigmaAnnual = Math.sqrt(
+    let sigmaAnnual = Math.sqrt(
       (returns.reduce((s, v) => s + (v - mean) ** 2, 0) / returns.length) * 365 * 24 * 60,
     );
+    let sigmaSource = "rv15-minutely";
+
+    // #5 (model-discovery) — HAR-RV vol engine override (default-OFF via
+    // Settings `useHarRv`). Replaces the noisy 20-minute RV with a HAR blend of
+    // daily Rogers–Satchell realized variance (day/week/month averages) —
+    // persistence-aware and far more stable, so the K-aware BS-digital anchor
+    // gets a better σ. On any fetch/estimation failure we KEEP the legacy σ
+    // (graceful fallback → zero regression). The sane-band guard below applies
+    // to whichever σ is chosen.
+    if (options.volEngine === "har-rv") {
+      const dailyBars = await fetchDailyOHLC(30);
+      const har = harRvSigma(dailyBars);
+      if (har.ok && Number.isFinite(har.sigmaAnnual) && har.sigmaAnnual > 0) {
+        sigmaAnnual = har.sigmaAnnual;
+        sigmaSource = `har-rv(${har.nBars}d)`;
+      }
+    }
+
     if (!Number.isFinite(sigmaAnnual) || sigmaAnnual <= 0) {
-      return { prob: null, detail: { error: "sigma invalid", sigmaAnnual } };
+      return { prob: null, detail: { error: "sigma invalid", sigmaAnnual, sigmaSource } };
     }
     const SIGMA_MIN = 0.10, SIGMA_MAX = 2.0;
     if (sigmaAnnual < SIGMA_MIN || sigmaAnnual > SIGMA_MAX) {
@@ -504,6 +552,7 @@ async function getVolSignal(
         K: K.toFixed(2),
         strikeSource,
         sigmaAnnual: (sigmaAnnual * 100).toFixed(1) + "%",
+        sigmaSource,
         timeHours: timeHours.toFixed(3),
         d2: d2.toFixed(3),
         fairYes: fairYes.toFixed(3),
@@ -527,9 +576,10 @@ async function loadVolSignalOptions(): Promise<VolSignalOptions> {
     return {
       enabled:            ov.volSignalEnabled      === undefined ? true : ov.volSignalEnabled === 1,
       strikeFetchEnabled: ov.volStrikeFetchEnabled === undefined ? true : ov.volStrikeFetchEnabled === 1,
+      volEngine:          ov.useHarRv === 1 ? "har-rv" : "legacy",
     };
   } catch {
-    return { enabled: true, strikeFetchEnabled: true };
+    return { enabled: true, strikeFetchEnabled: true, volEngine: "legacy" };
   }
 }
 
