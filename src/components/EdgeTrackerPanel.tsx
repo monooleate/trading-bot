@@ -127,6 +127,17 @@ interface CalibrationEval {
   message: string;
 }
 
+interface OnlineWeightsEval {
+  n: number;
+  minHistory: number;
+  applicable: boolean;
+  staticBrier: number;
+  adaptiveBrier: number;
+  brierImprovement: number;
+  weights: { signal: string; prior: number; adaptive: number }[];
+  message: string;
+}
+
 interface LedgerStats {
   category: string;
   total: number;
@@ -145,6 +156,7 @@ interface EdgeTrackerData {
   calibration: CalibrationBucket[];
   properScores?: ProperScores;
   calibrationEval?: CalibrationEval;
+  onlineWeightsEval?: OnlineWeightsEval;
   ledgerStats?: LedgerStats | null;
   signalIC: SignalICResult[];
   calibrationHealth?: CalibrationHealth;
@@ -246,6 +258,7 @@ export default function EdgeTrackerPanel({ defaultCategory = "all" }: Props) {
           <SummaryCards s={data.summary} />
           {data.properScores && <ProperScoresCard ps={data.properScores} />}
           {data.calibrationEval && <CalibrationEvalCard ce={data.calibrationEval} />}
+          {data.onlineWeightsEval && <OnlineWeightsCard ow={data.onlineWeightsEval} />}
           {data.ledgerStats && <LedgerStatsCard s={data.ledgerStats} />}
           {data.calibrationView && <CalibrationViewCard view={data.calibrationView} />}
           <CumulativePnlChart points={data.cumulativePnl} />
@@ -590,6 +603,53 @@ function CalibrationEvalCard({ ce }: { ce: CalibrationEval }) {
         </>
       ) : null}
       <div className="et-ps-msg">{ce.message}</div>
+    </div>
+  );
+}
+
+// ─── Online adaptive weighting (AdaHedge vs static IC) ──
+// Model-discovery §7 #4 (measurement step). Shows whether AdaHedge online
+// reweighting WOULD lower Brier vs the static IC priors, walk-forward. Does
+// NOT change the live combiner — a coach-mode signal for the documented
+// IC-sign-flip / regime-drift problem.
+function OnlineWeightsCard({ ow }: { ow: OnlineWeightsEval }) {
+  const helps = ow.applicable && ow.brierImprovement > 0;
+  const maxW = Math.max(0.001, ...ow.weights.flatMap((w) => [w.prior, w.adaptive]));
+  return (
+    <div className="et-chart">
+      <div className="et-chart-header">
+        <h3>Online weighting: AdaHedge vs static IC</h3>
+        {ow.applicable && (
+          <span className="et-ps-n" style={{ color: helps ? COLORS.actual : COLORS.muted }}>
+            {helps ? `−${(ow.brierImprovement * 100).toFixed(1)}pp Brier` : "no gain"} · n={ow.n}
+          </span>
+        )}
+      </div>
+      {ow.applicable && (
+        <div className="et-kpi-grid et-ps-kpis">
+          <Card title="Brier static" value={ow.staticBrier.toFixed(3)} sub="IC priors" color={COLORS.muted} />
+          <Card title="Brier adaptive" value={ow.adaptiveBrier.toFixed(3)} sub="AdaHedge, walk-fwd" color={helps ? COLORS.actual : COLORS.muted} />
+        </div>
+      )}
+      <div className="et-ow-rows">
+        {ow.weights.map((w) => (
+          <div key={w.signal} className="et-ow-row">
+            <div className="et-ow-name">{w.signal.replace(/_/g, " ")}</div>
+            <div className="et-ow-bars">
+              <div className="et-ow-bar" title={`prior ${(w.prior * 100).toFixed(1)}%`}>
+                <div className="et-ow-fill et-ow-prior" style={{ width: `${(w.prior / maxW) * 100}%` }} />
+              </div>
+              <div className="et-ow-bar" title={`adaptive ${(w.adaptive * 100).toFixed(1)}%`}>
+                <div className="et-ow-fill et-ow-adaptive" style={{ width: `${(w.adaptive / maxW) * 100}%` }} />
+              </div>
+            </div>
+            <div className="et-ow-val">{(w.adaptive * 100).toFixed(0)}%</div>
+          </div>
+        ))}
+      </div>
+      <div className="et-ps-msg">
+        <span style={{ color: COLORS.muted }}>▮ prior</span> · <span style={{ color: COLORS.theoretical }}>▮ adaptive</span> — {ow.message}
+      </div>
     </div>
   );
 }
@@ -1122,6 +1182,16 @@ const styles = `
 .et-ps-kpis { margin-bottom: 12px; }
 .et-ps-msg { font-family: var(--mono); font-size: 10px; color: var(--muted); margin-top: 8px; line-height: 1.5; }
 .et-ps-empty { font-family: var(--mono); font-size: 10px; color: var(--muted); padding: 24px 8px; text-align: center; }
+
+.et-ow-rows { display: flex; flex-direction: column; gap: 5px; margin: 4px 0; }
+.et-ow-row { display: grid; grid-template-columns: 90px 1fr 34px; align-items: center; gap: 8px; }
+.et-ow-name { font-family: var(--mono); font-size: 10px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.et-ow-bars { display: flex; flex-direction: column; gap: 2px; }
+.et-ow-bar { height: 6px; background: var(--surface2); border-radius: 3px; overflow: hidden; }
+.et-ow-fill { height: 100%; border-radius: 3px; }
+.et-ow-prior { background: #666680; }
+.et-ow-adaptive { background: #35f1c8; }
+.et-ow-val { font-family: var(--mono); font-size: 10px; color: var(--text); text-align: right; }
 
 .et-heatmap { display: grid; gap: 2px; font-family: var(--mono); font-size: 9px; }
 .et-heat-corner, .et-heat-hour, .et-heat-cat, .et-heat-cell { padding: 4px 2px; text-align: center; color: var(--muted); }

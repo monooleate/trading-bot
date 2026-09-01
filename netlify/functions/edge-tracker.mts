@@ -20,6 +20,7 @@ import {
   computeSignalIC,
 } from "./edge-tracker/statistics.mts";
 import { computeCalibrationEval } from "./edge-tracker/calibration.mts";
+import { computeOnlineWeightEval } from "./edge-tracker/online-weights.mts";
 import {
   computeCalibrationHealth,
   computeSignalCollinearity,
@@ -358,6 +359,10 @@ export default async function handler(req: Request, _ctx: Context) {
     // walk-forward raw-vs-calibrated Brier/log-score — tells the operator
     // whether a Platt calibrator WOULD help, with NO live behaviour change.
     const calibrationEval = computeCalibrationEval(trades);
+    // Online adaptive weighting eval (model-discovery §7 #4, measurement only):
+    // walk-forward AdaHedge vs static-IC signal weighting — tells the operator
+    // whether adaptive reweighting WOULD lower Brier, with NO live change.
+    const onlineWeightsEval = computeOnlineWeightEval(trades);
 
     // Prediction-ledger stats (model-discovery §2): show the unbiased dataset
     // growing — total logged, resolved, and crucially skipped-resolved (the
@@ -449,6 +454,7 @@ export default async function handler(req: Request, _ctx: Context) {
         calibration,
         properScores,
         calibrationEval,
+        onlineWeightsEval,
         ledgerStats,
         signalIC,
         calibrationHealth,
