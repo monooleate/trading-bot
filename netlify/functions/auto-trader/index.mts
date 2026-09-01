@@ -31,6 +31,7 @@ import { placeBuyOrder } from "./crypto/execution.mts";
 import { handleBuyLifecycle, handleSellLifecycle, checkExitConditions } from "./crypto/order-lifecycle.mts";
 import { resolvePendingPaperPositions } from "./crypto/paper-resolver.mts";
 import { probeProvisionalOutcome } from "./shared/provisional-outcome.mts";
+import { loadPaperNeverStop, isAutoStopReason } from "./shared/paper-never-stop.mts";
 import { fetchYesMidpoint } from "./crypto/live-price.mts";
 import { markRunStart, markRunFinish, getCryptoRunStatus } from "./crypto/run-state.mts";
 import {
@@ -334,6 +335,26 @@ async function runCryptoTrader(
   } catch {}
   let session = await loadSession(config.paperMode, DEFAULT_BANKROLL);
 
+  // ─── Paper "never stop" safety valve (2026-09-01) ────────
+  // In paper mode, self-heal an AUTOMATIC stop (session-loss-limit /
+  // calibration-noise) so the bot resumes on the next tick without a manual
+  // resume API call. resumeSession also zeroes the monotonic gross-loss
+  // odometer (B29), so a net-profitable longshot book (crypto +$445 with
+  // $1162 gross loss) unbricks itself. A MANUAL stop is preserved. Live mode
+  // ignores the valve entirely.
+  const paperNeverStop = await loadPaperNeverStop();
+  if (config.paperMode && paperNeverStop && session.stopped && isAutoStopReason(session.stoppedReason)) {
+    log("PAUSE_AUTORECOVER", config.paperMode, { category: "crypto", paperNeverStop: true, clearedStop: session.stoppedReason });
+    session = resumeSession(session);
+    await saveSession(session);
+  }
+  // Raise the loss-limit to +Infinity so neither the auto-stop set-site nor
+  // the decision-engine's "Session loss limit" gate can halt (or block) the
+  // paper bot. Keeps it TRADING, not just un-stopped. Live mode untouched.
+  if (config.paperMode && paperNeverStop) {
+    config.sessionLossLimit = Number.POSITIVE_INFINITY;
+  }
+
   // ─── Live-readiness gate ─────────────────────────────────
   // Even if PAPER_MODE=false is configured, the bot will not place real
   // money trades until the paper track record passes every applicable gate
@@ -540,7 +561,9 @@ async function runCryptoTrader(
     return new Date(p.endDate).getTime() >= Date.now();
   }).length;
   for (const market of scanList) {
-    // Check session loss limit
+    // Check session loss limit. In paper mode with the paperNeverStop valve
+    // ON, config.sessionLossLimit is raised to +Infinity below, so this never
+    // trips (and neither does the decision-engine's loss-limit gate).
     if (updatedSession.sessionLoss >= config.sessionLossLimit) {
       updatedSession = stopSession(updatedSession, "Session loss limit reached");
       await alertSessionStop(config.paperMode, "Session loss limit reached", updatedSession);

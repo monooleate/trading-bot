@@ -13,6 +13,7 @@
 // path yet — that's a future session once the paper track-record exists.
 
 import { log } from "../shared/logger.mts";
+import { loadPaperNeverStop, isAutoStopReason } from "../shared/paper-never-stop.mts";
 import { alertSessionStop, alertError } from "../shared/telegram.mts";
 import { registerBot, type BotDefinition } from "../shared/bot-registry.mts";
 import { getSportsConfig, getEffectiveSportsConfig, SPORTS_DEFAULT_BANKROLL, SPORTS_SIM_VERSION } from "./config.mts";
@@ -46,6 +47,15 @@ async function runSportsTrader(
   // Pull runtime Settings overrides every tick — Loose/Normal/Strict
   // preset propagates to the next scan without redeploy.
   const config = await getEffectiveSportsConfig();
+  // Paper "never stop" valve (2026-09-01) — resolved once per tick. Raise the
+  // loss-limit to +Infinity in paper so the session-loss auto-stop never trips
+  // (keeps a running sports session alive). A MANUAL stop still sticks — the
+  // self-heal below only clears AUTOMATIC stops, so a bot the operator halted
+  // by hand (sports has no live edge) stays down. Live mode untouched.
+  const paperNeverStop = await loadPaperNeverStop();
+  if (config.paperMode && paperNeverStop) {
+    config.sessionLossLimit = Number.POSITIVE_INFINITY;
+  }
   // User's bankroll-input wins on first-load (session never existed or
   // just got auto-archived by a simVersion bump). Once the session is
   // alive, loadSportsSession ignores `initialBankroll` and reads the
@@ -70,6 +80,20 @@ async function runSportsTrader(
     log("PAUSE_AUTORECOVER", session.paperMode, {
       category: CATEGORY,
       reason: "Session loss limit disabled — auto-resumed",
+    });
+  }
+
+  // Paper "never stop" safety valve (2026-09-01): in paper mode, self-heal an
+  // AUTOMATIC (loss-limit) stop so the bot resumes without a manual resume. A
+  // MANUAL stop ("Manual stop") is preserved — so a bot the operator halted by
+  // hand (e.g. sports, which has no live edge) stays down. Live mode ignored.
+  if (config.paperMode && paperNeverStop && session.stopped && isAutoStopReason(session.stoppedReason)) {
+    session = resumeSportsSession(session);
+    await saveSportsSession(session);
+    log("PAUSE_AUTORECOVER", session.paperMode, {
+      category: CATEGORY,
+      paperNeverStop: true,
+      clearedStop: session.stoppedReason,
     });
   }
 

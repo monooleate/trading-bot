@@ -11,6 +11,7 @@
 // Public entry: runHyperliquidTrader(config) returns a JSON-ready summary.
 
 import { log } from "../shared/logger.mts";
+import { loadPaperNeverStop, isAutoStopReason } from "../shared/paper-never-stop.mts";
 import { alertError, alertLiveBlocked } from "../shared/telegram.mts";
 import { computeLiveReadiness, shouldForcePaper, type LiveReadinessReport } from "../shared/live-readiness.mts";
 import { getHlConfig, getEffectiveHlConfig } from "./config.mts";
@@ -84,6 +85,16 @@ async function runHyperliquidTraderInner(
   // true when the paper track record hasn't met validation thresholds.
   const config: HlTraderConfig = { ...baseConfig };
   let   session = await loadHlSession(config.paperMode);
+  // Paper "never stop" valve (2026-09-01): resolved once per tick, used both
+  // for the self-heal below and to suppress the post-resolution auto-stops.
+  const paperNeverStop = await loadPaperNeverStop();
+  // Raise the loss/consecutive limits to +Infinity so neither the auto-stop
+  // set-sites nor the decision-engine's loss-limit / consecutive-loss gates
+  // can halt (or block) the paper bot. Keeps it TRADING. Live mode untouched.
+  if (config.paperMode && paperNeverStop) {
+    config.sessionLossLimit    = Number.POSITIVE_INFINITY;
+    config.consecutiveLossLimit = Number.POSITIVE_INFINITY;
+  }
 
   // Live-readiness gate: convert HlClosedTrade → generic ClosedTrade for
   // computeLiveReadiness, then force paper if the gate fails.
@@ -140,6 +151,23 @@ async function runHyperliquidTraderInner(
     log("ERROR", true, { category: "hyperliquid", liveReadinessError: err?.message });
   }
 
+  // Paper "never stop" safety valve (2026-09-01): in paper mode, self-heal an
+  // AUTOMATIC stop or an active consecutive-loss pause so the bot resumes on
+  // the next tick without a manual resume. resumeHlSession clears the
+  // consecutive-loss counter + gross-loss odometer; we also clear `stopped`.
+  // A MANUAL stop is preserved. Live mode ignores the valve.
+  if (config.paperMode && paperNeverStop) {
+    if (session.stopped && isAutoStopReason(session.stoppedReason)) {
+      log("PAUSE_AUTORECOVER", config.paperMode, { venue: "hyperliquid", paperNeverStop: true, clearedStop: session.stoppedReason });
+      session = { ...resumeHlSession(session), stopped: false, stoppedReason: null };
+    } else if (!session.stopped && session.pausedUntil && new Date(session.pausedUntil).getTime() > Date.now()) {
+      // Clear a pre-existing consecutive-loss pause (set before this deploy);
+      // the raised consecutiveLossLimit above prevents new ones from forming.
+      log("PAUSE_AUTORECOVER", config.paperMode, { venue: "hyperliquid", paperNeverStop: true, clearedPause: session.pausedUntil });
+      session = { ...session, pausedUntil: null, consecutiveLosses: 0 };
+    }
+  }
+
   // Session-level short-circuits
   if (session.stopped) {
     return { ok: true, action: "skipped", reason: `Session stopped: ${session.stoppedReason}`, session: summarize(session), liveReadiness };
@@ -191,6 +219,9 @@ async function runHyperliquidTraderInner(
         resolutions.push({ coin: res.coin, action: "resolved", reason: res.reason, exit: res.exitPrice, pnl: res.pnlUSDC });
       }
       if (r.resolutions.length > 0) {
+        // In paper + paperNeverStop, config.consecutiveLossLimit and
+        // config.sessionLossLimit are +Infinity (raised above), so neither of
+        // these auto-halts fires — the paper bot keeps trading.
         if (session.consecutiveLosses >= config.consecutiveLossLimit) {
           session = applyConsecutiveLossPause(session, config.consecutiveLossPauseHours);
         }

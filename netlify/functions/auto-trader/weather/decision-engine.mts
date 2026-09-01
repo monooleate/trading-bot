@@ -41,6 +41,15 @@ export interface WeatherConfig {
   // tail hits that wouldn't realise at size. Skip any side priced below this.
   // 0 = off (legacy behaviour). Mirrors the sports `minPrice` floor (B24).
   minPrice: number;           // default 0.05
+  // kellyScale (B35, 2026-09-01): uniform de-risk multiplier on the final
+  // Kelly fraction. The weather direction signal is genuinely predictive
+  // (forecast_edge realized IC +0.317, n=59) but payoffRatio is 0.44 (wins
+  // small, losses big) → the ¼-Kelly × confidence sizing overweights the
+  // most-confident (and poorly-calibrated) bets. Scaling the fraction down
+  // caps the downside/bleed while the edge validates over more trades. It is
+  // a risk reduction, NOT a payoff-ratio fix. 1.0 = legacy sizing; 0.5 =
+  // half-size (default). Pair with a low maxPositionUSD.
+  kellyScale: number;         // default 0.5
 }
 
 export interface WeatherTradeDecision {
@@ -104,6 +113,9 @@ export function getWeatherConfig(): WeatherConfig {
     selectionShrink:    parseFloat(process.env.WEATHER_SELECTION_SHRINK || "0.5"),
     invertDirection:    process.env.WEATHER_INVERT_DIRECTION === "true",
     minPrice:           parseFloat(process.env.WEATHER_MIN_PRICE || "0.05"),
+    // B35 (2026-09-01): default 0.5 — halve the final Kelly fraction to cap
+    // the downside while the (genuinely predictive) direction edge validates.
+    kellyScale:         parseFloat(process.env.WEATHER_KELLY_SCALE || "0.5"),
   };
 }
 
@@ -137,6 +149,7 @@ export async function getEffectiveWeatherConfig(): Promise<WeatherConfig> {
       invertDirection:    ov.weatherInvertDirection !== undefined
         ? ov.weatherInvertDirection >= 0.5 : env.invertDirection,
       minPrice:           ov.weatherMinPrice        ?? env.minPrice,
+      kellyScale:         ov.weatherKellyScale       ?? env.kellyScale,
     };
   } catch {
     return env;
@@ -391,8 +404,11 @@ export function makeWeatherDecision(params: {
   const b = (1 / safePrice) - 1;
   const rawKelly = b > 0 ? Math.max(0, (probSide * b - (1 - probSide)) / b) : 0;
   // ¼-Kelly + confidence shrinkage. Confidence is a noisy signal so we
-  // dampen Kelly by it (acts as a Bayesian shrinkage toward 0).
-  const kellyFraction = rawKelly * forecast.confidence * 0.25;
+  // dampen Kelly by it (acts as a Bayesian shrinkage toward 0). B35
+  // (2026-09-01): × config.kellyScale — a uniform de-risk multiplier
+  // (default 0.5) that caps the downside/bleed while the direction edge
+  // (forecast_edge IC +0.317) validates over more trades. 1.0 = legacy.
+  const kellyFraction = rawKelly * forecast.confidence * 0.25 * config.kellyScale;
   const cappedKelly   = Math.min(kellyFraction, KELLY_CAP);
   gates.push({
     label: "Kelly méret ≤ cap",
