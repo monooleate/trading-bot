@@ -2,6 +2,7 @@ import { getStore } from "@netlify/blobs";
 import { log } from "../shared/logger.mts";
 import { alertError, alertLiveBlocked } from "../shared/telegram.mts";
 import { computeLiveReadiness, shouldForcePaper, type LiveReadinessReport } from "../shared/live-readiness.mts";
+import { appendPredictions, reconcileLedger } from "../shared/prediction-ledger.mts";
 import { findWeatherMarketsDetailed } from "./market-finder.mts";
 import type { WeatherMarket, DroppedEvent, TemperatureBucket } from "./market-finder.mts";
 import { getStation, getSeason } from "./station-config.mts";
@@ -401,6 +402,14 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
         predictedTemp: decision.predictedTemp,
         marketPrice: decision.marketPrice,
         modelProb: match.probability,
+        // Prediction-ledger fields (model-discovery §2): the forecast prob of
+        // the matched bucket + that bucket's own conditionId (weather markets
+        // resolve per bucket) + endDate, so the ledger can log + Gamma-resolve
+        // this prediction (taken or skipped). `predictedProb` mirrors modelProb
+        // under the generic name the ledger reads.
+        predictedProb: match.probability,
+        conditionId: match.bucket.conditionId,
+        endDate: (market as any).endDate ?? null,
         edge: decision.edge,
         confidence: decision.confidence,
         direction: decision.direction,
@@ -575,6 +584,13 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
   }
 
   await saveSession(updatedSession, "weather");
+
+  // Prediction ledger (model-discovery §2): log every scanned bucket's
+  // forecast (taken + skipped) keyed by the matched bucket's conditionId,
+  // then Gamma-reconcile past-endDate ones. markets=[] so each row's own
+  // (per-bucket) conditionId is used, not an event-level one. Best-effort.
+  await appendPredictions("weather", results, [], updatedSession.closedTrades);
+  await reconcileLedger("weather");
 
   return {
     ok: true,

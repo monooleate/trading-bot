@@ -516,6 +516,171 @@ export function computeCalibration(trades: ClosedTrade[]): CalibrationBucket[] {
   return buckets;
 }
 
+// ─── Proper scoring harness (log-score + Brier-Murphy) ────
+// Model-discovery §7 #1. Scores the forecast probability itself, not the
+// PnL — PnL is too noisy at n<200 to compare combiner variants, whereas a
+// strictly-proper score (Brier / log-loss) rewards calibration + sharpness
+// jointly and is the correct selection metric for a Kelly-sized bot (Kelly
+// growth ≈ log-score optimisation).
+//
+// The forecast being scored is the model's P(the trade wins):
+//   p_win = isYesLike ? predictedProb : 1 − predictedProb
+// against the binary outcome y = (pnl > 0). This works for EVERY category
+// that carries `predictedProb` (crypto/weather/HL/sports) — including HL
+// perp, where the EV chart collapses but the win-probability forecast is
+// still a valid thing to score.
+//
+// Murphy (a.k.a. Brier) decomposition via K equal-width bins:
+//   Brier ≈ Reliability − Resolution + Uncertainty
+//     Reliability  = (1/N) Σ n_k (p̄_k − ō_k)²   ← calibration error, ↓ better (0 = perfect)
+//     Resolution   = (1/N) Σ n_k (ō_k − ō)²      ← discrimination, ↑ better
+//     Uncertainty  = ō(1 − ō)                    ← irreducible base-rate variance
+// The identity is exact only for the bin-representative forecast; with
+// individual forecasts a small within-bin grouping term remains, reported
+// verbatim as `decompositionResidual` (no hand-waving).
+//
+// Skill scores use the base-rate (climatology) forecast as reference:
+//   BrierSkill = 1 − Brier / Uncertainty     (>0 ⇒ beats always-predict-ō)
+//   LogSkill   = 1 − LogScore / BaseEntropy   (>0 ⇒ beats always-predict-ō)
+
+export interface ReliabilityBin {
+  lo: number;              // bin lower edge on the forecast axis [0,1]
+  hi: number;              // bin upper edge
+  meanPredicted: number;   // mean forecast P(win) of trades in the bin
+  observedFreq: number;    // realised win frequency in the bin
+  count: number;           // # trades in the bin
+}
+
+export interface ProperScores {
+  n: number;                     // # trades scored (those carrying predictedProb)
+  baseRate: number;              // ō — realised win frequency of the scored set
+  brier: number;                 // mean (p − y)²  ↓ better  (range [0,1])
+  logScore: number;              // mean −[y·ln p + (1−y)·ln(1−p)]  ↓ better
+  reliability: number;           // calibration error (↓ better; 0 = perfectly calibrated)
+  resolution: number;            // discrimination (↑ better)
+  uncertainty: number;           // ō(1−ō) — irreducible
+  decompositionResidual: number; // brier − (reliability − resolution + uncertainty)
+  brierSkillScore: number;       // 1 − brier/uncertainty  (>0 beats base rate)
+  logSkillScore: number;         // 1 − logScore/baseEntropy (>0 beats base rate)
+  reliabilityBins: ReliabilityBin[];
+  binCount: number;
+  message: string;
+}
+
+const PROPER_SCORE_EPS = 1e-6;   // clip for log-score so a confident-wrong forecast can't blow up to ∞
+
+function isYesLikeDir(d: unknown): boolean {
+  return d === "YES" || d === "LONG";
+}
+
+/**
+ * Proper-scoring evaluation of the forecast probabilities against realised
+ * win/loss outcomes. Pure function; `binCount` controls the reliability
+ * diagram / Murphy decomposition granularity (default 10 equal-width bins).
+ * Trades without a finite `predictedProb` are skipped (not scored).
+ */
+export function computeProperScores(
+  trades: ClosedTrade[],
+  binCount: number = 10,
+): ProperScores {
+  const bc = Math.max(2, Math.floor(binCount));
+  const ps: number[] = [];
+  const ys: number[] = [];
+  for (const t of trades) {
+    const pp = t.predictedProb;
+    if (pp === undefined || pp === null || !Number.isFinite(pp)) continue;
+    const pWin = isYesLikeDir(t.direction) ? pp : 1 - pp;
+    if (!Number.isFinite(pWin)) continue;
+    ps.push(Math.min(1, Math.max(0, pWin)));
+    ys.push(t.pnl > 0 ? 1 : 0);
+  }
+  const n = ps.length;
+
+  const empty: ProperScores = {
+    n: 0, baseRate: 0, brier: 0, logScore: 0,
+    reliability: 0, resolution: 0, uncertainty: 0, decompositionResidual: 0,
+    brierSkillScore: 0, logSkillScore: 0,
+    reliabilityBins: [], binCount: bc,
+    message: "No closed trades carry a predicted probability yet.",
+  };
+  if (n === 0) return empty;
+
+  const r4 = (x: number) => Math.round(x * 1e4) / 1e4;
+  const baseRate = mean(ys);
+
+  // Scalar scores.
+  let brierSum = 0;
+  let logSum = 0;
+  for (let i = 0; i < n; i++) {
+    const p = ps[i];
+    const y = ys[i];
+    brierSum += (p - y) ** 2;
+    const pc = Math.min(1 - PROPER_SCORE_EPS, Math.max(PROPER_SCORE_EPS, p));
+    logSum += -(y * Math.log(pc) + (1 - y) * Math.log(1 - pc));
+  }
+  const brier = brierSum / n;
+  const logScore = logSum / n;
+  const uncertainty = baseRate * (1 - baseRate);
+
+  // Binned decomposition + reliability diagram.
+  const bins = Array.from({ length: bc }, (_, k) => ({
+    pSum: 0, ySum: 0, count: 0, lo: k / bc, hi: (k + 1) / bc,
+  }));
+  for (let i = 0; i < n; i++) {
+    let idx = Math.floor(ps[i] * bc);
+    if (idx >= bc) idx = bc - 1;    // p == 1 lands in the last bin
+    if (idx < 0) idx = 0;
+    bins[idx].pSum += ps[i];
+    bins[idx].ySum += ys[i];
+    bins[idx].count += 1;
+  }
+  let reliability = 0;
+  let resolution = 0;
+  const reliabilityBins: ReliabilityBin[] = [];
+  for (const b of bins) {
+    if (b.count === 0) continue;
+    const pBar = b.pSum / b.count;
+    const oBar = b.ySum / b.count;
+    reliability += b.count * (pBar - oBar) ** 2;
+    resolution += b.count * (oBar - baseRate) ** 2;
+    reliabilityBins.push({
+      lo: b.lo, hi: b.hi,
+      meanPredicted: r4(pBar),
+      observedFreq: r4(oBar),
+      count: b.count,
+    });
+  }
+  reliability /= n;
+  resolution /= n;
+  const decompositionResidual = brier - (reliability - resolution + uncertainty);
+
+  const brierSkillScore = uncertainty > 0 ? 1 - brier / uncertainty : 0;
+  const brc = Math.min(1 - PROPER_SCORE_EPS, Math.max(PROPER_SCORE_EPS, baseRate));
+  const baseEntropy = -(brc * Math.log(brc) + (1 - brc) * Math.log(1 - brc));
+  const logSkillScore = baseEntropy > 0 ? 1 - logScore / baseEntropy : 0;
+
+  const skillMsg = brierSkillScore > 0
+    ? `Beats the base-rate forecast (Brier skill +${(brierSkillScore * 100).toFixed(1)}%).`
+    : `Does NOT beat always-predict-${(baseRate * 100).toFixed(0)}% (Brier skill ${(brierSkillScore * 100).toFixed(1)}%).`;
+  const noiseMsg = n < 20 ? " ⚠ n<20 — scores are noisy, treat as indicative only." : "";
+
+  return {
+    n,
+    baseRate: r4(baseRate),
+    brier: r4(brier),
+    logScore: r4(logScore),
+    reliability: r4(reliability),
+    resolution: r4(resolution),
+    uncertainty: r4(uncertainty),
+    decompositionResidual: r4(decompositionResidual),
+    brierSkillScore: r4(brierSkillScore),
+    logSkillScore: r4(logSkillScore),
+    reliabilityBins,
+    binCount: bc,
+    message: skillMsg + noiseMsg,
+  };
+}
+
 // ─── Signal IC (Information Coefficient) ──────────────────
 
 export interface SignalICResult {

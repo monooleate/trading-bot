@@ -16,6 +16,7 @@ import {
   computeSummary,
   computeCumulativePnl,
   computeCalibration,
+  computeProperScores,
   computeSignalIC,
   computeCalibrationHealth,
   computeSignalCollinearity,
@@ -28,6 +29,29 @@ import {
   effectiveICs as computeEffectiveICs,
   type CalibrationCategory,
 } from "./auto-trader/shared/signal-calibration.mts";
+import {
+  loadLedger,
+  computeLedgerStats,
+  type LedgerStats,
+} from "./auto-trader/shared/prediction-ledger.mts";
+
+// Categories that write a prediction ledger (forecasting bots). Funding-arb
+// is delta-neutral carry (not forecasting); sports is not yet wired.
+const LEDGER_CATEGORIES = ["crypto", "weather", "hyperliquid"];
+
+// Aggregate per-category ledger stats into one object (for category="all").
+function aggregateLedgerStats(label: string, parts: LedgerStats[]): LedgerStats {
+  const tss = parts.flatMap((p) => [p.oldestTs, p.newestTs]).filter(Boolean).sort() as string[];
+  return {
+    category: label,
+    total: parts.reduce((s, p) => s + p.total, 0),
+    resolved: parts.reduce((s, p) => s + p.resolved, 0),
+    taken: parts.reduce((s, p) => s + p.taken, 0),
+    skippedResolved: parts.reduce((s, p) => s + p.skippedResolved, 0),
+    oldestTs: tss[0] ?? null,
+    newestTs: tss[tss.length - 1] ?? null,
+  };
+}
 
 // Static SIGNAL_ICS priors mirrored from signal-combiner.mts:29. Kept here
 // so the Edge Tracker can render "Realized vs Prior" without an HTTP
@@ -322,6 +346,29 @@ export default async function handler(req: Request, _ctx: Context) {
       : computeSummary(trades);
     const cumulativePnl = computeCumulativePnl(trades);
     const calibration = computeCalibration(trades);
+    // Proper-scoring harness (model-discovery §7 #1): log-score + Brier-Murphy
+    // decomposition + reliability-diagram bins. Scores the forecast itself so
+    // combiner/calibration changes can be judged on a strictly-proper metric
+    // instead of noisy PnL.
+    const properScores = computeProperScores(trades);
+
+    // Prediction-ledger stats (model-discovery §2): show the unbiased dataset
+    // growing — total logged, resolved, and crucially skipped-resolved (the
+    // markets the bot did NOT take but we still labeled). Skipped for mock.
+    let ledgerStats: LedgerStats | null = null;
+    if (!isMock) {
+      try {
+        const cats = category === "all"
+          ? LEDGER_CATEGORIES
+          : (LEDGER_CATEGORIES.includes(category) ? [category] : []);
+        if (cats.length > 0) {
+          const parts = await Promise.all(
+            cats.map((c) => loadLedger(c).then((recs) => computeLedgerStats(c, recs))),
+          );
+          ledgerStats = cats.length === 1 ? parts[0] : aggregateLedgerStats("all", parts);
+        }
+      } catch { ledgerStats = null; }
+    }
     // Load Tier 1 Settings overrides (Bonferroni + collinearity threshold).
     // Defaults preserve the original Tier 1 hardcoded behaviour.
     const tier1Overrides = await loadTier1Overrides();
@@ -393,6 +440,8 @@ export default async function handler(req: Request, _ctx: Context) {
         summary,
         cumulativePnl,
         calibration,
+        properScores,
+        ledgerStats,
         signalIC,
         calibrationHealth,
         collinearity,

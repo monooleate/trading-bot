@@ -17,7 +17,8 @@ csak hivatkozás vagy 1-soros összefoglaló legyen.
 | **Sprint-szintű operatív feladatok** (active / next / backlog táblák, owner, acceptance criteria, time-boxed) | [`sprints.md`](./sprints.md) | A `master-plan.md` státusz-tracker (✅/⚠️/❌), NEM sprint-tracker |
 | **Stratégia-katalógus** (#1-#37 ötlet specifikációja) | [`new-strategies.md`](./new-strategies.md) | A `master-plan.md` csak hivatkozik rájuk |
 | **VPS action plan** (EdgeCalc-specifikus 7-fázisos lépéssor) | [`hetzner-migration.md`](./hetzner-migration.md) | A `migration-strangler-fig.md` az absztrakt 9-fázis, NEM action plan |
-| **VPS fizikai layout** (OS, port, stack, deploy script, monitoring) | [`hetzner-infrastructure.md`](./hetzner-infrastructure.md) | A `hetzner-migration.md` csak env+Postgres séma részeket említ |
+| **VPS fizikai layout** (OS-hardening, Postgres-séma, DR, budget) | [`hetzner-infrastructure.md`](./hetzner-infrastructure.md) | A runtime/process/deploy Docker-first → `hetzner-docker-setup.md` |
+| **Docker deployment** (konténerek, docker-compose, Dockerfile-ok, ML model-service, repo+szerver könyvtárfa) | [`hetzner-docker-setup.md`](./hetzner-docker-setup.md) | Az OS-hardening + séma + DR onnan: `hetzner-infrastructure.md` |
 | **Netlify → VPS komponens-mapping** (function → process táblázat) | [`migration-strangler-fig.md`](./migration-strangler-fig.md) §1 | A `hetzner-migration.md` csak a Hyperliquid + Funding-Arb portolásra fókuszál |
 | **Risk koordinátor — miért NINCS** (no-build trade-off) | [`risk-coordinator-considerations.md`](./risk-coordinator-considerations.md) | Sehol máshol — minden más doksi csak hivatkozik rá |
 | **Env-vár katalógus** | [`../current-state/env-vars.md`](../current-state/env-vars.md) | Egyetlen roadmap doksi sem listáz teljes env-szettet, csak az új live-mode env-eket említi |
@@ -140,6 +141,7 @@ mappára:
 
 ## Kapcsolódó
 
+- **[`model-discovery-forecasting.md`](./model-discovery-forecasting.md)** — research discovery (2026-09-01): forrásolt survey + pontozott ajánlás a botok predikciós/kalibrációs rétegének fejlesztésére (open-source modellek + elmélet + gyakorlati megvalósítás). A §7 jelölt-tételei operátor-jóváhagyás után promotálhatók `new-strategies.md` / `sprints.md`-be.
 - **`../current-state/`** — a "honnan indulunk" snapshot (architecture, env-vars, deploy, settings, trading-status, auto-claim)
 - **`../math/`** — algoritmus + 4 bot implementation reference (13-crypto / 14-hl / 15-funding-arb / 16-weather)
 - **`../changelog/`** — session-by-session implementációs history

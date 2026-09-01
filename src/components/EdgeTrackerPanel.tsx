@@ -88,12 +88,48 @@ interface CalibrationView {
   effective: Record<string, number>;
 }
 
+interface ReliabilityBin {
+  lo: number;
+  hi: number;
+  meanPredicted: number;
+  observedFreq: number;
+  count: number;
+}
+
+interface ProperScores {
+  n: number;
+  baseRate: number;
+  brier: number;
+  logScore: number;
+  reliability: number;
+  resolution: number;
+  uncertainty: number;
+  decompositionResidual: number;
+  brierSkillScore: number;
+  logSkillScore: number;
+  reliabilityBins: ReliabilityBin[];
+  binCount: number;
+  message: string;
+}
+
+interface LedgerStats {
+  category: string;
+  total: number;
+  resolved: number;
+  taken: number;
+  skippedResolved: number;
+  oldestTs: string | null;
+  newestTs: string | null;
+}
+
 interface EdgeTrackerData {
   ok: boolean;
   isMock: boolean;
   summary: SummaryStats;
   cumulativePnl: CumulativePoint[];
   calibration: CalibrationBucket[];
+  properScores?: ProperScores;
+  ledgerStats?: LedgerStats | null;
   signalIC: SignalICResult[];
   calibrationHealth?: CalibrationHealth;
   edgeDecay: { points: EdgeDecayPoint[]; slope: number; hasDecay: boolean };
@@ -192,6 +228,8 @@ export default function EdgeTrackerPanel({ defaultCategory = "all" }: Props) {
           )}
 
           <SummaryCards s={data.summary} />
+          {data.properScores && <ProperScoresCard ps={data.properScores} />}
+          {data.ledgerStats && <LedgerStatsCard s={data.ledgerStats} />}
           {data.calibrationView && <CalibrationViewCard view={data.calibrationView} />}
           <CumulativePnlChart points={data.cumulativePnl} />
           <UnderwaterDrawdownChart points={data.cumulativePnl} maxDDDuration={data.summary.maxDrawdownDuration} />
@@ -495,6 +533,111 @@ function UnderwaterDrawdownChart({
 }
 
 // ─── Chart 2: Calibration scatter ───────────────────────
+
+// ─── Prediction-ledger stats (unbiased dataset growth) ──
+// Model-discovery §2. Shows the forecast dataset accumulating — including the
+// skipped-but-resolved markets the bot never traded, which remove the
+// closedTrades selection bias for future calibration/backtests.
+function LedgerStatsCard({ s }: { s: LedgerStats }) {
+  const fmt = (t: string | null) => (t ? new Date(t).toISOString().slice(0, 10) : "—");
+  const span = s.oldestTs && s.newestTs ? `${fmt(s.oldestTs)} → ${fmt(s.newestTs)}` : "—";
+  return (
+    <div className="et-chart">
+      <div className="et-chart-header">
+        <h3>Prediction ledger (unbiased dataset)</h3>
+        <span className="et-ps-n">{span}</span>
+      </div>
+      <div className="et-kpi-grid et-ps-kpis">
+        <Card title="Logged" value={String(s.total)} sub="all scans" color={COLORS.muted} />
+        <Card title="Resolved" value={String(s.resolved)} sub="labeled" color={COLORS.theoretical} />
+        <Card title="Taken" value={String(s.taken)} sub="bot traded" color={COLORS.actual} />
+        <Card title="Skipped+resolved" value={String(s.skippedResolved)} sub="bias-free add-on" color={s.skippedResolved > 0 ? COLORS.actual : COLORS.muted} />
+      </div>
+      <div className="et-ps-msg">
+        {s.total === 0
+          ? "No predictions logged yet — the ledger fills once the bots run a deployed scan tick."
+          : `${s.resolved} of ${s.total} predictions resolved; ${s.skippedResolved} are markets the bot did NOT trade (the selection-bias-free labels for future calibration).`}
+      </div>
+    </div>
+  );
+}
+
+// ─── Proper-scoring harness (log-score + Brier-Murphy) ──
+// Model-discovery §7 #1. Scores the forecast probability itself on a
+// strictly-proper metric, so combiner/calibration changes can be judged
+// without noisy PnL. Full [0,1] reliability diagram over the win-probability
+// forecast complements the [0.5,1.0] CalibrationChart below.
+function ProperScoresCard({ ps }: { ps: ProperScores }) {
+  if (ps.n === 0) {
+    return (
+      <div className="et-chart">
+        <div className="et-chart-header"><h3>Proper scoring (forecast quality)</h3></div>
+        <div className="et-ps-empty">{ps.message}</div>
+      </div>
+    );
+  }
+
+  const bins = ps.reliabilityBins.filter((b) => b.count > 0);
+  const W = 480, H = 320, PAD = 40;
+  const innerW = W - 2 * PAD, innerH = H - 2 * PAD;
+  const scale = (v: number) => PAD + v * innerW;
+  const invScale = (v: number) => PAD + (1 - v) * innerH;
+  const maxCount = Math.max(1, ...bins.map((b) => b.count));
+
+  const skillColor = ps.brierSkillScore > 0 ? COLORS.actual : COLORS.loss;
+
+  return (
+    <div className="et-chart">
+      <div className="et-chart-header">
+        <h3>Proper scoring (forecast quality)</h3>
+        <span className="et-ps-n">n={ps.n} · base rate {(ps.baseRate * 100).toFixed(0)}%</span>
+      </div>
+
+      <div className="et-kpi-grid et-ps-kpis">
+        <Card title="Brier ↓" value={ps.brier.toFixed(3)} sub="mean (p−y)²" color={COLORS.muted} />
+        <Card title="Log-score ↓" value={ps.logScore.toFixed(3)} sub="cross-entropy" color={COLORS.muted} />
+        <Card title="Brier skill ↑" value={`${(ps.brierSkillScore * 100).toFixed(1)}%`} sub="vs base rate" color={skillColor} />
+        <Card title="Reliability ↓" value={ps.reliability.toFixed(3)} sub="calibration err" color={ps.reliability < 0.01 ? COLORS.actual : COLORS.warn} />
+        <Card title="Resolution ↑" value={ps.resolution.toFixed(3)} sub="discrimination" color={COLORS.theoretical} />
+        <Card title="Log skill ↑" value={`${(ps.logSkillScore * 100).toFixed(1)}%`} sub="vs base rate" color={ps.logSkillScore > 0 ? COLORS.actual : COLORS.loss} />
+      </div>
+
+      {bins.length >= 2 ? (
+        <svg viewBox={`0 0 ${W} ${H}`} className="et-svg">
+          {[0, 0.25, 0.5, 0.75, 1.0].map((v) => (
+            <g key={v}>
+              <line x1={scale(v)} x2={scale(v)} y1={PAD} y2={H - PAD} stroke={COLORS.border} strokeWidth={0.5} />
+              <line x1={PAD} x2={W - PAD} y1={invScale(v)} y2={invScale(v)} stroke={COLORS.border} strokeWidth={0.5} />
+              <text x={scale(v)} y={H - PAD + 14} fill={COLORS.muted} fontSize={9} textAnchor="middle" fontFamily="monospace">{(v * 100).toFixed(0)}%</text>
+              <text x={PAD - 6} y={invScale(v) + 3} fill={COLORS.muted} fontSize={9} textAnchor="end" fontFamily="monospace">{(v * 100).toFixed(0)}%</text>
+            </g>
+          ))}
+          {/* Perfect-calibration 45° line */}
+          <line x1={scale(0)} y1={invScale(0)} x2={scale(1)} y2={invScale(1)}
+                stroke={COLORS.theoretical} strokeWidth={1.5} strokeDasharray="5 3" />
+          {/* Bin points: forecast vs realised frequency, size by count */}
+          {bins.map((b, i) => {
+            const r = 3 + Math.sqrt(b.count / maxCount) * 12;
+            const dev = Math.abs(b.meanPredicted - b.observedFreq);
+            const color = dev < 0.05 ? COLORS.actual : dev < 0.15 ? COLORS.warn : COLORS.loss;
+            return (
+              <circle key={i} cx={scale(b.meanPredicted)} cy={invScale(b.observedFreq)} r={r}
+                      fill={color} fillOpacity={0.6} stroke={color} strokeWidth={1}>
+                <title>{`Forecast ${(b.meanPredicted * 100).toFixed(1)}% → realised ${(b.observedFreq * 100).toFixed(1)}% (${b.count} trades)`}</title>
+              </circle>
+            );
+          })}
+          <text x={W / 2} y={H - 8} fill={COLORS.muted} fontSize={10} textAnchor="middle" fontFamily="monospace">Forecast P(win)</text>
+          <text x={12} y={H / 2} fill={COLORS.muted} fontSize={10} textAnchor="middle" fontFamily="monospace" transform={`rotate(-90 12 ${H / 2})`}>Realised win rate</text>
+        </svg>
+      ) : (
+        <div className="et-ps-empty">Reliability diagram needs ≥2 populated forecast bins.</div>
+      )}
+
+      <div className="et-ps-msg">{ps.message}</div>
+    </div>
+  );
+}
 
 function CalibrationChart({ buckets }: { buckets: CalibrationBucket[] }) {
   const valid = buckets.filter((b) => b.tradeCount > 0);
@@ -914,6 +1057,11 @@ const styles = `
 
 .et-decay-warn { font-family: var(--mono); font-size: 10px; color: var(--danger); font-weight: 700; }
 .et-decay-slope { font-family: var(--mono); font-size: 10px; color: var(--muted); }
+
+.et-ps-n { font-family: var(--mono); font-size: 10px; color: var(--muted); }
+.et-ps-kpis { margin-bottom: 12px; }
+.et-ps-msg { font-family: var(--mono); font-size: 10px; color: var(--muted); margin-top: 8px; line-height: 1.5; }
+.et-ps-empty { font-family: var(--mono); font-size: 10px; color: var(--muted); padding: 24px 8px; text-align: center; }
 
 .et-heatmap { display: grid; gap: 2px; font-family: var(--mono); font-size: 9px; }
 .et-heat-corner, .et-heat-hour, .et-heat-cat, .et-heat-cell { padding: 4px 2px; text-align: center; color: var(--muted); }

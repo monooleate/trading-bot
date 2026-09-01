@@ -4,7 +4,10 @@
 > OS hardening, port allokáció, stack-telepítés, deploy script, monitoring,
 > DR. Itt található a teljes Postgres séma (pillér-state blob modell) is.
 >
+> **⚠️ Deployment-modell (2026-09-01): DOCKER-FIRST.** A lenti §3 (Bun+PM2 runtime), §6 (PM2 ecosystem), §7 (host-mappaszerkezet) és §9 (rsync+PM2 deploy) **PM2-alapú** — ezt a **[`hetzner-docker-setup.md`](./hetzner-docker-setup.md)** váltja fel (Docker Compose, konténerek, Dockerfile-ok, a Python ML model-service, repo+szerver könyvtárfa, deploy). A §14 „Docker = overengineering" döntés **megfordítva**. Ami ebből a fájlból **érvényben marad**: §1 szerver, §2 OS-hardening, §4 Postgres-séma, §11 DR, §12 budget, §13 checklist.
+>
 > **Mit NEM találsz itt:**
+> - **Teljes Docker/konténer setup** → [`hetzner-docker-setup.md`](./hetzner-docker-setup.md)
 > - Lépésről-lépésre action plan a következő sessionhez → [`hetzner-migration.md`](./hetzner-migration.md)
 > - Absztrakt 9-fázis strangler-fig stratégia → [`migration-strangler-fig.md`](./migration-strangler-fig.md)
 > - Élő env-vár katalógus → [`../current-state/env-vars.md`](../current-state/env-vars.md)
@@ -909,7 +912,7 @@ echo "✓ Kész. Manual restart: pm2 start ecosystem.config.cjs"
 
 - **Cross-venue risk koordinátor** — pilléres modell, nincs rá szükség
 - **Multi-region failover** — egy DC, snapshot-restore-mást-DC-ben elég DR-nek
-- **Kubernetes / Docker** — overengineering 5-10 process-hez, PM2 elég
+- ~~**Kubernetes / Docker** — overengineering 5-10 process-hez, PM2 elég~~ **← MEGFORDÍTVA 2026-09-01:** Docker Compose a választott deployment (a Python ML model-service miatt + reprodukálhatóság) → [`hetzner-docker-setup.md`](./hetzner-docker-setup.md). **Kubernetes** továbbra is NEM (1 VPS, ~12 konténer → Compose elég)
 - **CI/CD pipeline** — manual deploy script elég 1 főnek
 - **Distributed tracing (Jaeger, Tempo)** — egy gép, PM2 logs elég
 - **Service mesh** — egy gép, lokális socket-ek

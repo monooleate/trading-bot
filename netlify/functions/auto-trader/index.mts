@@ -23,6 +23,7 @@ const PROTECTED_ACTIONS = new Set(["reset", "stop", "resume", "topup"]);
 import { log, getLogBuffer, getLogBufferForCategory } from "./shared/logger.mts";
 import { alertTradeOpen, alertTradeClosed, alertSessionStop, alertError, alertCalibrationNoise, alertLiveBlocked, alertTopup } from "./shared/telegram.mts";
 import { computeLiveReadiness, shouldForcePaper, type LiveReadinessReport } from "./shared/live-readiness.mts";
+import { appendPredictions, reconcileLedger } from "./shared/prediction-ledger.mts";
 import { PAPER_SIM_VERSION } from "./crypto/session-manager.mts";
 import { findBtcMarkets } from "./crypto/btc-market-finder.mts";
 import { aggregateSignals } from "./crypto/signal-aggregator.mts";
@@ -794,6 +795,13 @@ async function runCryptoTrader(
 
   // Save session state
   await saveSession(updatedSession);
+
+  // Prediction ledger (model-discovery §2): log EVERY scanned market's
+  // forecast (taken + skipped) + fill outcomes for taken markets from
+  // closedTrades, then reconcile a budgeted slice of past-endDate skipped
+  // markets against Gamma. Best-effort, non-throwing — never breaks a tick.
+  await appendPredictions("crypto", results, scanList, updatedSession.closedTrades);
+  await reconcileLedger("crypto");
 
   return await finish({
     ok: true,

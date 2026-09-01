@@ -14,6 +14,7 @@ import { log } from "../shared/logger.mts";
 import { loadPaperNeverStop, isAutoStopReason } from "../shared/paper-never-stop.mts";
 import { alertError, alertLiveBlocked } from "../shared/telegram.mts";
 import { computeLiveReadiness, shouldForcePaper, type LiveReadinessReport } from "../shared/live-readiness.mts";
+import { appendPredictions } from "../shared/prediction-ledger.mts";
 import { getHlConfig, getEffectiveHlConfig } from "./config.mts";
 import { getHlSignalForCoin } from "./signal-source.mts";
 import { getCurrentPrice } from "./hl-client.mts";
@@ -684,6 +685,14 @@ async function runHyperliquidTraderInner(
   }
 
   await saveHlSession(session);
+
+  // Prediction ledger (model-discovery §2): log every scanned coin's
+  // directional forecast (taken + skipped) + fill outcomes for taken coins
+  // from closedTrades (HL rows key on `coin`, closed trades on `coin`/`pnlUSDC`
+  // — the ledger tolerates both). No Gamma reconcile: HL is a perp, not a
+  // Polymarket market, so skipped-coin outcomes await a future price-based
+  // reconcile (up/down over the horizon). Best-effort, non-throwing.
+  await appendPredictions("hyperliquid", results, [], session.closedTrades);
 
   // Persist per-signal realized IC for the signal-combiner's optional
   // blending path. Cheap; runs every tick so the Edge Tracker UI can
