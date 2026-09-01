@@ -16,6 +16,8 @@ import {
 } from "./_resolution-risk.js";
 // #5 HAR-RV vol engine (pure math; imported-only, no cycle). Default-off σ source.
 import { harRvSigma, type OHLC } from "./auto-trader/shared/har-rv.mts";
+// #6 first-passage / one-touch pricing + barrier classifier. Default-off routing.
+import { oneTouchProbability, classifyBarrierMarket } from "./auto-trader/shared/first-passage.mts";
 
 const CORS = {
   "Access-Control-Allow-Origin":  "*",
@@ -407,6 +409,12 @@ interface VolSignalOptions {
    *  — the discovery §7 #5 upgrade). Default-off: flip via Settings `useHarRv`
    *  after the #1 harness shows a threshold-market Brier gain. */
   volEngine?: "legacy" | "har-rv";
+  /** #6 first-passage routing. When true, a market classified as a "touch"
+   *  ("reach/hit K by date") is priced with the one-touch first-passage
+   *  probability instead of the terminal N(d₂) (which understates it up to
+   *  ~2×). Default-off; only fires on real-strike touch markets → zero effect
+   *  on the current up-or-down / above-on (terminal) mix. */
+  firstPassage?: boolean;
 }
 
 async function getVolSignal(
@@ -543,7 +551,27 @@ async function getVolSignal(
     if (!Number.isFinite(d2)) {
       return { prob: null, detail: { error: "d2 non-finite", S, K, sigmaAnnual, T } };
     }
-    const fairYes = normalCdf(d2);
+    let fairYes = normalCdf(d2);
+    let pricingKind: "terminal" | "touch" = "terminal";
+
+    // #6 (model-discovery) — first-passage routing (default-OFF via Settings
+    // `useFirstPassage`). A "touch" market ("reach/hit K by date") resolves YES
+    // if the price EVER hits K before T → strictly higher than the terminal
+    // N(d₂), which understates it up to ~2×. Only fires when (a) the knob is on,
+    // (b) the question/slug carries a touch verb, and (c) K is a REAL strike
+    // (slug-threshold or fetched), never the ATM K=S fallback. Zero effect on
+    // the current up-or-down / above-on (terminal) mix.
+    if (
+      options.firstPassage &&
+      (strikeSource === "slug-threshold" || strikeSource === "fetched") &&
+      classifyBarrierMarket(market.slug, market.question) === "touch"
+    ) {
+      const touch = oneTouchProbability(S, K, sigmaAnnual, T);
+      if (Number.isFinite(touch)) {
+        fairYes = touch;
+        pricingKind = "touch";
+      }
+    }
 
     return {
       prob: fairYes,
@@ -553,6 +581,7 @@ async function getVolSignal(
         strikeSource,
         sigmaAnnual: (sigmaAnnual * 100).toFixed(1) + "%",
         sigmaSource,
+        pricingKind,
         timeHours: timeHours.toFixed(3),
         d2: d2.toFixed(3),
         fairYes: fairYes.toFixed(3),
@@ -577,9 +606,10 @@ async function loadVolSignalOptions(): Promise<VolSignalOptions> {
       enabled:            ov.volSignalEnabled      === undefined ? true : ov.volSignalEnabled === 1,
       strikeFetchEnabled: ov.volStrikeFetchEnabled === undefined ? true : ov.volStrikeFetchEnabled === 1,
       volEngine:          ov.useHarRv === 1 ? "har-rv" : "legacy",
+      firstPassage:       ov.useFirstPassage === 1,
     };
   } catch {
-    return { enabled: true, strikeFetchEnabled: true, volEngine: "legacy" };
+    return { enabled: true, strikeFetchEnabled: true, volEngine: "legacy", firstPassage: false };
   }
 }
 
