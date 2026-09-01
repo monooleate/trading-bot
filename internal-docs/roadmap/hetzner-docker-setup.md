@@ -552,4 +552,166 @@ Indítás: `docker compose -f docker-compose.yml -f compose.monitoring.yml up -d
 
 ---
 
-**Következő lépés (a következő migráló sessionnek):** a repo `apps/`+`services/`+`packages/` átszervezése (a mostani `src/` + `netlify/functions/` szétbontása), a `packages/core/ledger.ts` Postgres-port + a `services/model` FastAPI skeleton. A fázissorrend a [`hetzner-migration.md`](./hetzner-migration.md)-ben.
+## 18. Co-host a meglévő `analytics` szerveren (near-term, RAM-lean) — az `edgecalc` compose
+
+> **Kontextus (2026-09-01, SSH-audit):** a `analytics` szerver (Debian 13, **2 vCPU shared, 3.7 GB RAM, 0 swap**, 38 GB disk, IP 91.99.218.165, hostname `analytics-1`) **már futtatja** a umami-t Docker Compose-ban (`/opt/analytics/docker-compose.yml`, `name: analytics`): `caddy` (2-alpine, 80/443) + `umami` 3.2.0 + `db` postgres:17 (a `internal: true` hálón, port nélkül), két háló (`edge` publikus / `internal` DB-only), hardeninggel (`no-new-privileges`, mem_limit, log-rotáció). **Ez a §1-es stack már él** → az A-lépcső trading rendszer **ide co-hostolható, nulla új infra + nulla plusz költség.**
+>
+> **Mire elég:** a **teljes A-lépcső** (5 bot paper + forecasting-réteg #1–#4 + ledger) elfér a umami mellett. **A B-lépcső Python ML NEM** (Chronos/TimesFM 1.5–3 GB > a 3.7 GB plafon) → az a 16 GB-ra rescale (CX42, ~€16/hó) UTÁN, vagy külön gépen. Részletek: sizing §2.
+
+### 18.0 Előfeltétel — 2 GB swap (spike-védelem)
+
+A 3.7 GB-on **nincs swap** → egyidejű umami+Postgres+trading csúcs OOM-killert hívhat. Egyszeri, ~30 mp:
+
+```bash
+fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+echo '/swapfile none swap sw 0 0' >> /etc/fstab
+swapon --show                       # ellenőrzés
+```
+
+### 18.1 RAM-lean eltérések a generikus §1 tervhez képest
+
+A 3.7 GB-hoz igazítva (a teljes 13-konténeres terv a **dedikált / 16 GB** gépé):
+
+| Generikus §1 | Ezen a boxon |
+|---|---|
+| 5 külön `worker-*` konténer | **1 `workers` konténer**, mind az 5 pillér-loop egy processzben (belső ütemező) — ~250 MB az 5×150 helyett |
+| Saját `postgres` konténer | **A meglévő `analytics` `db` (postgres:17) újrahasznosítva** — új `edgecalc` DB + user, −150 MB |
+| `redis` konténer | **Kihagyva** — az A-lépcső state Postgresben, cache in-process; Redis csak a B-lépcső feed/pubsubhoz |
+| Saját `caddy` | **A meglévő `analytics-caddy`** — új `trade.<domain>` site-block |
+| `model` (Python ML) | **Kihagyva** (nem fér el) → 16 GB rescale után |
+
+**Lábnyom:** `workers` ~250 MB + `api` ~180 MB ≈ **~430 MB** a umami ~640 MB mellett → a 2.8 GB available-be bőven belefér.
+
+### 18.2 Postgres — `edgecalc` DB a meglévő konténerben (egyszeri)
+
+A umami DB superusere `umami` (POSTGRES_USER), így azon át hozzuk létre az izolált edgecalc DB-t + usert (külön user + saját DB = izoláció a umami adattól):
+
+```bash
+# a analytics projekt db konténerében:
+docker exec -i analytics-db-1 psql -U umami -d postgres <<'SQL'
+CREATE USER edgecalc WITH PASSWORD 'CHANGE_ME_STRONG';
+CREATE DATABASE edgecalc OWNER edgecalc;
+SQL
+```
+
+A séma (`prediction_ledger` §8 + trade-log + pillér-state) a `migrate` konténerrel megy (18.5), vagy a `infra/postgres/init/` `docker-entrypoint-initdb.d`-vel — **de figyelem:** az init-hook csak **üres** volume-on fut, a meglévő `db-data`-n NEM → ezért itt a `migrate` one-shot a helyes út.
+
+### 18.3 `/opt/edgecalc/docker-compose.yml` — az EDGECALC projekt
+
+Külön compose-projekt (`name: edgecalc`) ugyanazon a Docker Engine-en → izolált a umami-tól (egy trading-redeploy nem érinti a mérőt). A meglévő `analytics` hálókra **external**-ként csatlakozik:
+
+```yaml
+name: edgecalc
+
+x-common: &common
+  restart: unless-stopped
+  env_file: [.env]
+  security_opt: [ "no-new-privileges:true" ]
+  logging: { driver: json-file, options: { max-size: "10m", max-file: "3" } }
+
+services:
+  # Mind az 5 pillér-loop EGY konténerben (RAM-lean). Belső ütemező a
+  # Netlify cron helyett; a state Postgresben. Csak a DB-hálót látja.
+  workers:
+    <<: *common
+    build: { context: ., dockerfile: services/worker/Dockerfile }
+    container_name: edgecalc-workers
+    environment:
+      PILLARS: "crypto,weather,hyperliquid,funding-arb,sports"
+      DATABASE_URL: "postgresql://edgecalc:${EDGECALC_DB_PASSWORD}@db:5432/edgecalc"
+    networks: [ dbnet ]
+    mem_limit: 384m
+
+  # Read-only API-k + signal endpointok. A caddy (analytics projekt) éri el
+  # az `edge` hálón; a Postgrest a `dbnet`-en.
+  api:
+    <<: *common
+    build: { context: ., dockerfile: services/api/Dockerfile }
+    container_name: edgecalc-api
+    environment:
+      PORT: "7000"
+      DATABASE_URL: "postgresql://edgecalc:${EDGECALC_DB_PASSWORD}@db:5432/edgecalc"
+    expose: [ "7000" ]
+    networks: [ edge, dbnet ]
+    mem_limit: 256m
+
+# A meglévő analytics-projekt hálói, external-ként. A neveket ELLENŐRIZD:
+#   docker network ls   → várhatóan `analytics_edge` és `analytics_internal`
+networks:
+  edge:
+    external: true
+    name: analytics_edge          # hogy a analytics-caddy elérje az `api`-t
+  dbnet:
+    external: true
+    name: analytics_internal      # hogy a workers/api elérje a `db`-t (postgres)
+```
+
+> A `db` DNS-név a `analytics_internal` hálón a postgres-konténer service-alias-a (`db`) → a `DATABASE_URL` host-ja `db`. A `workers` **nem** kap `edge`-et (nem publikus); az `api` mindkettőt (caddy + db).
+
+### 18.4 Caddy — `trade.<domain>` site-block a MEGLÉVŐ analytics Caddyfile-ba
+
+A `/opt/analytics/Caddyfile`-hoz add hozzá (a umami-blokk mellé):
+
+```caddy
+trade.grabit.hu {          # vagy amilyen subdomaint akarsz
+    tls {
+        dns cloudflare {env.CLOUDFLARE_API_TOKEN}   # ugyanaz a DNS/ACME, mint a umaminál
+    }
+    reverse_proxy edgecalc-api:7000
+    encode gzip
+    log { output stdout; format json }
+}
+```
+
+> ⚠️ **A saját doksitok csapdája (analytics compose komment):** a Caddyfile **egyetlen-fájl bind-mount** → `git pull`/szerkesztés után `reload` NEM elég, **`docker compose -p analytics up -d --force-recreate caddy`** kell (új inode). DNS: a `trade.<domain>` A-rekord a Cloudflare-en a VPS IP-re, **proxy KI** (szürke felhő), mint a többinél.
+
+### 18.5 Deploy — az `analytics` boxon
+
+```bash
+# 0. swap (18.0), ha még nincs
+# 1. repo a szerverre (a monorepo apps/services/packages szerkezet — lásd §4)
+mkdir -p /opt/edgecalc && cd /opt/edgecalc
+git clone <repo> .             # vagy rsync a buildkontextussal
+cp .env.example .env && nano .env     # EDGECALC_DB_PASSWORD, kulcsok (HL/POLY/BYBIT), Telegram…  chmod 600 .env
+
+# 2. edgecalc DB (18.2), ha még nincs
+# 3. séma-migráció (one-shot, a dbnet-en)
+docker compose run --rm --network analytics_internal migrate    # services/api/src/migrate.ts
+
+# 4. build + indítás
+docker compose up -d --build
+
+# 5. frontend a caddynek (ha a caddy serve-eli a dist-et; egyébként az api)
+docker build -f apps/web/Dockerfile --target export -o ./dist .
+
+# 6. Caddy: trade.<domain> block (18.4) + force-recreate a analytics projektben
+nano /opt/analytics/Caddyfile
+docker compose -p analytics up -d --force-recreate caddy
+
+# 7. ellenőrzés
+docker compose ps
+docker compose logs -f workers      # a pillér-tickek indulnak
+curl -fsS https://trade.<domain>/api/status | head
+```
+
+### 18.6 Ops — kill-switch, RAM-figyelés (co-host-specifikus)
+
+```bash
+# Csak a trading áll, a umami érintetlen:
+docker compose -p edgecalc stop workers          # egy pillér-halmaz
+docker compose -p edgecalc down                  # teljes trading-stop
+
+# RAM-nyomás figyelése (a co-host miatt fontos):
+docker stats --no-stream        # umami + edgecalc konténerek együtt
+free -h                         # swap-használat: ha tartósan >500 MB swap → 16 GB rescale ideje
+```
+
+> **Mikor lépj a 16 GB-os gépre (CX42 rescale):** ha (a) a B-lépcső ML-t akarod bekötni (Chronos/TimesFM `model` konténer), vagy (b) a `free -h` tartósan >0.5 GB swapet mutat (a co-host kinőtte a 3.7 GB-ot). A rescale ~1–2 perc állás, a Docker-stack (mindkét projekt) magától visszajön.
+
+### 18.7 Mi kell hozzá a repóból (precondition)
+
+Ez a compose a §4 monorepo-szerkezetet feltételezi (`services/worker`, `services/api`, `packages/core` Postgres-adapterrel). **A pure logika (a #1–#4 forecasting-réteg + a ledger) 1:1 átjön** — csak a Blobs→Postgres adapter (`packages/core/db.ts` + `ledger.ts`) + a Bun-entrypoint (`worker/src/main.ts` ütemező, `api/src/server.ts` router) új. A `netlify/functions/*` logika átemelése a §13 mapping szerint. **Amíg ez a port nincs kész, a ledger-óra a jelenlegi Netlify-deploy-jal is indítható** (a hibrid-terv), és ez a co-host az első cél-környezet, amint a port megvan.
+
+---
+
+**Következő lépés (a következő migráló sessionnek):** a repo `apps/`+`services/`+`packages/` átszervezése (a mostani `src/` + `netlify/functions/` szétbontása), a `packages/core/ledger.ts` Postgres-port + a `services/model` FastAPI skeleton. A fázissorrend a [`hetzner-migration.md`](./hetzner-migration.md)-ben. **A near-term cél-környezet a §18 `analytics`-co-host** (16 GB rescale a B-lépcső ML-hez).
