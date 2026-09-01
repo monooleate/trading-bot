@@ -291,6 +291,54 @@ ahol $p_{\text{vol}}$ a vol_divergence (K-aware horgony), $k$ a többi 7 jel, $s
 
 ---
 
+## Általános log-odds pool (directional piacok, #3, 2026-09-01)
+
+A model-discovery (`roadmap/model-discovery-forecasting.md` §7 #3) rámutatott: a
+`combine()` **lineáris** (számtani átlag) pool-ja — `p = Σ wₖ·pₖ` — **bizonyíthatóan
+alul-magabiztos**, ha a jelek független információt hordoznak: a kombinált
+valószínűség a 0.5 (base-rate) felé regresszál. Ez a projekt visszatérő „lapos
+~0.46 finalProb" tünete; a [B21 K-anchor](#k-anchoring--σ-glitch-guard-b21-2026-06-04)
+ennek csak a **threshold** piacokra szabott foltja volt.
+
+### A képlet
+
+Directional (up-or-down / general) piacon a lineáris pool helyett **log-odds
+térben** átlagolunk:
+
+$$
+p_{\text{log-odds}} = \sigma\!\left(\frac{\sum_k w_k \cdot \operatorname{logit}(p_k)}{\sum_k w_k}\right)
+$$
+
+ahol a $w_k$ ugyanaz a normalizált IC-súly, mint a lineáris ágban ($\sum_k w_k \approx 1$).
+Log-odds térben a bizonyíték additív, így a pool **decizívebb** a számtani
+átlagnál (pl. `{0.9, 0.5}` egyenlő súllyal: lineáris 0.70, log-odds **0.75**).
+
+**Miért súlyozott ÁTLAG és nem ÖSSZEG?** Az összeg-forma (valódi bizonyíték-
+akkumuláció) `p > max(pₖ)`-t adna, ami **túl-számolná a redundáns jeleket**
+(momentum/orderflow/vol mind az árat olvassa). Az átlag-forma **bounded**
+marad a bemenetek tartományán belül → biztonságos a mi részben-korrelált
+8 jelünkre. A valódi extremizing (a pooled log-odds `× a>1` szorzása,
+disagreement-gate-elve) külön, óvatosabb lépés (#8).
+
+### Bekapcsolás és biztonság
+
+- Új `combinerLogOddsStrength` Settings-knob, range [0, 1], **default 0 = OFF**
+  (tiszta lineáris pool → **zéró regresszió**, a meglévő trade-típusokra
+  bit-azonos). Az érték a lineáris és a log-odds pool közti keverés:
+  `combined = (1−s)·lineáris + s·log-odds`.
+- **Threshold piacon nincs hatása** — ott a K-anchor már log-odds térben pool-ol,
+  a kettő együtt double-transform lenne; a `combine()` a `marketKind !== "threshold"`
+  ággal kizárja.
+- A bevált B21/42A rollout-minta: speculative implementáció default-off, az
+  operátor akkor kapcsolja `> 0`-ra (pl. 0.5–1.0), amikor a **#1 proper-scoring
+  harness** (Edge Tracker) a Brier/log-score javulását mutatja a bekapcsolt
+  módra. Addig mérési fázis, nem live viselkedés-változás.
+
+Pin: `netlify/functions/auto-trader/shared/log-odds-pool.test.mts` (a `combine()`
+blokk formuláját reprodukálja — a kettőt együtt kell módosítani).
+
+---
+
 ## Forrás
 
 - Grinold, R.C. & Kahn, R.N. (1994). *Active Portfolio Management*. Probus Publishing.

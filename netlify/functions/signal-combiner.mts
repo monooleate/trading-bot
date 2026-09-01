@@ -568,6 +568,27 @@ async function loadKAnchorStrength(): Promise<number> {
   }
 }
 
+// #3 (model-discovery, 2026-09-01): load the general log-odds pool strength.
+// Default 0 = OFF (pure linear pool, ZERO behaviour change) — the safe,
+// measure-first rollout. On DIRECTIONAL markets, s>0 blends the linear
+// combined with a weighted-mean log-odds pool (more decisive than the
+// arithmetic mean, but bounded — the mean form does NOT over-count redundant
+// signals the way a log-odds SUM would). Threshold markets are untouched
+// (the B21 K-anchor already pools in log-odds space there). Flip only after
+// the proper-scoring harness (#1) shows a gain. Safe-fallback on outage.
+async function loadLogOddsStrength(): Promise<number> {
+  try {
+    const mod: any = await import("./trader-settings.mts");
+    const ov = await mod.loadRuntimeOverrides();
+    if (typeof ov.combinerLogOddsStrength === "number" && Number.isFinite(ov.combinerLogOddsStrength)) {
+      return Math.max(0, Math.min(1, ov.combinerLogOddsStrength));
+    }
+    return 0;
+  } catch {
+    return 0;
+  }
+}
+
 // Duration parser — egyezik a btc-market-finder.mts logikájával, de ott a
 // MarketInfo `question` mezőben van, itt is. Másolat hogy az import-cikkust
 // elkerüljük (signal-combiner.mts top-level, auto-trader almodul → körutas).
@@ -1166,6 +1187,10 @@ function combine(
   // weighted average. Default 0 keeps existing callers unchanged; the
   // handler loads the Settings knob (default 1.0) and passes it.
   kAnchorStrength: number = 0,
+  // #3 (model-discovery): general log-odds pool strength on DIRECTIONAL
+  // markets. 0 = pure linear pool (default, zero change). s>0 blends the
+  // linear combined with sigmoid(Σ wₖ·logit(pₖ)) — decisive-but-bounded.
+  logOddsStrength: number = 0,
 ) {
   const valid: Record<string, number> = {};
   for (const [k, v] of Object.entries(signals)) {
@@ -1216,6 +1241,24 @@ function combine(
 
   let combined = 0;
   for (const k of names) combined += weights[k] * valid[k];
+
+  // #3 (model-discovery, 2026-09-01) — general LOG-ODDS POOL on directional
+  // markets. The linear (arithmetic-mean) pool is provably under-confident
+  // when signals carry independent information — it regresses toward 0.5.
+  // The weighted-mean log-odds pool sigmoid(Σ wₖ·logit(pₖ)) is the log-loss-
+  // optimal family and is more decisive, yet BOUNDED (a mean, not a sum, so
+  // it does not over-count redundant signals — that would need extremizing,
+  // deliberately deferred to #8). Skips threshold markets: the B21 K-anchor
+  // already pools in log-odds space there, so applying this too would double-
+  // transform. `weights` are already normalized (Σ≈1), so the weighted sum of
+  // logits IS the weighted mean. s=0 (default) → exact legacy linear pool.
+  if (marketKind !== "threshold" && logOddsStrength > 0) {
+    let logitSum = 0, wSum = 0;
+    for (const k of names) { logitSum += weights[k] * logit(valid[k]); wSum += weights[k]; }
+    const pLogOdds = sigmoid(wSum > 1e-9 ? logitSum / wSum : 0);
+    const s = Math.max(0, Math.min(1, logOddsStrength));
+    combined = (1 - s) * combined + s * pLogOdds;
+  }
 
   // B21 (2026-06-04) K-anchoring. On threshold (BTC-above-K) markets the
   // ONLY properly K-aware signal is vol_divergence (Black-Scholes digital
@@ -1344,6 +1387,7 @@ export default async function handler(req: Request, _ctx: Context) {
     // are unaffected regardless of the setting.
     const kBlindDownweight = await loadKBlindDownweight();
     const kAnchorStrength  = await loadKAnchorStrength();
+    const logOddsStrength  = await loadLogOddsStrength();
     const marketKind: MarketKind = parseThresholdK(market.slug) !== null
       ? "threshold"
       : "directional";
@@ -1418,7 +1462,7 @@ export default async function handler(req: Request, _ctx: Context) {
       } catch { /* swallow — fall back to static priors */ }
     }
 
-    const combo = combine(raw_signals, effectiveICMap, marketKind, kBlindDownweight, kAnchorStrength);
+    const combo = combine(raw_signals, effectiveICMap, marketKind, kBlindDownweight, kAnchorStrength, logOddsStrength);
     const rec   = recommend(combo.combined, combo.ir, combo.kelly_q);
     const active = Object.values(raw_signals).filter(v => v !== null).length;
 
