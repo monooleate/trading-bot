@@ -18,6 +18,8 @@ import {
 import { harRvSigma, type OHLC } from "./auto-trader/shared/har-rv.mts";
 // #6 first-passage / one-touch pricing + barrier classifier. Default-off routing.
 import { oneTouchProbability, classifyBarrierMarket } from "./auto-trader/shared/first-passage.mts";
+// #7 Deribit risk-neutral density (Breeden–Litzenberger). Default-off σ/prob source.
+import { blDigitalAbove, type SmilePoint } from "./auto-trader/shared/deribit-rnd.mts";
 
 const CORS = {
   "Access-Control-Allow-Origin":  "*",
@@ -304,6 +306,55 @@ async function fetchDailyOHLC(days: number): Promise<OHLC[]> {
   return [];
 }
 
+// #7 Deribit BTC option chain (5-min in-process cache; the smile is the same
+// across BTC markets in one scan). get_instruments → strike/expiry/name;
+// get_book_summary_by_currency → per-instrument mark_iv (percent).
+let _deribitCache: { ts: number; instruments: any[]; ivMap: Map<string, number> } | null = null;
+async function fetchDeribitRaw(): Promise<{ instruments: any[]; ivMap: Map<string, number> } | null> {
+  if (_deribitCache && Date.now() - _deribitCache.ts < 5 * 60 * 1000) return _deribitCache;
+  try {
+    const [instR, sumR] = await Promise.all([
+      fetch("https://www.deribit.com/api/v2/public/get_instruments?currency=BTC&kind=option&expired=false", { signal: AbortSignal.timeout(6000) }),
+      fetch("https://www.deribit.com/api/v2/public/get_book_summary_by_currency?currency=BTC&kind=option", { signal: AbortSignal.timeout(6000) }),
+    ]);
+    if (!instR.ok || !sumR.ok) return null;
+    const instruments = ((await instR.json()) as any).result || [];
+    const summary = ((await sumR.json()) as any).result || [];
+    const ivMap = new Map<string, number>();
+    for (const s of summary) {
+      if (typeof s.mark_iv === "number" && s.mark_iv > 0) ivMap.set(s.instrument_name, s.mark_iv);
+    }
+    _deribitCache = { ts: Date.now(), instruments, ivMap };
+    return _deribitCache;
+  } catch { return null; }
+}
+
+// Build the call-option implied-vol smile for the Deribit expiry nearest ≥ the
+// market's endDate (else the latest available). Returns [] on failure so
+// getVolSignal falls back to the model σ. Note: the smile provides the vol
+// LEVEL + skew; pricing uses the Polymarket horizon T (flat term-structure
+// proxy — full term-structure interpolation is a Hetzner/SSVI follow-up).
+async function fetchDeribitSmile(endDateMs: number): Promise<SmilePoint[]> {
+  const raw = await fetchDeribitRaw();
+  if (!raw) return [];
+  const calls = raw.instruments.filter(
+    (i: any) =>
+      (i.option_type === "call" || /-C$/.test(String(i.instrument_name || ""))) &&
+      typeof i.strike === "number" &&
+      typeof i.expiration_timestamp === "number",
+  );
+  if (calls.length === 0) return [];
+  const expiries = [...new Set(calls.map((c: any) => c.expiration_timestamp as number))].sort((a, b) => a - b);
+  const chosen = expiries.find((e) => e >= endDateMs) ?? expiries[expiries.length - 1];
+  const smile: SmilePoint[] = [];
+  for (const c of calls) {
+    if (c.expiration_timestamp !== chosen) continue;
+    const iv = raw.ivMap.get(c.instrument_name);
+    if (typeof iv === "number" && iv > 0) smile.push({ strike: c.strike, iv: iv / 100 });
+  }
+  return smile;
+}
+
 // ─── 1. VOL DIVERGENCE SIGNAL — Black-Scholes digital option pricing ─────────
 //
 // 2026-05-11 (Tier 1) redesign: a korábbi képlet (`iv = 2|yp−0.5|/√T × 100`)
@@ -415,6 +466,12 @@ interface VolSignalOptions {
    *  ~2×). Default-off; only fires on real-strike touch markets → zero effect
    *  on the current up-or-down / above-on (terminal) mix. */
   firstPassage?: boolean;
+  /** #7 Deribit market-implied pricing. When true, a terminal threshold market
+   *  with a real strike is priced with the Breeden–Litzenberger market-implied
+   *  P(S_T>K) from the Deribit BTC option smile (a far better, forward-looking
+   *  estimate than realized vol) instead of our own N(d₂). Default-off; falls
+   *  back to the model σ on any Deribit fetch failure. */
+  deribitIV?: boolean;
 }
 
 async function getVolSignal(
@@ -552,7 +609,28 @@ async function getVolSignal(
       return { prob: null, detail: { error: "d2 non-finite", S, K, sigmaAnnual, T } };
     }
     let fairYes = normalCdf(d2);
-    let pricingKind: "terminal" | "touch" = "terminal";
+    let pricingKind: "terminal" | "touch" | "deribit-rnd" = "terminal";
+
+    // #7 (model-discovery) — Deribit market-implied pricing (default-OFF via
+    // Settings `useDeribitIV`). On a TERMINAL threshold market with a real
+    // strike, replace our N(d₂) with the Breeden–Litzenberger market-implied
+    // P(S_T>K) read off the Deribit BTC option smile (forward-looking, reflects
+    // the real IV level + skew — a strictly better risk-neutral estimate than
+    // our realized-vol σ; the RN→physical gap is corrected downstream by #2
+    // calibration). Any fetch/estimation failure keeps the model fairYes →
+    // zero regression. Touch markets are handled by #6 below instead.
+    if (
+      options.deribitIV &&
+      market.endDate &&
+      (strikeSource === "slug-threshold" || strikeSource === "fetched") &&
+      classifyBarrierMarket(market.slug, market.question) === "terminal"
+    ) {
+      const smile = await fetchDeribitSmile(new Date(market.endDate).getTime());
+      if (smile.length >= 2) {
+        const p = blDigitalAbove(S, K, smile, T);
+        if (Number.isFinite(p)) { fairYes = p; pricingKind = "deribit-rnd"; }
+      }
+    }
 
     // #6 (model-discovery) — first-passage routing (default-OFF via Settings
     // `useFirstPassage`). A "touch" market ("reach/hit K by date") resolves YES
@@ -607,9 +685,10 @@ async function loadVolSignalOptions(): Promise<VolSignalOptions> {
       strikeFetchEnabled: ov.volStrikeFetchEnabled === undefined ? true : ov.volStrikeFetchEnabled === 1,
       volEngine:          ov.useHarRv === 1 ? "har-rv" : "legacy",
       firstPassage:       ov.useFirstPassage === 1,
+      deribitIV:          ov.useDeribitIV === 1,
     };
   } catch {
-    return { enabled: true, strikeFetchEnabled: true, volEngine: "legacy", firstPassage: false };
+    return { enabled: true, strikeFetchEnabled: true, volEngine: "legacy", firstPassage: false, deribitIV: false };
   }
 }
 
