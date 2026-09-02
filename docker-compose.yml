@@ -22,7 +22,11 @@ services:
       PILLARS: "crypto,weather,hyperliquid,funding-arb,sports"
       LOOP_INTERVAL_SEC: "180"
       DATABASE_URL: "postgresql://edgecalc:${EDGECALC_DB_PASSWORD}@db:5432/edgecalc"
-    networks: [dbnet]
+    # edge = outbound internet (exchanges/Polymarket/HL); dbnet = Postgres.
+    # analytics_internal is `internal: true` (no egress), so workers must also
+    # sit on edge to reach the venues. Not published — being on a network does
+    # not expose ports.
+    networks: [edge, dbnet]
     mem_limit: 384m
 
   # Read/API + signal endpoints. Reached by the analytics caddy on `edge`;
