@@ -557,7 +557,10 @@ async function runCryptoTrader(
   // Active positions only — past-endDate pending positions are effectively
   // done (waiting for Polymarket UMA resolution) and shouldn't block new
   // entries. The "Pending" card on the UI already separates them visually.
-  const activeOpenCount = updatedSession.openPositions.filter((p) => {
+  // `let` + incremented on each open below, so the cap is enforced against the
+  // LIVE count within a tick (was computed once → up to (scanList−1) overshoot,
+  // audit P2).
+  let activeOpenCount = updatedSession.openPositions.filter((p) => {
     if (!p.endDate) return true;
     return new Date(p.endDate).getTime() >= Date.now();
   }).length;
@@ -744,6 +747,7 @@ async function runCryptoTrader(
 
       // 7. Update session with open position
       updatedSession = addOpenPosition(updatedSession, paperPosition);
+      activeOpenCount++;   // keep the max-open gate honest within this tick
       await setCooldown(market.slug, config.cooldownSeconds);
 
       // Format signal arrows for telegram

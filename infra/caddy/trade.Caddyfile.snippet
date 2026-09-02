@@ -4,25 +4,39 @@
 #
 #   docker compose -p analytics up -d --force-recreate caddy
 #
-# TLS: the box runs stock `caddy:2-alpine` (NO cloudflare DNS plugin) and has
-# no CLOUDFLARE_API_TOKEN — the umami site uses Caddy's default HTTP/TLS-ALPN
-# auto-HTTPS, so this block does too (no `tls`/`dns` directive). Verified
-# read-only against the live analytics Caddyfile 2026-09-02.
+# TLS: the box runs stock caddy:2-alpine (NO cloudflare DNS plugin) and has no
+# CLOUDFLARE_API_TOKEN — umami uses Caddy's default HTTP/TLS-ALPN auto-HTTPS, so
+# this block does too (no tls/dns directive). Verified 2026-09-02.
 #
-# DNS: point trade.<domain> A-record at the VPS IP with the Cloudflare proxy
-# OFF (grey cloud) so the Let's Encrypt HTTP-01 challenge reaches Caddy on :80.
-#
-# `edgecalc-api` resolves over the shared analytics_edge network (the edgecalc
-# compose joins it as external; caddy is already on it).
+# The site is HIDDEN from search + AI crawlers: robots.txt disallows all,
+# X-Robots-Tag noindex on every response, and known AI/scraper user-agents are
+# refused with 403. (A determined bot can ignore robots/UA, but this stops all
+# compliant crawlers + the major AI trainers.)
 
-trade.grabit.hu {          # replace with your chosen subdomain
+trade.jmeszaros.dev {
     encode zstd gzip
-    reverse_proxy edgecalc-api:7000
+
     header {
+        X-Robots-Tag "noindex, nofollow, noarchive, nosnippet, noai, noimageai"
         Strict-Transport-Security "max-age=31536000;"
         X-Content-Type-Options "nosniff"
         X-Frame-Options "DENY"
         -Server
     }
-    log { output stdout; format json }
+
+    @aibots header_regexp User-Agent (?i)(GPTBot|OAI-SearchBot|ChatGPT-User|CCBot|ClaudeBot|anthropic-ai|Claude-Web|Google-Extended|PerplexityBot|Perplexity-User|Bytespider|Amazonbot|Applebot-Extended|Diffbot|ImagesiftBot|Omgili|FacebookBot|Meta-ExternalAgent|cohere-ai|YouBot|AI2Bot|Timpibot|Scrapy|DataForSeoBot|magpie-crawler)
+    handle @aibots {
+        respond 403
+    }
+
+    handle /robots.txt {
+        respond `User-agent: *
+Disallow: /` 200
+    }
+
+    handle {
+        reverse_proxy edgecalc-api:7000
+    }
+
+    log { output stdout }
 }

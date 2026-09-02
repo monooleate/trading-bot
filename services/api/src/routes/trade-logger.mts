@@ -8,6 +8,7 @@
 
 import type { Context } from "@netlify/functions";
 import { getStore } from "@netlify/blobs";
+import { checkAuth } from "./_auth-guard.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin":  "*",
@@ -114,6 +115,9 @@ export default async function handler(req: Request, _ctx: Context) {
   try {
     // ── POST: Log trade ────────────────────────────────────────────────
     if (req.method === "POST") {
+      // Gate writes: unauth POST let anyone inject/poison trades (audit P2).
+      const auth = await checkAuth(req);
+      if (!auth.ok) return auth.error;
       const body = await req.json() as any;
       if (body.action !== "log") {
         return new Response(JSON.stringify({ ok: false, error: "unknown action" }), { status: 400, headers: CORS });
@@ -205,6 +209,10 @@ export default async function handler(req: Request, _ctx: Context) {
 
     // ── Update outcome ───────────────────────────────────────────────────
     if (action === "resolve") {
+      // Gate: this mutates a trade's outcome/pnl → poisons IC calibration if
+      // left open (audit P2).
+      const auth = await checkAuth(req);
+      if (!auth.ok) return auth.error;
       const tradeId = url.searchParams.get("id");
       const outcome = parseFloat(url.searchParams.get("outcome") || "0");
       const pnl     = parseFloat(url.searchParams.get("pnl") || "0");
@@ -212,7 +220,9 @@ export default async function handler(req: Request, _ctx: Context) {
       if (!tradeId) return new Response(JSON.stringify({ ok: false, error: "id required" }), { status: 400, headers: CORS });
 
       if (hasSupabase) {
-        await supabaseQuery("PATCH", `trades?id=eq.${tradeId}`, { outcome, pnl });
+        // encodeURIComponent tradeId to avoid PostgREST filter-injection if
+        // Supabase is ever configured (audit P2 latent).
+        await supabaseQuery("PATCH", `trades?id=eq.${encodeURIComponent(tradeId)}`, { outcome, pnl });
       } else {
         const trades = await blobGetTrades();
         const t = trades.find(t => t.id === tradeId);

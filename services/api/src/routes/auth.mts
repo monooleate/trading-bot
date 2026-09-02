@@ -12,7 +12,7 @@
 
 import type { Context } from "@netlify/functions";
 import { SignJWT, jwtVerify } from "jose";
-import { createHash } from "crypto";
+import { createHash, timingSafeEqual } from "crypto";
 
 const CORS = {
   "Access-Control-Allow-Origin":  "*",
@@ -27,6 +27,34 @@ const COOKIE_NAME  = "ec_token";
 
 function sha256(s: string): string {
   return createHash("sha256").update(s).digest("hex");
+}
+
+// Constant-time hex compare (audit P2 — the old `!==` was non-constant-time).
+function safeHexEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a, "utf8");
+  const bb = Buffer.from(b, "utf8");
+  if (ab.length !== bb.length) return false;
+  return timingSafeEqual(ab, bb);
+}
+
+// Best-effort per-IP login rate limit (audit P2 — no lockout/throttle before).
+// In-memory (single container); resets on redeploy. 8 fails / 15 min → 429.
+const LOGIN_ATTEMPTS = new Map<string, { count: number; firstAt: number }>();
+const MAX_LOGIN_ATTEMPTS = 8;
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+function clientIp(req: Request): string {
+  return (req.headers.get("x-forwarded-for") || "").split(",")[0].trim() || "unknown";
+}
+function loginLocked(ip: string): boolean {
+  const e = LOGIN_ATTEMPTS.get(ip);
+  if (!e) return false;
+  if (Date.now() - e.firstAt > LOGIN_WINDOW_MS) { LOGIN_ATTEMPTS.delete(ip); return false; }
+  return e.count >= MAX_LOGIN_ATTEMPTS;
+}
+function recordLoginFail(ip: string): void {
+  const e = LOGIN_ATTEMPTS.get(ip);
+  if (!e || Date.now() - e.firstAt > LOGIN_WINDOW_MS) LOGIN_ATTEMPTS.set(ip, { count: 1, firstAt: Date.now() });
+  else e.count++;
 }
 
 function getSecret(): Uint8Array {
@@ -51,7 +79,7 @@ export default async function handler(req: Request, _ctx: Context) {
     const token   = cookies[COOKIE_NAME];
     if (!token) return new Response(JSON.stringify({ ok: false, reason: "no_token" }), { status: 401, headers: CORS });
     try {
-      await jwtVerify(token, getSecret());
+      await jwtVerify(token, getSecret(), { algorithms: ["HS256"] });
       return new Response(JSON.stringify({ ok: true }), { status: 200, headers: CORS });
     } catch {
       return new Response(JSON.stringify({ ok: false, reason: "invalid_token" }), { status: 401, headers: CORS });
@@ -76,15 +104,20 @@ export default async function handler(req: Request, _ctx: Context) {
 
     // LOGIN
     if (body.action === "login") {
+      const ip = clientIp(req);
+      if (loginLocked(ip)) {
+        return new Response(JSON.stringify({ ok: false, reason: "rate_limited" }), { status: 429, headers: CORS });
+      }
       const storedHash = process.env.AUTH_PASSWORD_HASH;
       if (!storedHash) return new Response(JSON.stringify({ ok: false, reason: "server_config" }), { status: 500, headers: CORS });
 
       const inputHash = sha256(body.password || "");
-      if (inputHash !== storedHash) {
-        // Timing-safe: kis késleltetés brute-force ellen
-        await new Promise(r => setTimeout(r, 400 + Math.random() * 200));
+      if (!safeHexEqual(inputHash, storedHash)) {
+        recordLoginFail(ip);
+        await new Promise(r => setTimeout(r, 400 + Math.random() * 200));  // slow brute-force
         return new Response(JSON.stringify({ ok: false, reason: "wrong_password" }), { status: 401, headers: CORS });
       }
+      LOGIN_ATTEMPTS.delete(ip);   // success clears the counter
 
       // JWT generálás
       const token = await new SignJWT({ sub: "owner", role: "admin" })

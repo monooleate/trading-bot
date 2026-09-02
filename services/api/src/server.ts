@@ -11,6 +11,7 @@
 //
 // State flows through the Blobs compat facade → Postgres (setBlobsDb(pool)).
 
+import { resolve, sep } from "node:path";
 import { pool } from "@core/db.ts";
 import { setBlobsDb } from "@core/blobs-compat.ts";
 import { loadEnv } from "@core/env.ts";
@@ -83,6 +84,14 @@ function routeName(pathname: string): string | null {
 // the edgecalc project — the umami caddy needs no dist mount, only the
 // reverse_proxy block. WEB_DIST is baked into the api image (see Dockerfile).
 const WEB_DIST = (typeof process !== "undefined" && process.env.WEB_DIST) || "/app/dist";
+const WEB_ROOT = resolve(WEB_DIST);
+
+// Resolve a request path under WEB_ROOT, returning null if it escapes it
+// (explicit path-traversal containment — audit P3 regression guard).
+function containedPath(rel: string): string | null {
+  const full = resolve(WEB_ROOT, "." + rel);
+  return full === WEB_ROOT || full.startsWith(WEB_ROOT + sep) ? full : null;
+}
 
 async function serveStatic(pathname: string): Promise<Response | null> {
   const b = Bun as any;
@@ -94,10 +103,12 @@ async function serveStatic(pathname: string): Promise<Response | null> {
     `${clean}.html`,
   ];
   for (const c of candidates) {
-    const f = b.file(WEB_DIST + c);
+    const full = containedPath(c);
+    if (!full) continue;
+    const f = b.file(full);
     if (await f.exists()) return new Response(f);
   }
-  const idx = b.file(WEB_DIST + "/index.html");     // SPA-ish fallback
+  const idx = b.file(resolve(WEB_ROOT, "index.html"));   // SPA-ish fallback
   if (await idx.exists()) return new Response(idx, { headers: { "Content-Type": "text/html" } });
   return null;
 }
@@ -109,13 +120,23 @@ export async function fetchHandler(req: Request): Promise<Response> {
       status: 200, headers: { "Content-Type": "application/json" },
     });
   }
+  // Hide the whole site from search + AI crawlers (defense-in-depth; Caddy also
+  // sets X-Robots-Tag + blocks AI user-agents at the edge).
+  if (url.pathname === "/robots.txt") {
+    return new Response("User-agent: *\nDisallow: /\n", {
+      status: 200, headers: { "Content-Type": "text/plain", "X-Robots-Tag": "noindex, nofollow" },
+    });
+  }
   const name = routeName(url.pathname);
   const handler = name ? ROUTES[name] : undefined;
   if (handler) {
     try {
       return await handler(req, {});
     } catch (err: any) {
-      return new Response(JSON.stringify({ ok: false, error: err?.message ?? "handler error" }), {
+      // Log details server-side; return a generic message (audit P3 — don't
+      // echo internal/library error text to the client).
+      console.error(`[api] handler error on ${url.pathname}:`, err?.message ?? err);
+      return new Response(JSON.stringify({ ok: false, error: "internal error" }), {
         status: 502, headers: { "Content-Type": "application/json" },
       });
     }

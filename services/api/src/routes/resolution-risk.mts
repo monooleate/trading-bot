@@ -8,6 +8,7 @@
 // signal-combiner can import the same code path.
 
 import type { Context } from "@netlify/functions";
+import { checkAuth } from "./_auth-guard.ts";
 import {
   analyseResolutionRisk,
   fetchMarketMeta,
@@ -37,6 +38,10 @@ function successResponse(slug: string, risk: ResolutionRiskScore, extra: Record<
 
 export default async function handler(req: Request, _ctx: Context) {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
+  // Operator-only: can trigger Claude calls billed to ANTHROPIC_API_KEY with
+  // attacker-controllable slug/question (cache bypassable) — authenticate (P1).
+  const auth = await checkAuth(req);
+  if (!auth.ok) return auth.error;
 
   try {
     // ── POST: caller supplies full metadata (no Gamma round-trip) ───────────

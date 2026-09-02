@@ -7,7 +7,8 @@
 
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import type { Db } from "./db.ts";
+import type { Db, TxDb } from "./db.ts";
+import { asTxDb } from "./db.ts";
 
 export interface Migration { version: string; sql: string; }
 
@@ -31,10 +32,17 @@ export async function applyMigrations(db: Db, migrations: Migration[]): Promise<
   const { rows } = await db.query<{ version: string }>("SELECT version FROM schema_migrations");
   const done = new Set(rows.map((r) => r.version));
   const applied: string[] = [];
+  const tdb: TxDb = asTxDb(db);
   for (const m of migrations) {
     if (done.has(m.version)) continue;
-    await db.exec(m.sql);
-    await db.query("INSERT INTO schema_migrations(version) VALUES ($1)", [m.version]);
+    // Apply the file + record the version atomically, so a mid-file failure
+    // rolls back cleanly and re-runs from scratch (audit P3). Safe today
+    // because all files are idempotent, but this protects future non-idempotent
+    // statements (ALTER/backfill).
+    await tdb.tx(async (t) => {
+      await t.exec(m.sql);
+      await t.query("INSERT INTO schema_migrations(version) VALUES ($1)", [m.version]);
+    });
     applied.push(m.version);
   }
   return applied;

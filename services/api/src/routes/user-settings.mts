@@ -7,6 +7,7 @@
 
 import type { Context } from "@netlify/functions";
 import { getStore } from "@netlify/blobs";
+import { checkAuth } from "./_auth-guard.ts";
 
 const STORE_NAME = "user-settings";
 
@@ -59,6 +60,10 @@ export default async function handler(req: Request, context: Context) {
 
   // ── POST: mentés ───────────────────────────────────────────────────────
   if (req.method === "POST") {
+    // Gate writes: uid is client-chosen, so an unauth POST let anyone flood
+    // rows / overwrite any uid (audit P2 — storage abuse / IDOR).
+    const auth = await checkAuth(req);
+    if (!auth.ok) return auth.error;
     let body: UserSettings;
     try {
       body = await req.json() as UserSettings;

@@ -10,6 +10,7 @@
 // Ha N × M -nél kevesebb valid kombináció van → függőség → arbitrázs lehetőség
 
 import type { Context } from "@netlify/functions";
+import { checkAuth } from "./_auth-guard.ts";
 import { getStore } from "@netlify/blobs";
 
 const CORS = {
@@ -128,6 +129,11 @@ function groupByCategory(markets: any[]): Record<string, any[]> {
 // ─── Main handler ─────────────────────────────────────────────────────────────
 export default async function handler(req: Request, _ctx: Context) {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
+  // Operator-only tool: it forwards attacker-controllable text to the Claude API
+  // billed to ANTHROPIC_API_KEY, and the cache is bypassable via a fresh slug —
+  // so it must be authenticated (audit P1: cost-DoS on the LLM budget).
+  const auth = await checkAuth(req);
+  if (!auth.ok) return auth.error;
 
   let store: any = null;
 

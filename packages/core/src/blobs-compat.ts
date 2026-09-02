@@ -135,7 +135,15 @@ function dispatchingStore(db: Db, name: string): BlobStore {
       const s = await loadSession(db, r.category, r.mode);
       return s ? { data: JSON.stringify(s), metadata: {} } : null;
     },
-    delete: base.delete,
+    async delete(key) {
+      const r = sessionRoute(name, key);
+      if (!r) return base.delete(key);
+      // Clear the normalized rows for this (category, mode) — a base.delete on a
+      // session key would no-op against blob_kv and leave state behind (audit P2).
+      await db.query("DELETE FROM pillar_open_position WHERE category = $1 AND mode = $2", [r.category, r.mode]);
+      await db.query("DELETE FROM pillar_closed_trade WHERE category = $1 AND mode = $2", [r.category, r.mode]);
+      await db.query("DELETE FROM pillar_session WHERE category = $1 AND mode = $2", [r.category, r.mode]);
+    },
   };
 }
 

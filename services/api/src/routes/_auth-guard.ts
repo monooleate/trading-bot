@@ -20,7 +20,9 @@ function parseCookies(header: string | null): Record<string, string> {
 
 export async function checkAuth(req: Request): Promise<{ ok: true } | { ok: false; error: Response }> {
   const secret = process.env.JWT_SECRET;
-  if (!secret) {
+  // Enforce the same >=32 char minimum the login path requires, so a
+  // misconfigured short secret can't weaken verification (audit P3).
+  if (!secret || secret.length < 32) {
     return { ok: false, error: new Response(JSON.stringify({ ok: false, reason: "server_config" }), { status: 500, headers: { "Content-Type": "application/json" } }) };
   }
 
@@ -32,7 +34,8 @@ export async function checkAuth(req: Request): Promise<{ ok: true } | { ok: fals
   }
 
   try {
-    await jwtVerify(token, new TextEncoder().encode(secret));
+    // Pin HS256 — never accept alg:none or an unexpected algorithm (audit P3).
+    await jwtVerify(token, new TextEncoder().encode(secret), { algorithms: ["HS256"] });
     return { ok: true };
   } catch {
     return { ok: false, error: new Response(JSON.stringify({ ok: false, reason: "invalid_token" }), { status: 401, headers: { "Content-Type": "application/json" } }) };

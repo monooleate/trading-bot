@@ -57,7 +57,11 @@ async function main() {
     console.log(`[worker] tick done in ${((Date.now() - startedAt) / 1000).toFixed(1)}s`);
   }, intervalMs);
 
-  const shutdown = () => { console.log("[worker] shutting down"); handle.stop(); process.exit(0); };
+  const shutdown = async () => {
+    console.log("[worker] shutting down — draining in-flight tick (max 10s)…");
+    await Promise.race([handle.stop(), new Promise((r) => setTimeout(r, 10_000))]);
+    process.exit(0);
+  };
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);
 }

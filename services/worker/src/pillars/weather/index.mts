@@ -261,7 +261,11 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
   // Build scan list: top 5 by ranking + any open-position market not in top 5
   // (so the Why? Live-Gates panel always has fresh gate data for an open
   // position, even if the bot's normal scan-window slipped past it).
-  const top5 = markets.slice(0, 5);
+  // Scan window ≥ maxOpenPositions so the per-tick candidate set can actually
+  // fill toward a >5 target (audit P3 — was hardcoded 5). Named top5 for
+  // historical continuity.
+  const scanWindow = Math.max(5, config.maxOpenPositions ?? 5);
+  const top5 = markets.slice(0, scanWindow);
   const top5Slugs = new Set(top5.map((m) => m.slug));
   const openWeatherSlugs = new Set(
     updatedSession.openPositions
