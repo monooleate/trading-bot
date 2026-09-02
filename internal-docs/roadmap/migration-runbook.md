@@ -25,6 +25,9 @@ Feladat: a Netlify+Blobs EdgeCalc rendszer átköltöztetése az `analytics` Het
   (4 vCPU / 8 GB / 75 GB), 2 GB swap + swappiness=10 beállítva, futó umami Docker-stack
   (caddy + umami + postgres:17, `analytics_edge` / `analytics_internal` hálók).
 
+Eldöntve: a Postgres a MEGLÉVŐ umami-konténer újrahasznosítása (külön `edgecalc` DB +
+user, izolálva) — NEM új Postgres. Lásd Phase 2 + §18.2.
+
 Szabályok:
 - Fázisonként dolgozz, minden fázis végén futtasd az acceptance-check-et.
 - SSH-n a szerverre CSAK olvasás/telepítés — a umami-konténerekhez NE nyúlj.
@@ -81,6 +84,9 @@ A cél a [`hetzner-docker-setup.md` §4](./hetzner-docker-setup.md) szerkezet: `
 ## 4. Phase 2 — `packages/core` — a Blobs→Postgres adapter (a load-bearing lépés)
 
 A pure logika változatlan; **csak az I/O-adapter cserélődik** (Netlify Blobs → Postgres).
+
+> **✅ DÖNTVE (2026-09-02) — Postgres: ÚJRAHASZNÁLÁS, nem új telepítés.** A meglévő umami `analytics-db-1` (postgres:17) konténerbe egy **külön `edgecalc` adatbázis + `edgecalc` user** kerül (jogok csak a saját DB-jén — §18.2). A umami és az edgecalc DB **izolált** (külön adatbázis + user + grant; egy edgecalc-séma-hiba a umami adatait nem érinti — standard „egy instance, több DB" minta). Indok: −150 MB RAM (nincs 2. Postgres), a `db` már fut/hangolt/backupolt.
+> **Trade-off (tudatos):** közös instance = közös erőforrás-keret (a `db` `mem_limit: 1g`-jén a umami+edgecalc query-i osztoznak). Paper-trading + cron-tick terhelésre bőven elég; ha az edgecalc DB-terhelés nő → a `db` `mem_limit` emelése, vagy külön **`edgecalc-db` konténerre** bontás (triviális, +150 MB) — **escape hatch**, nem most.
 
 **Feladatok**
 - `packages/core/db.ts` — `pg` pool a `DATABASE_URL`-re.
@@ -162,7 +168,9 @@ A pure logika változatlan; **csak az I/O-adapter cserélődik** (Netlify Blobs 
 
 ## 11. Nyitott döntések a köv. session elejére
 
-1. **Session-state séma:** `pillar_state_*` blob-modell (gyors port) VS normalizált táblák (jobb lekérdezhetőség) — a hetzner-infrastructure.md §4 két opciója.
+> **Már eldöntve (nem kell újra-tárgyalni):** **Postgres = a meglévő umami-konténer újrahasznosítása** (külön `edgecalc` DB + user) — lásd Phase 2 + §18.2. Külön `edgecalc-db` konténer csak escape-hatch, ha a DB-terhelés nő.
+
+1. **Session-state séma-ALAK** (a reuse-on belül): `pillar_state_*` blob-modell (gyors port) VS normalizált táblák (jobb lekérdezhetőség) — a hetzner-infrastructure.md §4 két opciója. *(A tároló-instance eldöntve; csak a tábla-alak nyitott.)*
 2. **Bun router:** Hono vs Elysia.
 3. **Branch:** merge main-be vagy külön migráció-branch.
 4. **Redis:** kihagyva az A-lépcsőben; a B-lépcső feed/pubsubhoz később.
