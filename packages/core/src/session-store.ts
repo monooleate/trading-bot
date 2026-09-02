@@ -118,32 +118,34 @@ function rebuild(
   return out;
 }
 
-export async function loadSession(db: Db, category: string): Promise<StoredSession | null> {
-  const s = await db.query("SELECT * FROM pillar_session WHERE category = $1", [category]);
+export type SessionMode = "paper" | "live";
+
+export async function loadSession(db: Db, category: string, mode: SessionMode = "paper"): Promise<StoredSession | null> {
+  const s = await db.query("SELECT * FROM pillar_session WHERE category = $1 AND mode = $2", [category, mode]);
   if (s.rows.length === 0) return null;
   const session = rebuild(s.rows[0], SESSION_COLS, SESSION_TS, SESSION_NUM, new Set(), SESSION_BOOL, "extra");
 
-  const pos = await db.query("SELECT * FROM pillar_open_position WHERE category = $1 ORDER BY seq ASC, id ASC", [category]);
+  const pos = await db.query("SELECT * FROM pillar_open_position WHERE category = $1 AND mode = $2 ORDER BY seq ASC, id ASC", [category, mode]);
   session.openPositions = pos.rows.map((r) => rebuild(r, POS_COLS, POS_TS, POS_NUM, new Set(), undefined, "payload"));
 
-  const ct = await db.query("SELECT * FROM pillar_closed_trade WHERE category = $1 ORDER BY seq ASC, id ASC", [category]);
+  const ct = await db.query("SELECT * FROM pillar_closed_trade WHERE category = $1 AND mode = $2 ORDER BY seq ASC, id ASC", [category, mode]);
   session.closedTrades = ct.rows.map((r) => rebuild(r, CT_COLS, CT_TS, CT_NUM, CT_JSON, undefined, "payload"));
 
   return session as StoredSession;
 }
 
-export async function saveSession(dbLike: Db | TxDb, category: string, session: StoredSession): Promise<void> {
+export async function saveSession(dbLike: Db | TxDb, category: string, session: StoredSession, mode: SessionMode = "paper"): Promise<void> {
   const tdb = asTxDb(dbLike);
   await tdb.tx(async (db) => {
     const { cols, residual } = split(session, SESSION_COLS, ["openPositions", "closedTrades"]);
     const c = (name: string) => (cols[name] ?? null);
     await db.query(
       `INSERT INTO pillar_session
-         (category, started_at, bankroll_start, bankroll_current, session_pnl,
+         (category, mode, started_at, bankroll_start, bankroll_current, session_pnl,
           session_loss, trade_count, paper_mode, stopped, stopped_reason,
           sim_version, extra)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb)
-       ON CONFLICT (category) DO UPDATE SET
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb)
+       ON CONFLICT (category, mode) DO UPDATE SET
          started_at=EXCLUDED.started_at, bankroll_start=EXCLUDED.bankroll_start,
          bankroll_current=EXCLUDED.bankroll_current, session_pnl=EXCLUDED.session_pnl,
          session_loss=EXCLUDED.session_loss, trade_count=EXCLUDED.trade_count,
@@ -151,44 +153,44 @@ export async function saveSession(dbLike: Db | TxDb, category: string, session: 
          stopped_reason=EXCLUDED.stopped_reason, sim_version=EXCLUDED.sim_version,
          extra=EXCLUDED.extra`,
       [
-        category, c("started_at"), c("bankroll_start"), c("bankroll_current"), c("session_pnl"),
+        category, mode, c("started_at"), c("bankroll_start"), c("bankroll_current"), c("session_pnl"),
         c("session_loss") ?? 0, c("trade_count") ?? 0, c("paper_mode") ?? true, c("stopped") ?? false,
         c("stopped_reason"), c("sim_version"),
         JSON.stringify(residual),
       ],
     );
 
-    await db.query("DELETE FROM pillar_open_position WHERE category = $1", [category]);
+    await db.query("DELETE FROM pillar_open_position WHERE category = $1 AND mode = $2", [category, mode]);
     const positions = session.openPositions ?? [];
     for (let i = 0; i < positions.length; i++) {
       const { cols: pc, residual: pr } = split(positions[i], POS_COLS);
       const g = (n: string) => (pc[n] ?? null);
       await db.query(
         `INSERT INTO pillar_open_position
-           (category, seq, market, token_id, direction, shares, avg_entry, cost_basis,
+           (category, mode, seq, market, token_id, direction, shares, avg_entry, cost_basis,
             opened_at, condition_id, end_date, market_price_at_entry, predicted_prob, payload)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb)`,
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb)`,
         [
-          category, i, g("market"), g("token_id"), g("direction"), g("shares"), g("avg_entry"),
+          category, mode, i, g("market"), g("token_id"), g("direction"), g("shares"), g("avg_entry"),
           g("cost_basis"), g("opened_at"), g("condition_id"), g("end_date"),
           g("market_price_at_entry"), g("predicted_prob"), JSON.stringify(pr),
         ],
       );
     }
 
-    await db.query("DELETE FROM pillar_closed_trade WHERE category = $1", [category]);
+    await db.query("DELETE FROM pillar_closed_trade WHERE category = $1 AND mode = $2", [category, mode]);
     const trades = session.closedTrades ?? [];
     for (let i = 0; i < trades.length; i++) {
       const { cols: tc, residual: tr } = split(trades[i], CT_COLS);
       const g = (n: string) => (tc[n] ?? null);
       await db.query(
         `INSERT INTO pillar_closed_trade
-           (category, seq, market, direction, entry_price, exit_price, shares, pnl, pnl_pct,
+           (category, mode, seq, market, direction, entry_price, exit_price, shares, pnl, pnl_pct,
             opened_at, closed_at, predicted_prob, market_price_at_entry, edge_at_entry,
             signal_breakdown, payload)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16::jsonb)`,
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb,$17::jsonb)`,
         [
-          category, i, g("market"), g("direction"), g("entry_price"), g("exit_price"), g("shares"),
+          category, mode, i, g("market"), g("direction"), g("entry_price"), g("exit_price"), g("shares"),
           g("pnl"), g("pnl_pct"), g("opened_at"), g("closed_at"), g("predicted_prob"),
           g("market_price_at_entry"), g("edge_at_entry"),
           tc["signal_breakdown"] == null ? null : JSON.stringify(tc["signal_breakdown"]),

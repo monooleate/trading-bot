@@ -6,9 +6,12 @@
 -- weatherMeta, bot-specific scalars) lives in JSONB `payload`/`extra`.
 -- Idempotent.
 
--- One row per pillar (crypto|weather|hyperliquid|funding-arb|sports).
+-- One row per (pillar, mode). mode = 'paper' | 'live' (paper-only until the
+-- Phase 6 cutover; live rows appear post-go-live). Pillars:
+-- crypto|weather|hyperliquid|funding-arb|sports.
 CREATE TABLE IF NOT EXISTS pillar_session (
-  category           TEXT PRIMARY KEY,
+  category           TEXT NOT NULL,
+  mode               TEXT NOT NULL DEFAULT 'paper',
   started_at         TIMESTAMPTZ NOT NULL,
   bankroll_start     NUMERIC NOT NULL,
   bankroll_current   NUMERIC NOT NULL,
@@ -23,7 +26,8 @@ CREATE TABLE IF NOT EXISTS pillar_session (
   -- calibrationAlertSentAt, arb/sports specifics) ride in `extra` so each
   -- pillar round-trips exactly its own keys (no cross-pillar column pollution).
   extra              JSONB NOT NULL DEFAULT '{}'::jsonb,
-  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (category, mode)
 );
 
 DROP TRIGGER IF EXISTS trg_pillar_session_updated_at ON pillar_session;
@@ -37,6 +41,7 @@ CREATE TRIGGER trg_pillar_session_updated_at BEFORE UPDATE ON pillar_session
 CREATE TABLE IF NOT EXISTS pillar_open_position (
   id                    BIGSERIAL PRIMARY KEY,
   category              TEXT NOT NULL,
+  mode                  TEXT NOT NULL DEFAULT 'paper',
   seq                   INT NOT NULL DEFAULT 0,     -- preserve array order
   market                TEXT NOT NULL,
   token_id              TEXT,
@@ -51,13 +56,14 @@ CREATE TABLE IF NOT EXISTS pillar_open_position (
   predicted_prob        NUMERIC,
   payload               JSONB NOT NULL DEFAULT '{}'::jsonb
 );
-CREATE INDEX IF NOT EXISTS idx_pos_cat ON pillar_open_position(category);
+CREATE INDEX IF NOT EXISTS idx_pos_cat ON pillar_open_position(category, mode);
 
 -- Closed trades — the analytically load-bearing table (edge-tracker +
 -- proper-scoring read it). Fully normalized scalars; signal_breakdown JSONB.
 CREATE TABLE IF NOT EXISTS pillar_closed_trade (
   id                    BIGSERIAL PRIMARY KEY,
   category              TEXT NOT NULL,
+  mode                  TEXT NOT NULL DEFAULT 'paper',
   seq                   INT NOT NULL DEFAULT 0,     -- preserve array order
   market                TEXT NOT NULL,
   direction             TEXT,
@@ -74,4 +80,4 @@ CREATE TABLE IF NOT EXISTS pillar_closed_trade (
   signal_breakdown      JSONB,
   payload               JSONB NOT NULL DEFAULT '{}'::jsonb
 );
-CREATE INDEX IF NOT EXISTS idx_ct_cat ON pillar_closed_trade(category, closed_at);
+CREATE INDEX IF NOT EXISTS idx_ct_cat ON pillar_closed_trade(category, mode, closed_at);

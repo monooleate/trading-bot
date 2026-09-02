@@ -61,6 +61,44 @@ async function main() {
   assert.equal((rows[0] as any).n, 0, "cache store must NOT hit Postgres");
   ok("cache store stays in-process (not persisted)");
 
+  // ── session dispatch → normalized pillar_* tables ───────────────────────────
+  const state = getStore("auto-trader-state");   // crypto/weather session store
+  const cryptoSession = {
+    startedAt: "2026-09-01T00:00:00.000Z", bankrollStart: 350, bankrollCurrent: 380,
+    sessionPnL: 30, sessionLoss: 10, tradeCount: 2, paperMode: true, stopped: false,
+    stoppedReason: null, simVersion: 3, calibrationAlertSentAt: null,
+    openPositions: [], closedTrades: [
+      { market: "m1", direction: "YES", entryPrice: 0.3, exitPrice: 1, shares: 50, pnl: 35,
+        pnlPct: 233, openedAt: "2026-09-01T09:00:00.000Z", closedAt: "2026-09-01T23:00:00.000Z" },
+    ],
+  };
+  await state.set("auto-trader-session", JSON.stringify(cryptoSession));   // key → (crypto, paper)
+  // written to the NORMALIZED table, not blob_kv
+  const kvCount = await db.query("SELECT count(*)::int AS n FROM blob_kv WHERE store = $1", ["auto-trader-state"]);
+  assert.equal((kvCount.rows[0] as any).n, 0, "session must NOT land in blob_kv");
+  const psCount = await db.query("SELECT count(*)::int AS n FROM pillar_session WHERE category='crypto' AND mode='paper'");
+  assert.equal((psCount.rows[0] as any).n, 1, "session must land in pillar_session");
+  ok("session set → normalized pillar_session (not blob_kv)");
+
+  // read back through getStore (the edge-tracker path) → closed trades present
+  const back = JSON.parse((await state.get("auto-trader-session"))!);
+  assert.equal(back.bankrollCurrent, 380);
+  assert.equal(back.closedTrades.length, 1);
+  assert.equal(back.closedTrades[0].pnl, 35);
+  ok("session get ← normalized (edge-tracker read path consistent)");
+
+  // weather routes to its own category via the same store
+  await state.set("auto-trader-session-weather", JSON.stringify({ ...cryptoSession, bankrollCurrent: 48 }));
+  assert.equal(JSON.parse((await state.get("auto-trader-session-weather"))!).bankrollCurrent, 48);
+  assert.equal(JSON.parse((await state.get("auto-trader-session"))!).bankrollCurrent, 380, "crypto vs weather isolated");
+  ok("weather session routed to its own category");
+
+  // archive key falls through to blob_kv (not a session route)
+  await state.set("auto-trader-session-archive-paper-v2", JSON.stringify({ archived: true }));
+  const arch = await db.query("SELECT count(*)::int AS n FROM blob_kv WHERE store='auto-trader-state' AND key LIKE 'auto-trader-session-archive%'");
+  assert.equal((arch.rows[0] as any).n, 1, "archive key → blob_kv");
+  ok("archive key falls through to blob_kv");
+
   // db-less fallback → in-process (nothing throws)
   setBlobsDb(null);
   const fb = getStore("some-durable-store");

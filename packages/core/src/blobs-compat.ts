@@ -18,6 +18,7 @@
 // normalized session-store directly (runbook §11.1). The ledger uses @core/ledger.
 
 import type { Db } from "./db.ts";
+import { loadSession, saveSession, type SessionMode } from "./session-store.ts";
 
 export interface BlobMetadata { [k: string]: unknown }
 export interface BlobWithMetadata { data: string; metadata: BlobMetadata }
@@ -79,9 +80,69 @@ function pgStore(db: Db, name: string): BlobStore {
   };
 }
 
+// ── Session dispatch → normalized pillar_* tables (runbook §11.1) ────────────
+// The trading pillars' session objects (crypto/weather/hyperliquid/sports) are
+// stored NORMALIZED, not as JSON blobs. We map each (store, key) to a
+// (category, mode) and translate get/set through @core/session-store, so BOTH
+// the session-managers (write) and the edge-tracker/multi-status readers stay
+// consistent with zero per-file changes. Archive keys + funding-arb (document-
+// shaped ArbSessionState) fall through to blob_kv.
+interface SessionRoute { category: string; mode: SessionMode }
+
+function sessionRoute(store: string, key: string): SessionRoute | null {
+  if (store === "auto-trader-state") {
+    if (key.startsWith("auto-trader-session-archive")) return null; // archive → blob_kv
+    if (key === "auto-trader-session") return { category: "crypto", mode: "paper" };
+    if (key === "auto-trader-session-live") return { category: "crypto", mode: "live" };
+    let m = key.match(/^auto-trader-session-live-(.+)$/);
+    if (m) return { category: m[1], mode: "live" };
+    m = key.match(/^auto-trader-session-(.+)$/);
+    if (m) return { category: m[1], mode: "paper" };
+    return null;
+  }
+  if (store === "hyperliquid-session-v1") {
+    if (key === "session_paper") return { category: "hyperliquid", mode: "paper" };
+    if (key === "session_live") return { category: "hyperliquid", mode: "live" };
+    return null; // archive_paper_v* → blob_kv
+  }
+  if (store === "auto-trader-session-sports") {
+    if (key === "session_paper") return { category: "sports", mode: "paper" };
+    if (key === "session_live") return { category: "sports", mode: "live" };
+    return null; // archive_sim_v* → blob_kv
+  }
+  return null; // hyperliquid-arb-session-v1 (document-shaped) + everything else → blob_kv
+}
+
+const SESSION_STORES = new Set(["auto-trader-state", "hyperliquid-session-v1", "auto-trader-session-sports"]);
+
+function dispatchingStore(db: Db, name: string): BlobStore {
+  const base = pgStore(db, name);
+  return {
+    async get(key) {
+      const r = sessionRoute(name, key);
+      if (!r) return base.get(key);
+      const s = await loadSession(db, r.category, r.mode);
+      return s ? JSON.stringify(s) : null;
+    },
+    async set(key, value, opts) {
+      const r = sessionRoute(name, key);
+      if (!r) return base.set(key, value, opts);
+      await saveSession(db, r.category, JSON.parse(value), r.mode);
+    },
+    async getWithMetadata(key) {
+      const r = sessionRoute(name, key);
+      if (!r) return base.getWithMetadata(key);
+      const s = await loadSession(db, r.category, r.mode);
+      return s ? { data: JSON.stringify(s), metadata: {} } : null;
+    },
+    delete: base.delete,
+  };
+}
+
 /** Netlify Blobs getStore() shape: accepts a name string or { name }. */
 export function getStore(nameOrOpts: string | { name: string }): BlobStore {
   const name = typeof nameOrOpts === "string" ? nameOrOpts : nameOrOpts.name;
   if (isCache(name) || !_db) return inProcessStore(name);
+  if (SESSION_STORES.has(name)) return dispatchingStore(_db, name);
   return pgStore(_db, name);
 }

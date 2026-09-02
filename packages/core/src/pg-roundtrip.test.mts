@@ -149,6 +149,13 @@ async function main() {
   assert.equal(await loadSession(db, "nonexistent"), null, "missing session → null");
   ok("missing session → null");
 
+  // paper/live mode isolation
+  const liveSession = { ...hl, bankrollCurrent: 999, openPositions: [], closedTrades: [] };
+  await saveSession(db, "hyperliquid", liveSession, "live");
+  assert.equal((await loadSession(db, "hyperliquid", "live"))!.bankrollCurrent, 999);
+  assert.equal((await loadSession(db, "hyperliquid", "paper"))!.bankrollCurrent, 186.81, "paper session unaffected by live save");
+  ok("paper/live mode isolation");
+
   // ── settings KV ─────────────────────────────────────────────────────────────
   await setSetting(db, "trader:crypto", { sessionLossLimit: 1000, useRealizedIC: 1 });
   await setSetting(db, "trader:weather", { weatherInvertDirection: 1 });
