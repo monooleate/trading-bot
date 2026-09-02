@@ -748,6 +748,21 @@ async function loadLogOddsStrength(): Promise<number> {
   }
 }
 
+// #8 (model-discovery): disagreement-gated extremizing strength. Default 0 =
+// OFF (a=1, no change). Safe-fallback on outage.
+async function loadExtremizeStrength(): Promise<number> {
+  try {
+    const mod: any = await import("./trader-settings.mts");
+    const ov = await mod.loadRuntimeOverrides();
+    if (typeof ov.combinerExtremizeStrength === "number" && Number.isFinite(ov.combinerExtremizeStrength)) {
+      return Math.max(0, Math.min(1, ov.combinerExtremizeStrength));
+    }
+    return 0;
+  } catch {
+    return 0;
+  }
+}
+
 // Duration parser — egyezik a btc-market-finder.mts logikájával, de ott a
 // MarketInfo `question` mezőben van, itt is. Másolat hogy az import-cikkust
 // elkerüljük (signal-combiner.mts top-level, auto-trader almodul → körutas).
@@ -1350,6 +1365,12 @@ function combine(
   // markets. 0 = pure linear pool (default, zero change). s>0 blends the
   // linear combined with sigmoid(Σ wₖ·logit(pₖ)) — decisive-but-bounded.
   logOddsStrength: number = 0,
+  // #8 (model-discovery): disagreement-gated extremizing strength [0,1].
+  // 0 = no extremizing (a=1, default). >0 sharpens the pooled log-odds by
+  // a = 1 + strength·0.7·disagreement (→ up to 1.7 Neyman when signals
+  // disperse; ≈1 when they cluster/agree → no over-extremizing of redundant
+  // signals). Applied to the final `combined` on every market kind.
+  extremizeStrength: number = 0,
 ) {
   const valid: Record<string, number> = {};
   for (const [k, v] of Object.entries(signals)) {
@@ -1453,6 +1474,29 @@ function combine(
     combined = (1 - s) * combined + s * anchoredProb;
   }
 
+  // #8 (model-discovery, 2026-09-01) — DISAGREEMENT-GATED EXTREMIZING. Pooling
+  // is provably under-confident when combining independent information; the
+  // extremizing transform (Satopää/GJP) sharpens it: sigmoid(a·logit(p)), a>1.
+  // But a blanket a would OVER-extremize our partly-redundant 8 signals, so we
+  // GATE a on the observed cross-signal DISAGREEMENT — the weighted dispersion
+  // of the per-signal log-odds. Signals that disperse (diverse information) get
+  // a → up to 1.7 (Neyman); signals that cluster/agree get a ≈ 1 (no change).
+  // strength=0 (default) → a=1 → exact no-op. Applied to the final `combined`.
+  const es = Math.max(0, Math.min(1, extremizeStrength));
+  if (es > 0 && n >= 2) {
+    let Lbar = 0, wTot = 0;
+    for (const k of names) { Lbar += weights[k] * logit(valid[k]); wTot += weights[k]; }
+    Lbar /= (wTot || 1);
+    let varL = 0;
+    for (const k of names) varL += weights[k] * (logit(valid[k]) - Lbar) ** 2;
+    varL /= (wTot || 1);
+    const stdL = Math.sqrt(Math.max(0, varL));
+    const disagreement = Math.min(1, stdL / 1.5);   // ~1.5 logit dispersion ≈ full diversity
+    const aMax = 1 + es * 0.7;                        // strength=1 → aMax=1.7 (Neyman)
+    const a = 1 + (aMax - 1) * disagreement;
+    combined = sigmoid(a * logit(combined));
+  }
+
   // Load-bearing clamp: `combined` is consumed as a probability below — it
   // drives the IR estimate and, critically, Kelly's `b = 1/p − 1`. With any
   // negative effective IC the mixed-sign weighted average (and, in edge cases,
@@ -1547,6 +1591,7 @@ export default async function handler(req: Request, _ctx: Context) {
     const kBlindDownweight = await loadKBlindDownweight();
     const kAnchorStrength  = await loadKAnchorStrength();
     const logOddsStrength  = await loadLogOddsStrength();
+    const extremizeStrength = await loadExtremizeStrength();
     const marketKind: MarketKind = parseThresholdK(market.slug) !== null
       ? "threshold"
       : "directional";
@@ -1621,7 +1666,7 @@ export default async function handler(req: Request, _ctx: Context) {
       } catch { /* swallow — fall back to static priors */ }
     }
 
-    const combo = combine(raw_signals, effectiveICMap, marketKind, kBlindDownweight, kAnchorStrength, logOddsStrength);
+    const combo = combine(raw_signals, effectiveICMap, marketKind, kBlindDownweight, kAnchorStrength, logOddsStrength, extremizeStrength);
     const rec   = recommend(combo.combined, combo.ir, combo.kelly_q);
     const active = Object.values(raw_signals).filter(v => v !== null).length;
 

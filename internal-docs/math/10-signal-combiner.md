@@ -339,6 +339,51 @@ blokk formuláját reprodukálja — a kettőt együtt kell módosítani).
 
 ---
 
+## Disagreement-gated extremizing (#8, 2026-09-01)
+
+A poololt valószínűség (akár lineáris, akár a #3 log-odds pool) **bizonyíthatóan
+alul-magabiztos**, ha független információt kombinál. Az **extremizing** transzformáció
+(Satopää/Baron/Mellers, Good Judgment Project) ezt élesíti:
+
+$$
+p_{\text{ext}} = \sigma\!\big(a \cdot \operatorname{logit}(p)\big), \qquad a > 1
+$$
+
+A robusztus worst-case optimum $a \approx 1.7$ (Neyman). **A kritikus feltétel:**
+extremizálni csak akkor helyes, ha a jelek **függetlenek és szórnak** — a mi 8
+jelünk részben **redundáns** (momentum/orderflow/vol mind az árat olvassa), így a
+vak $a=1.7$ **túl-extremizálna** → túlbizonyosság.
+
+### Disagreement-gating
+
+Ezért $a$-t a jelek **log-odds-szórására** (disagreement) skálázzuk:
+
+$$
+\bar{L} = \sum_k w_k \operatorname{logit}(p_k), \quad
+\text{std}_L = \sqrt{\sum_k w_k (\operatorname{logit}(p_k) - \bar{L})^2}
+$$
+$$
+\text{disagreement} = \min\!\Big(1, \frac{\text{std}_L}{1.5}\Big), \quad
+a = 1 + \text{strength}\cdot 0.7 \cdot \text{disagreement}
+$$
+
+- Ha a jelek **szórnak** (diverz információ) → $a$ akár **1.7** (strength=1, teljes szórás).
+- Ha a jelek **egyetértenek/klaszterelnek** (redundáns) → $a \approx 1$ → **nincs változás**
+  (nem extremizáljuk túl a redundáns jeleket).
+
+### Bekapcsolás és biztonság
+
+- Új `combinerExtremizeStrength` knob, range [0,1], **default 0 = OFF** ($a=1$ →
+  **zéró regresszió**, exact no-op). A `combine()` új 7. paramétere; a végső
+  `combined`-re alkalmazódik minden piac-típuson (a K-anchor / log-odds pool után).
+- A **#3 log-odds pool óvatos, élesítő párja**: a #3 a bounded átlag, a #8 a
+  (disagreement-kapuzott) élesítés — a kettő komponálódik.
+- Rollout: a #1 proper-scoring harness gain-je után, mint a #3/#5/#6/#7.
+
+Pin: `netlify/functions/auto-trader/shared/extremize.test.mts`.
+
+---
+
 ## Forrás
 
 - Grinold, R.C. & Kahn, R.N. (1994). *Active Portfolio Management*. Probus Publishing.
