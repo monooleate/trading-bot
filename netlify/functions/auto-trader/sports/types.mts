@@ -23,6 +23,10 @@ export interface SportsMarket {
   liquidity:       number;        // USDC
   endDate:         string;        // ISO
   eventSlug:       string;        // for Polymarket URL
+  // #9 (model-discovery, B37): de-vigged fair YES from a sharp book (Pinnacle),
+  // when an odds feed is wired. Populated by the market-finder; undefined when
+  // no odds are available (→ the decision-engine falls back to the shrink).
+  pinnacleFairYes?: number;       // 0..1, de-vigged
 }
 
 /** Per-position state stored on the session blob. */

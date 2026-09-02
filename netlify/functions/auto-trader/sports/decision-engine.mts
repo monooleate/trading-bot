@@ -50,11 +50,26 @@ export function makeSportsDecision(input: DecideInput): SportsTradeDecision {
     required: `< ${config.maxOpenPositions}`,
   });
 
-  // Decide direction + predicted fair value based on fan-extreme position.
+  // Decide direction + predicted fair value. #9 (B37): prefer the DE-VIGGED
+  // PINNACLE fair YES (a real edge source: sharp-book truth vs the Polymarket
+  // price) when present + enabled; else fall back to the fan-bias
+  // shrink-toward-0.5 (which is fabricated — no real edge). The Pinnacle fair
+  // value is populated by the odds feed onto `market.pinnacleFairYes`.
   let direction: "YES" | "NO" = "NO";
   let predicted = 0.5;
   let bias: "extreme_high" | "extreme_low" | "neutral";
-  if (yp >= config.fanExtremeHigh) {
+  const pinn = market.pinnacleFairYes;
+  const usePinnacle =
+    config.usePinnacleFairValue &&
+    typeof pinn === "number" && Number.isFinite(pinn) && pinn > 0 && pinn < 1;
+  let fairSource: "pinnacle" | "shrink" = "shrink";
+
+  if (usePinnacle) {
+    fairSource = "pinnacle";
+    predicted = pinn as number;                 // de-vigged sharp-book fair value
+    direction = predicted > yp ? "YES" : "NO";  // bet the mispriced side
+    bias = "neutral";                            // edge is the fair-value gap, not fan-bias
+  } else if (yp >= config.fanExtremeHigh) {
     bias = "extreme_high";
     // YES is over-priced (fan bias). Shrink towards 0.5.
     predicted = 0.5 + (yp - 0.5) * 0.55;
@@ -69,13 +84,19 @@ export function makeSportsDecision(input: DecideInput): SportsTradeDecision {
     predicted = yp;
   }
 
-  // Gate 2: fan-extreme present
+  // Gate 2: a real fair-value signal is present — Pinnacle de-vig OR fan-extreme.
   gates.push({
-    label:    "Fan-extreme zone",
-    passed:   bias !== "neutral",
-    actual:   `YES @ ${(yp * 100).toFixed(1)}¢ (${bias.replace("_", " ")})`,
-    required: `<= ${(config.fanExtremeLow * 100).toFixed(0)}¢ or >= ${(config.fanExtremeHigh * 100).toFixed(0)}¢`,
-    hint:     "Bot only trades when YES is at fan-bias extreme.",
+    label:    fairSource === "pinnacle" ? "Pinnacle fair-value" : "Fan-extreme zone",
+    passed:   usePinnacle || bias !== "neutral",
+    actual:   usePinnacle
+      ? `Pinnacle fair ${(predicted * 100).toFixed(1)}% vs YES ${(yp * 100).toFixed(1)}¢`
+      : `YES @ ${(yp * 100).toFixed(1)}¢ (${bias.replace("_", " ")})`,
+    required: usePinnacle
+      ? "de-vigged fair value available"
+      : `<= ${(config.fanExtremeLow * 100).toFixed(0)}¢ or >= ${(config.fanExtremeHigh * 100).toFixed(0)}¢`,
+    hint:     usePinnacle
+      ? "De-vigged sharp-book (Pinnacle) fair value — the B37 real edge source."
+      : "Bot only trades when YES is at fan-bias extreme.",
   });
 
   // Edge calculation: predicted − marketPriceForChosenSide, minus fees.

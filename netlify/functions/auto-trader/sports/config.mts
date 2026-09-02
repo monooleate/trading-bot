@@ -42,6 +42,11 @@ export interface SportsConfig {
    *  (e.g. "Will country X win the World Cup?" 32 outcomes). Contrarian
    *  fan-bias fade only works on binary moneyline (1-3 markets/event). */
   maxMarketsPerEvent:  number;     // default 3
+  /** #9 (B37): use the de-vigged Pinnacle fair YES as the fair value (a real
+   *  edge source) instead of the fabricated shrink-toward-0.5. Default OFF;
+   *  only takes effect on markets that actually carry `pinnacleFairYes` from
+   *  an odds feed (else the shrink fallback → zero regression). */
+  usePinnacleFairValue: boolean;   // default false
 }
 
 export function getSportsConfig(): SportsConfig {
@@ -69,6 +74,7 @@ export function getSportsConfig(): SportsConfig {
     maxOpenPositions: parseInt  (process.env.SPORTS_MAX_OPEN_POSITIONS || "3", 10),
     roundtripFeePct:  parseFloat(process.env.SPORTS_ROUNDTRIP_FEE    || "0.04"),
     maxMarketsPerEvent: parseInt(process.env.SPORTS_MAX_MARKETS_PER_EVENT || "3", 10),
+    usePinnacleFairValue: process.env.SPORTS_USE_PINNACLE === "true",
   };
 }
 
@@ -95,6 +101,9 @@ export async function getEffectiveSportsConfig(): Promise<SportsConfig> {
       sessionLossLimitEnabled: ov.sportsSessionLossLimitEnabled != null
         ? ov.sportsSessionLossLimitEnabled === 1
         : env.sessionLossLimitEnabled,
+      usePinnacleFairValue: ov.sportsUsePinnacle != null
+        ? ov.sportsUsePinnacle === 1
+        : env.usePinnacleFairValue,
     };
   } catch {
     return env;
