@@ -98,3 +98,31 @@ A compat facade **maga dispatch-eli** a session-store-okat a normalizált tábl�
 - **Phase 4 (adat-import) ⚠ + Phase 6 (parity + cutover) ⚠ — explicit megerősítés-kötelesek.**
 - **Ledger normalizálás bekötése** (prediction_ledger tábla live) — koordinált worker+api follow-up (jelenleg blob_kv).
 - **Phase 7:** a `model` Chronos-Bolt súly bekötése (16 GB rescale után).
+
+---
+
+## Hetzner-migráció — Phase 5 DEPLOY (a stack ÉL, paper) + read-only prep
+
+A user: „start the read-only Phase 5 prep over SSH" → majd „nekem feladat csak az env-ek rögzítése legyen" → a Caddy-hoz „trade.jmeszaros.dev, Yes after I set DNS" + „a netlify törlés csak akkor ha mondod, folytasd a tervet".
+
+### Read-only prep (SSH, semmi nem változott a szerveren, umami érintetlen)
+CX33 (4 vCPU/7.6GB/2GB swap/66GB szabad), Docker 29.7+Compose v5.4, `analytics_edge`+`analytics_internal` megvan, umami healthy (`analytics-db-1`=postgres:17-alpine, alias `db`, superuser `umami`). **TLS-korrekció:** stock `caddy:2-alpine` (nincs cloudflare DNS plugin) + nincs CF token → a `trade.` blokk plain auto-HTTPS (a snippet javítva).
+
+### Install (én, secret nélkül)
+`git clone /opt/edgecalc`, `.env` skeleton (chmod 600), `docker compose build` (workers/api/model) + web-export. **Az operátor egyetlen feladata:** `.env` 3 érték (`EDGECALC_DB_PASSWORD`/`JWT_SECRET`/`AUTH_PASSWORD_HASH`) + a `CREATE USER/DATABASE` (guardrail: account-létrehozást nem én csinálok). A `psql -c :'pw'` behelyettesítés nem ment → heredoc-os javított parancs.
+
+### Deploy-közbeni build-fixek (commitolva)
+- `services/api/Dockerfile`: `COPY migrations/` (a migrate-runner `/app/migrations`-t olvas) — a `migrate` külön image-ét `--build`-del újra kellett húzni.
+- **Az `api` szolgálja a statikus frontendet** (`server.ts` serveStatic + web-build stage az api-image-ben) → egy origin (Caddy→edgecalc-api), **nulla umami-compose módosítás** (nem kell dist-mount a umami-caddyba).
+- `workers` a `edge` hálóra is: az `analytics_internal` `internal:true` (nincs egress), a botok ETIMEOUT-oltak a tőzsdékre.
+
+### Élesítés + verifikáció
+`migrate` (8 tábla) → `docker compose up -d`. **Normalizált Postgres-írás él** (4 `pillar_session` paper sor, `pillar_open_position` a paper-orderekkel, `blob_kv` run-state). `api /health` ok; **valódi paper-order-ök nyílnak** (weather Paris, sports). RAM ~135 MB edgecalc / 6.2 GB szabad / **0 swap**.
+
+### Caddy + public URL
+`trade.jmeszaros.dev` blokk a `/opt/analytics/Caddyfile`-ba (backup + `caddy validate` throwaway-konténerrel — **elkapott egy inline `log{}` szintaxishibát**, javítva → `docker compose -p analytics up -d --force-recreate caddy`). **LE cert kiállítva (TLS-ALPN-01)**, umami végig healthy. Public: `GET / → 200` (frontend, cert valid), `/.netlify/functions/multi-status → 200`, `/trade/crypto/ → 200`, `http → 308`. DNS: A `91.99.218.165` + AAAA `2a01:4f8:c014:1d5::1` (Netlify DNS, nincs Cloudflare); a box IPv6-ja egyezik az AAAA-val (ACME inbound OK az egress-IPv6 hiánya ellenére).
+
+**Commitok:** `348bed8` (api serves frontend) → `4ca5b17` (Dockerfile migrations) → `3627f63` (workers egress) → docs.
+
+### HÁTRA — Phase 4 (adat-migráció) ⚠ a Netlify-törlés ELŐTT
+A Netlify Blobs (teljes paper-history + IC-kalibráció + ledger) **csak a Netlify-en él**; a Docker-stack üresen indult. **A Netlify projekt törlése végleg törli ezt.** A user dönt: (a) history-migráció (`netlify login/link` → `export-blobs.mjs` → scp → `import-blobs.ts`), vagy (b) tiszta indulás. A user a Netlify-t **csak explicit jelzésre** törli.

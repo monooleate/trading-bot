@@ -170,6 +170,12 @@ A pure logika változatlan; **csak az I/O-adapter cserélődik** (Netlify Blobs 
 
 **Acceptance:** `https://trade.<domain>` szolgál; `docker compose ps` mind `Up`; a workerek tickelnek (`logs -f workers`); a **ledger tölt** + a proper-scores kártyák renderelnek; `free -h` stabil (< 0.5 GB swap).
 
+> **✅ DEPLOY DONE (2026-09-02) — a stack ÉL: https://trade.jmeszaros.dev (paper).**
+> - `/opt/edgecalc` klón + `.env` (operátor töltötte) + `edgecalc` DB/user (§18.2, operátor) + `migrate` (mind a 6 SQL, 8 tábla) + `docker compose up -d` (workers/api/model **Up**).
+> - **Építési fixek a deploy közben (commitolva):** (a) `services/api/Dockerfile` `COPY migrations/` (a migrate-runner `/app/migrations`-t vár); (b) az `api` szolgálja a statikus frontendet is (`server.ts` `serveStatic` + web-build stage) → egy origin (Caddy→api), **nulla umami-compose módosítás**; (c) `workers` a `edge` hálóra is (a `dbnet`/`analytics_internal` `internal:true` = nincs egress → a botok nem érték el a tőzsdéket).
+> - **Verifikálva:** normalizált Postgres-írás él (4 `pillar_session` sor paper, `pillar_open_position` a paper-orderekkel, `blob_kv` run-state); `api /health` ok; **paper-trade-ek tényleg nyílnak** (weather/sports order_filled); RAM ~135 MB edgecalc / 6.2 GB szabad / **0 swap**.
+> - **Caddy (§18.4):** `trade.jmeszaros.dev` blokk a meglévő `/opt/analytics/Caddyfile`-ba (backup + `caddy validate` [elkapott egy inline-`log{}` szintaxishibát] → javítva → `--force-recreate caddy`). **Let's Encrypt cert kiállítva (TLS-ALPN-01)**, umami végig healthy. Public: `GET / → 200` (frontend), `/.netlify/functions/* → 200` (API), `http → 308` HTTPS-redirect. DNS: A `91.99.218.165` + AAAA `2a01:4f8:c014:1d5::1` (Netlify DNS, nincs Cloudflare-proxy). **TLS-korrekció megerősítve:** a §18.4 cloudflare-DNS blokk NEM kell — plain auto-HTTPS.
+
 > **🔎 READ-ONLY PREP (2026-09-02, SSH-verifikált) — a box KÉSZEN áll:**
 > - **Gép:** 4 vCPU / 7.6 GB RAM / 2 GB swap (swappiness=10, fstab-perzisztens) / 75 GB disk (**66 GB szabad**). Debian 13.6, root@analytics-1.
 > - **Docker 29.7.2 + Compose v5.4.0.** Hálók: **`analytics_edge` + `analytics_internal`** (a compose external nevei stimmelnek). umami stack **healthy**: `analytics-caddy-1` (caddy:2-alpine, :80/:443), `analytics-umami-1`, `analytics-db-1` (**postgres:17-alpine**).

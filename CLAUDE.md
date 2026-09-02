@@ -376,7 +376,7 @@ netlify deploy --prod --dir=dist
 
 ## AKTUÁLIS ÁLLAPOT (2026-09-02)
 
-**Élő deploy:** `mj-trading.netlify.app` — **⚠ a Netlify-build a `main`-en TÖRÖTT** a monorepo-restruktúra óta (üres `netlify/functions`), **tudatosan** (a user: „nem baj ha az elő oldal nem elérhető a migráció végéig; csak én használom"). A cél-környezet a Hetzner `analytics` Docker co-host (Phase 5-ben deploy). Paper mode végig.
+**Élő deploy:** **`https://trade.jmeszaros.dev`** — a Hetzner `analytics` Docker co-host (workers+api+model), **ÉL paper módban** (2026-09-02, Phase 5 kész). A régi `mj-trading.netlify.app` Netlify-build a `main`-en törött (a monorepo-restruktúra óta), a Netlify **nyugdíjazásra vár** (a user törli — Phase 6 — de előbb a Phase 4 adat-export döntés). Paper mode végig.
 
 ### Legutóbbi munka (54. session, 2026-09-02) — Hetzner-migráció Phase 1→4 (a teljes kód kész, main-en)
 
@@ -388,7 +388,9 @@ A user kérte a [migration-runbook.md](internal-docs/roadmap/migration-runbook.m
 - **Phase 3 — services:** `worker/src/{main,scheduler}.ts` (belső ütemező, a meglévő dispatchert hívja), `api/src/server.ts` (`Bun.serve` router, a Fetch-handlereket név szerint dispatch-eli, `/.netlify/functions/*`+`/api/*`), `services/model` FastAPI skeleton (load-on-demand Chronos, súly nélkül bootol). Dockerfile-ok + `docker-compose.yml` (§18.3 co-host) + Caddy-snippet.
 - **Phase 4 — tooling kész:** `scripts/export-blobs.mjs` + `services/api/src/import-blobs.ts` (idempotens, a compat-on át).
 
-**HÁTRA (operatív, szerver + megerősítés):** **Phase 5** deploy az `analytics`-ra (operátor: `.env` valós titkok + `edgecalc` DB + `docker compose up -d --build` + Caddy-blokk); **Phase 4 adat-import ⚠** + **Phase 6 parity/cutover ⚠** (explicit megerősítés-kötelesek); ledger normalizált-táblára kötése (jelenleg blob_kv); **Phase 7** Chronos-súly (16 GB rescale után). Részletek: [changelog 2026-09-02](internal-docs/changelog/CHANGELOG-2026-09-02.md).
+- **Phase 5 (deploy) ✅ 2026-09-02:** a stack ÉL `https://trade.jmeszaros.dev`-en (paper). LE-cert, umami érintetlen. Deploy-fixek: api-image `COPY migrations/`, az `api` szolgálja a frontendet is (egy origin, nulla umami-módosítás), `workers` a `edge` hálóra (egress). Verifikálva: normalizált Postgres-írás + valódi paper-order-ök + 0 swap.
+
+**HÁTRA:** **Phase 4 adat-migráció ⚠** — a Netlify Blobs (teljes paper-history + IC-kalibráció + ledger) csak a Netlify-en él; **a Netlify törlése előtt exportálni kell** (`scripts/export-blobs.mjs` netlify CLI-vel → `import-blobs.ts`), KÜLÖNBEN elvész. A user dönt: history-migráció VAGY tiszta indulás. A user a Netlify-t **csak jelzésre** törli (Phase 6). Kisebb follow-up: ledger a normalizált `prediction_ledger` táblára (jelenleg blob_kv); **Phase 7** Chronos-súly (16 GB rescale után). Részletek: [changelog 2026-09-02](internal-docs/changelog/CHANGELOG-2026-09-02.md).
 
 ### Korábbi munka (53. session, 2026-09-01) — forecasting discovery + a TELJES A-lépcső (#1–#9) implementálva + szerver-audit
 
