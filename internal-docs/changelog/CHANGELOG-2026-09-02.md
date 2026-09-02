@@ -129,3 +129,6 @@ A Netlify Blobs (teljes paper-history + IC-kalibráció + ledger) **csak a Netli
 
 ### Phase 4/6 döntés (2026-09-02)
 A user **tiszta indulást** választott — a Netlify Blobs history NEM lett átemelve (a box üres sessionökkel fut). Zöld jelzés a **trading SITE** törlésére (a box Netlify-független: workers/api/model + Postgres mind a boxon). ⚠ A **Netlify DNS-zóna maradjon** — a `stats.jmeszaros.dev` (umami) ÉS a `trade.jmeszaros.dev` is azon a zónán van (A `91.99.218.165` + AAAA `2a01:4f8:c014:1d5::1`). A migráció ezzel **funkcionálisan kész**; nyitott opcionális: ledger→prediction_ledger tábla, Phase 7 Chronos-súly.
+
+### Operátor-döntés (2026-09-03): run-on-defaults, calibrate-later
+A settings table üres marad — a botok a **kód-defaultokon** futnak (nem hozzuk vissza a Netlify override-okat; a Netlify-history + IC-kalibráció úgyis fresh). Tudatosan **a sports is fut** (nincs valódi edge-forrása B37/odds-feed nélkül → paper-noise, elfogadva). Terv: hagyni gyűlni a friss paper-trade-eket, majd a proper-scoring / calibration / online-weights kártyákon (Edge Tracker) + per-signal realized-IC-n **kalibrálni ~30–50 closed trade után**, és a #2–#9 knobokat csak pozitív walk-forward gain-nél bekapcsolni, egyesével. A watchdog fut (cron */15).
