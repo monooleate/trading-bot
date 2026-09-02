@@ -99,9 +99,14 @@ export function makeSportsDecision(input: DecideInput): SportsTradeDecision {
       : "Bot only trades when YES is at fan-bias extreme.",
   });
 
-  // Edge calculation: predicted − marketPriceForChosenSide, minus fees.
+  // Edge calculation: fair-for-side − market-price-for-side, minus fees.
+  // `predicted` is a YES-frame probability, so the fair value for a NO bet is
+  // (1 − predicted). Subtracting a YES prob from a NO price mixed frames and
+  // overstated NO edges by (2·predicted − 1) — audit P1. No Math.abs: a real
+  // edge must be POSITIVE on the side we actually buy (else the gate skips).
   const marketPriceForSide = direction === "YES" ? yp : market.noPrice;
-  const grossEdge = Math.abs(predicted - marketPriceForSide);
+  const fairForSide  = direction === "YES" ? predicted : 1 - predicted;
+  const grossEdge = fairForSide - marketPriceForSide;
   const netEdge   = grossEdge - config.roundtripFeePct;
 
   // Gate 3: net edge after fees

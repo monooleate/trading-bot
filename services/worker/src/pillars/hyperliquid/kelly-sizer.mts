@@ -17,6 +17,10 @@ import type { HlCoin } from "./types.mts";
 // of margin (≈0.45% of bankroll at the default 15% maxPctBankroll), which
 // is well below the consecutive-loss pause trigger of 3 losses.
 const HL_LEVERAGE_HARD_CAP = 3;
+// How far directional conviction (dirProb − 0.5) shifts the TP-before-SL bracket
+// win prob away from the driftless baseline 1/(1+RR). 0.5 = conservative; a
+// future Settings knob can expose it. See kellyToPerpSize (B36 fix).
+const BRACKET_CONVICTION_SCALE = 0.5;
 let leverageWarningSent = false;
 
 export interface KellyToPerpInput {
@@ -57,9 +61,17 @@ export function kellyToPerpSize(p: KellyToPerpInput): KellyToPerpOutput {
     const tp = p.tpPct ?? 0.02;
     const sl = p.slPct ?? 0.01;
     const rr = Math.max(0.1, tp / sl);
-    const win = p.direction === "SHORT" ? 1 - p.predProb : p.predProb;
-    const loss = 1 - win;
-    rawKelly = Math.max(0, win - loss / rr);
+    // Map the DIRECTIONAL prob (daily-horizon up/down) to a TP-before-SL bracket
+    // win prob, ANCHORED at the driftless baseline 1/(1+RR). The old code fed
+    // dirProb straight into Kelly, implying ~50% bracket wins at zero edge →
+    // f = 0.5 − 0.5/RR = 0.25 at NO edge → systematic over-sizing (audit P1 /
+    // B36). Anchoring makes dirProb=0.5 → baseline → f=0 (break-even bracket);
+    // convictionScale bounds how far directional conviction tilts the odds.
+    const dirProb = p.direction === "SHORT" ? 1 - p.predProb : p.predProb;
+    const baseline = 1 / (1 + rr);
+    const winBracket = Math.max(0.01, Math.min(0.99, baseline + (dirProb - 0.5) * BRACKET_CONVICTION_SCALE));
+    const loss = 1 - winBracket;
+    rawKelly = Math.max(0, winBracket - loss / rr);
   }
   const quarterKelly = rawKelly * 0.25;
   const cappedFrac   = Math.min(quarterKelly, p.maxPctBankroll);

@@ -107,11 +107,18 @@ function rebuild(
   jsonSet: Set<string>,
   boolSet: Set<string> | undefined,
   residualCol: string,
+  skipNull = false,
 ): Record<string, any> {
   const c2k = col2key(map);
   const out: Record<string, any> = { ...((row[residualCol] as Record<string, any>) ?? {}) };
   for (const [col, key] of Object.entries(c2k)) {
     if (row[col] === undefined) continue;
+    // skipNull (positions/closed-trades): a null column means the field was
+    // absent on the original object (e.g. HL rows have no `market`/`shares`/
+    // `pnl` — those live in payload). Skipping keeps the round-trip faithful
+    // and avoids injecting spurious `key: null` (finding #18). NOT used for the
+    // session row, where null scalars like stoppedReason are meaningful.
+    if (skipNull && row[col] === null) continue;
     if (jsonSet.has(col)) { out[key] = row[col] ?? null; continue; }
     out[key] = coerce(row[col], col, tsSet, numSet, boolSet);
   }
@@ -126,10 +133,10 @@ export async function loadSession(db: Db, category: string, mode: SessionMode = 
   const session = rebuild(s.rows[0], SESSION_COLS, SESSION_TS, SESSION_NUM, new Set(), SESSION_BOOL, "extra");
 
   const pos = await db.query("SELECT * FROM pillar_open_position WHERE category = $1 AND mode = $2 ORDER BY seq ASC, id ASC", [category, mode]);
-  session.openPositions = pos.rows.map((r) => rebuild(r, POS_COLS, POS_TS, POS_NUM, new Set(), undefined, "payload"));
+  session.openPositions = pos.rows.map((r) => rebuild(r, POS_COLS, POS_TS, POS_NUM, new Set(), undefined, "payload", true));
 
   const ct = await db.query("SELECT * FROM pillar_closed_trade WHERE category = $1 AND mode = $2 ORDER BY seq ASC, id ASC", [category, mode]);
-  session.closedTrades = ct.rows.map((r) => rebuild(r, CT_COLS, CT_TS, CT_NUM, CT_JSON, undefined, "payload"));
+  session.closedTrades = ct.rows.map((r) => rebuild(r, CT_COLS, CT_TS, CT_NUM, CT_JSON, undefined, "payload", true));
 
   return session as StoredSession;
 }

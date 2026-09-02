@@ -4,7 +4,7 @@
 // (EIP-712 signing). This module handles all read-only calls that don't
 // need a wallet, and defines the adapter interface for live execution.
 
-import { hlBaseUrl, STATIC_ASSET_INDEX_FALLBACK } from "./config.mts";
+import { HL_MAINNET, STATIC_ASSET_INDEX_FALLBACK } from "./config.mts";
 import type { HlCoin } from "./types.mts";
 
 // ─── READ-ONLY API ─────────────────────────────────────────────────────────
@@ -17,15 +17,21 @@ import type { HlCoin } from "./types.mts";
 //   - JSON parse guard so a stray HTML error page doesn't bubble as a
 //     cryptic "unexpected token" downstream
 export async function hlInfoPost(
-  paperMode: boolean,
+  _paperMode: boolean,
   body: any,
   timeoutMs = 6000,
   retries  = 1,
 ): Promise<any> {
+  // Info endpoints are public read-only MARKET DATA. Always read from MAINNET
+  // — even in paper mode — so the paper simulator prices/funding/OI match the
+  // real venue the signals are formed on. Reading testnet in paper (the old
+  // hlBaseUrl(paperMode) behavior) produced unrepresentative paper PnL and a
+  // cross-environment F-arb spread (mainnet Binance vs testnet HL) — audit P1.
+  // Order PLACEMENT still routes via the execution adapter (testnet/live there).
   let lastErr: any = null;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      const res = await fetch(`${hlBaseUrl(paperMode)}/info`, {
+      const res = await fetch(`${HL_MAINNET}/info`, {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify(body),

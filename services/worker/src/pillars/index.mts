@@ -330,7 +330,7 @@ async function runCryptoTrader(
     if (typeof ov.obImbalanceUpRatio    === "number") obUp                 = ov.obImbalanceUpRatio;
     if (typeof ov.obImbalanceDownRatio  === "number") obDown               = ov.obImbalanceDownRatio;
     if (typeof ov.btcMinPriceBand       === "number") btcMinPriceBand      = ov.btcMinPriceBand;
-    for (const k of ["liveReadyMinTrades", "liveReadyMinWinRate", "liveReadyMinIC", "liveReadyMaxCalibDev", "liveReadyMinSharpe", "liveReadyMaxDrawdownPct", "liveReadyOverrideEnabled", "bonferroniAlpha", "bonferroniGoodMultiplier"]) {
+    for (const k of ["liveReadyMinTrades", "liveReadyMinWinRate", "liveReadyMinIC", "liveReadyMaxCalibDev", "liveReadyMinSharpe", "liveReadyMaxDrawdownPct", "liveReadyOverrideEnabled", "bonferroniAlpha", "bonferroniGoodMultiplier", "icHalfLifeTrades"]) {
       if (typeof ov[k] === "number") readyOv[k] = ov[k];
     }
   } catch {}

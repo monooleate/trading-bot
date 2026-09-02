@@ -134,17 +134,34 @@ async function main() {
   assert.deepStrictEqual(loadedSession, session, "session save→load must be faithful");
   ok("normalized session save→load faithful");
 
-  // HL-shaped residual scalars (consecutiveLosses/pausedUntil) round-trip via extra
+  // HL-shaped session: real HlPosition/HlClosedTrade use coin/sizeCoins/pnlUSDC
+  // and have NO `market` field. This is the shape that broke persistence (P0):
+  // the generic serializer + a NOT NULL market column threw on every save.
   const hl = {
     startedAt: "2026-09-01T00:00:00.000Z", bankrollStart: 200, bankrollCurrent: 186.81,
     sessionPnL: -13.19, sessionLoss: 20, tradeCount: 188, paperMode: true, stopped: false,
     stoppedReason: null, simVersion: 2, consecutiveLosses: 2, pausedUntil: null,
-    openPositions: [], closedTrades: [],
+    openPositions: [
+      {
+        coin: "BTC", direction: "LONG", entryPrice: 64000, sizeCoins: 0.0015, sizeUSDC: 96,
+        leverage: 3, openedAt: "2026-09-02T09:00:00.000Z", entryOrderId: "hlord1",
+        tpPrice: 65280, slPrice: 63360, tpOrderId: null, slOrderId: null,
+        predictedProb: 0.58, edgeAtEntry: 0.06, signalBreakdown: { orderflow: 0.2 },
+      },
+    ],
+    closedTrades: [
+      {
+        coin: "ETH", direction: "SHORT", entryPrice: 2500, exitPrice: 2450, sizeCoins: 0.04,
+        pnlUSDC: 6.0, pnlPct: 0.02, openedAt: "2026-09-01T09:00:00.000Z",
+        closedAt: "2026-09-01T13:00:00.000Z", closeReason: "tp", edgeAtEntry: 0.05,
+        predictedProb: 0.44, signalBreakdown: { vol_divergence: -0.1 },
+      },
+    ],
   };
   await saveSession(db, "hyperliquid", hl);
   const loadedHl = await loadSession(db, "hyperliquid");
-  assert.deepStrictEqual(loadedHl, hl, "HL session residual scalars must round-trip via extra");
-  ok("HL session residual scalars round-trip");
+  assert.deepStrictEqual(loadedHl, hl, "HL session (coin/sizeCoins/pnlUSDC, no market) must round-trip");
+  ok("HL session with real HlPosition/HlClosedTrade round-trips (P0 regression pin)");
 
   assert.equal(await loadSession(db, "nonexistent"), null, "missing session → null");
   ok("missing session → null");

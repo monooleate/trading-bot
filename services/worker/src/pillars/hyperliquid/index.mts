@@ -703,7 +703,10 @@ async function runHyperliquidTraderInner(
     const cal: any = await import("../shared/signal-calibration.mts");
     const genericTrades = session.closedTrades.map((t: any) => ({
       ...t,
-      direction: (t.side === "SHORT" ? "NO" : "YES") as "YES" | "NO",
+      // HlClosedTrade.direction is "LONG"|"SHORT" (there is no `t.side`); map to
+      // the generic YES/NO frame. The prior `t.side` read was always undefined
+      // → every trade mislabeled "YES" (audit P2).
+      direction: (t.direction === "SHORT" ? "NO" : "YES") as "YES" | "NO",
       category: "hyperliquid" as any,
     }));
     // Half-life from Settings (default null = uniform). When set, recent
