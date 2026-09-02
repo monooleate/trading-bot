@@ -4,14 +4,25 @@
 #
 #   docker compose -p analytics up -d --force-recreate caddy
 #
-# DNS: point trade.<domain> A-record at the VPS IP, Cloudflare proxy OFF
-# (grey cloud), same as the other sites.
+# TLS: the box runs stock `caddy:2-alpine` (NO cloudflare DNS plugin) and has
+# no CLOUDFLARE_API_TOKEN — the umami site uses Caddy's default HTTP/TLS-ALPN
+# auto-HTTPS, so this block does too (no `tls`/`dns` directive). Verified
+# read-only against the live analytics Caddyfile 2026-09-02.
+#
+# DNS: point trade.<domain> A-record at the VPS IP with the Cloudflare proxy
+# OFF (grey cloud) so the Let's Encrypt HTTP-01 challenge reaches Caddy on :80.
+#
+# `edgecalc-api` resolves over the shared analytics_edge network (the edgecalc
+# compose joins it as external; caddy is already on it).
 
-trade.grabit.hu {          # or whatever subdomain you choose
-    tls {
-        dns cloudflare {env.CLOUDFLARE_API_TOKEN}   # same DNS/ACME as umami
-    }
-    encode gzip
+trade.grabit.hu {          # replace with your chosen subdomain
+    encode zstd gzip
     reverse_proxy edgecalc-api:7000
+    header {
+        Strict-Transport-Security "max-age=31536000;"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        -Server
+    }
     log { output stdout; format json }
 }

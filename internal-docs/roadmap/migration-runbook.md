@@ -170,6 +170,14 @@ A pure logika változatlan; **csak az I/O-adapter cserélődik** (Netlify Blobs 
 
 **Acceptance:** `https://trade.<domain>` szolgál; `docker compose ps` mind `Up`; a workerek tickelnek (`logs -f workers`); a **ledger tölt** + a proper-scores kártyák renderelnek; `free -h` stabil (< 0.5 GB swap).
 
+> **🔎 READ-ONLY PREP (2026-09-02, SSH-verifikált) — a box KÉSZEN áll:**
+> - **Gép:** 4 vCPU / 7.6 GB RAM / 2 GB swap (swappiness=10, fstab-perzisztens) / 75 GB disk (**66 GB szabad**). Debian 13.6, root@analytics-1.
+> - **Docker 29.7.2 + Compose v5.4.0.** Hálók: **`analytics_edge` + `analytics_internal`** (a compose external nevei stimmelnek). umami stack **healthy**: `analytics-caddy-1` (caddy:2-alpine, :80/:443), `analytics-umami-1`, `analytics-db-1` (**postgres:17-alpine**).
+> - **DB-wiring OK:** `analytics-db-1` aliasa `db` az `analytics_internal`-en → a `DATABASE_URL` host `db` felold. `analytics-caddy-1` az `analytics_edge`-en → eléri majd az `edgecalc-api`-t. **Postgres superuser = `umami`** (a §18.2 create-DB parancshoz).
+> - **`/opt/edgecalc` még nincs** (Phase 5 clone ide). `/opt/analytics` = `ops:ops`.
+> - **⚠ Caddy-TLS korrekció:** a box **stock `caddy:2-alpine`** (NINCS cloudflare DNS plugin) + **nincs `CLOUDFLARE_API_TOKEN`** — a umami-site plain **auto-HTTPS**-t használ (nincs `tls`/`dns` direktíva). A §18.4 cloudflare-DNS blokk tehát **NEM alkalmazható**; a helyes `trade.` blokk auto-HTTPS (lásd [`infra/caddy/trade.Caddyfile.snippet`](../../infra/caddy/trade.Caddyfile.snippet), javítva). DNS: A-rekord a VPS IP-re, **Cloudflare proxy KI** (grey cloud), hogy a Let's Encrypt HTTP-01 elérje a :80-at.
+> - **Secret-lépések az operátoré** (SSH read-only/install szabály): `.env` valós titkokkal + a `CREATE USER edgecalc … PASSWORD` (§18.2). A read-only prep NEM hozott létre semmit + a umami-konténerekhez nem nyúlt.
+
 ---
 
 ## 8. Phase 6 — Parity + cutover ⚠ MEGERŐSÍTÉS ELŐTTE
