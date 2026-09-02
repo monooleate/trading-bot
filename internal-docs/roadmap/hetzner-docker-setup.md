@@ -554,33 +554,37 @@ Indítás: `docker compose -f docker-compose.yml -f compose.monitoring.yml up -d
 
 ## 18. Co-host a meglévő `analytics` szerveren (near-term, RAM-lean) — az `edgecalc` compose
 
-> **Kontextus (2026-09-01, SSH-audit):** a `analytics` szerver (Debian 13, **2 vCPU shared, 3.7 GB RAM, 0 swap**, 38 GB disk, IP 91.99.218.165, hostname `analytics-1`) **már futtatja** a umami-t Docker Compose-ban (`/opt/analytics/docker-compose.yml`, `name: analytics`): `caddy` (2-alpine, 80/443) + `umami` 3.2.0 + `db` postgres:17 (a `internal: true` hálón, port nélkül), két háló (`edge` publikus / `internal` DB-only), hardeninggel (`no-new-privileges`, mem_limit, log-rotáció). **Ez a §1-es stack már él** → az A-lépcső trading rendszer **ide co-hostolható, nulla új infra + nulla plusz költség.**
+> **Kontextus (2026-09-01 audit → 2026-09-02 rescale):** a `analytics` szerver (Debian 13, IP 91.99.218.165, hostname `analytics-1`) **már futtatja** a umami-t Docker Compose-ban (`/opt/analytics/docker-compose.yml`, `name: analytics`): `caddy` (2-alpine, 80/443) + `umami` 3.2.0 + `db` postgres:17 (a `internal: true` hálón, port nélkül), két háló (`edge` publikus / `internal` DB-only), hardeninggel (`no-new-privileges`, mem_limit, log-rotáció). **Ez a §1-es stack él** → a trading rendszer ide co-hostolható, **nulla új infra + nulla plusz költség** (a umami-boxot használjuk).
 >
-> **Mire elég:** a **teljes A-lépcső** (5 bot paper + forecasting-réteg #1–#4 + ledger) elfér a umami mellett. **A B-lépcső Python ML NEM** (Chronos/TimesFM 1.5–3 GB > a 3.7 GB plafon) → az a 16 GB-ra rescale (CX42, ~€16/hó) UTÁN, vagy külön gépen. Részletek: sizing §2.
+> **Gép (2026-09-02 rescale-ve, SSH-verifikált):** **CX33 = 4 vCPU shared, 7.6 GB RAM (8 GB), 75 GB disk.** (Korábban 2 vCPU / 3.7 GB / 38 GB.) A rescale után tisztán rebootolt, a 3 konténer `restart: unless-stopped`-del magától visszajött (`healthy`). **Swap: 0 B** (lásd §18.0).
+>
+> **Mire elég a 8 GB:** a **teljes terv** — umami + a teljes A-lépcső (5 bot paper + forecasting #1–#9 + ledger) **ÉS a B-lépcső Python ML** (Chronos-Bolt small + kalibráció, **load-on-demand**). Tipikus lábnyom ~4 GB, csúcson ~5–6 GB → ~2–3 GB tartalék. **NEM fér el:** nagy foundation modell RESIDENT-ben (TimesFM full / több modell egyszerre) vagy on-box tréning → az a 16 GB (CX42) rescale. Részletek: sizing §2.
 
-### 18.0 Előfeltétel — 2 GB swap (spike-védelem)
+### 18.0 Előfeltétel — 2 GB swap (spike-védelem) ✅ FELTÉVE 2026-09-02
 
-A 3.7 GB-on **nincs swap** → egyidejű umami+Postgres+trading csúcs OOM-killert hívhat. Egyszeri, ~30 mp:
+Csúcs-biztosíték (umami-riport + Postgres-query + ML-inferencia + trading-tick egyidejű csúcsa OOM helyett swappel). **Kész** — 2 GB `/swapfile` aktív + fstab-perzisztens (reboot-túlélő). A parancssor referenciának (idempotens):
 
 ```bash
 fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
-echo '/swapfile none swap sw 0 0' >> /etc/fstab
+grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
 swapon --show                       # ellenőrzés
+# opcionális: burst-buffer viselkedés (RAM-preferencia) — swappiness 60 → 10:
+# echo 'vm.swappiness=10' > /etc/sysctl.d/99-swappiness.conf && sysctl -p /etc/sysctl.d/99-swappiness.conf
 ```
 
-### 18.1 RAM-lean eltérések a generikus §1 tervhez képest
+### 18.1 Eltérések a generikus §1 tervhez képest (8 GB-ra igazítva)
 
-A 3.7 GB-hoz igazítva (a teljes 13-konténeres terv a **dedikált / 16 GB** gépé):
+A 8 GB (CX33) a teljes tervet elbírja; a generikus 13-konténeres szétaprózás helyett konszolidálunk (RAM-hatékonyság + kevesebb mozgó alkatrész):
 
-| Generikus §1 | Ezen a boxon |
+| Generikus §1 | Ezen a boxon (8 GB) |
 |---|---|
 | 5 külön `worker-*` konténer | **1 `workers` konténer**, mind az 5 pillér-loop egy processzben (belső ütemező) — ~250 MB az 5×150 helyett |
 | Saját `postgres` konténer | **A meglévő `analytics` `db` (postgres:17) újrahasznosítva** — új `edgecalc` DB + user, −150 MB |
 | `redis` konténer | **Kihagyva** — az A-lépcső state Postgresben, cache in-process; Redis csak a B-lépcső feed/pubsubhoz |
 | Saját `caddy` | **A meglévő `analytics-caddy`** — új `trade.<domain>` site-block |
-| `model` (Python ML) | **Kihagyva** (nem fér el) → 16 GB rescale után |
+| `model` (Python ML) | **BENNE** — Chronos-Bolt small + kalibráció, **load-on-demand** (idle ~0.3 GB, csúcs ~2 GB), `mem_limit: 2.5g`. Lásd §18.3b. |
 
-**Lábnyom:** `workers` ~250 MB + `api` ~180 MB ≈ **~430 MB** a umami ~640 MB mellett → a 2.8 GB available-be bőven belefér.
+**Lábnyom (tipikus):** `workers` ~250 MB + `api` ~180 MB + `model` idle ~0.3 GB (csúcs ~2 GB) ≈ **~0.7 GB idle / ~2.4 GB csúcs** a umami ~0.9 GB + OS ~0.5 GB mellett → **~4 GB tipikus / ~5–6 GB csúcs** a 8 GB-on (6.8 GB available) → ~2–3 GB tartalék. A 2 GB swap (§18.0) fedezi az egyidejű csúcsokat.
 
 ### 18.2 Postgres — `edgecalc` DB a meglévő konténerben (egyszeri)
 
@@ -634,6 +638,28 @@ services:
     expose: [ "7000" ]
     networks: [ edge, dbnet ]
     mem_limit: 256m
+
+  # #B-lépcső ML — Chronos-Bolt (small) + kalibráció, LOAD-ON-DEMAND. FastAPI;
+  # a workers/api HTTP-n hívja belül (`http://model:8000`). A súly a
+  # model-cache volume-on; idle-ben ~0.3 GB, inferencia-csúcson ~2 GB. Csak a
+  # `dbnet`-en (nem publikus). A 8 GB-on elfér (§18.1); nagy modellhez 16 GB.
+  model:
+    build: { context: ., dockerfile: services/model/Dockerfile }
+    restart: unless-stopped
+    env_file: [.env]
+    container_name: edgecalc-model
+    environment:
+      HF_HOME: /cache
+      MODEL_TIER: chronos-bolt-small
+      LOAD_ON_DEMAND: "1"          # a súlyt kéréskor tölti, TTL után elereszti
+      MODEL_IDLE_TTL_SEC: "600"
+    volumes:
+      - /opt/edgecalc/data/model-cache:/cache
+    expose: [ "8000" ]
+    networks: [ dbnet ]
+    security_opt: [ "no-new-privileges:true" ]
+    logging: { driver: json-file, options: { max-size: "10m", max-file: "3" } }
+    mem_limit: 2560m
 
 # A meglévő analytics-projekt hálói, external-ként. A neveket ELLENŐRIZD:
 #   docker network ls   → várhatóan `analytics_edge` és `analytics_internal`
