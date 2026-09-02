@@ -36,3 +36,6 @@ A user kérése: minden botra teljes audit (helyes-e az implementáció, a beál
 - **B45** HL Kelly conviction-scale Settings-knob (jelenleg konstans 0.5).
 
 **Deploy:** a fixek + migration 007 + Caddy-crawler-blokk a boxra (paper). Push a `main`-re.
+
+### Deploy (boxra, paper) — kész + deploy-közbeni extra find
+A fixek + migration 007 + Caddy-crawler-blokk deployolva. **Deploy-közben felszínre jött egy addig rejtett integrációs bug** (az auditágensek logikát néztek, nem a cross-service URL-t): a crypto `signal-aggregator` + HL `signal-source` a `signal-combiner`/`polymarket-proxy`-t `EDGECALC_BASE = process.env.URL || localhost:8888`-on hívta → a konténerben `URL` üres → `localhost:8888` → ConnectionRefused → **mindkét bot signal nélkül futott** (finalProb 0.5, activeSignals 0). Fix: `EDGECALC_INTERNAL_URL` (→ `http://edgecalc-api:7000`) a worker env-be. Utána: crypto activeSignals **8**, HL **7**, 0 worker-hiba. **Verifikáció:** market oszlop nullable; `llm-dependency` unauth POST → 401; browser → 200 + `X-Robots-Tag noindex`; GPTBot/ClaudeBot/CCBot/PerplexityBot → **403**; `robots.txt` Disallow:/; umami érintetlen (200). RAM 1.3/7.6 GB, 0 swap. Commitok: `534f637` (batch1) → `7b7e79c` (batch2+3) → `664e945` (internal-url) → `83c76bf` (caddy-fix).
