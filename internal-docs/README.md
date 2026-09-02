@@ -77,6 +77,7 @@ Stabil procedure-ök Claude Code (vagy operator) számára — minden playbook *
 | Fájl | Mikor használd | Cél |
 |------|-----------------|-----|
 | `playbooks/trade-history-audit.md` | User kéri a closed trade-ek + open positions ellenőrzését (pl. "validate", "audit", "PnL valós?") | 5-step audit: Gamma resolution cross-check, paper-fee PnL reproduction, bankroll-rekonciliáció, cross-position konzisztencia, statisztikai sanity. Pattern-detection-tár, modifikációs javaslatok, anti-pattern lista. |
+| `playbooks/edgecalc-ops.md` | A live Hetzner Docker-stack üzemeltetése (status, logok, deploy-update, kill-switch, bot-control, monitoring, backup-TODO) | Az `analytics` co-host operatív runbookja (2026-09-02 deploy). Hol mi van, health-check parancsok, umami-izoláció szabály. |
 
 ---
 
