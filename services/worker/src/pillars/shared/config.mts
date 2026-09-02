@@ -6,8 +6,13 @@ export const GAMMA_API = "https://gamma-api.polymarket.com";
 export const CLOB_API = "https://clob.polymarket.com";
 export const DATA_API = "https://data-api.polymarket.com";
 
-// EdgeCalc backend (self, Netlify Functions)
-export const EDGECALC_BASE = process.env.URL || "http://localhost:8888";
+// EdgeCalc backend base for internal endpoint fetches (signal-combiner,
+// polymarket-proxy). In the Docker split these routes live in the `api`
+// container, so the worker must point at it via EDGECALC_INTERNAL_URL
+// (e.g. http://edgecalc-api:7000). Falls back to the Netlify site URL, then to
+// the local `netlify dev` port for standalone dev.
+export const EDGECALC_BASE =
+  process.env.EDGECALC_INTERNAL_URL || process.env.URL || "http://localhost:8888";
 export const FN = `${EDGECALC_BASE}/.netlify/functions`;
 
 // ─── Signal IC weights (from signal-combiner) ─────────────

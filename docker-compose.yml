@@ -22,6 +22,8 @@ services:
       PILLARS: "crypto,weather,hyperliquid,funding-arb,sports"
       LOOP_INTERVAL_SEC: "180"
       DATABASE_URL: "postgresql://edgecalc:${EDGECALC_DB_PASSWORD}@db:5432/edgecalc"
+      # Internal fetches (signal-combiner, polymarket-proxy) → the api container.
+      EDGECALC_INTERNAL_URL: "http://edgecalc-api:7000"
     # edge = outbound internet (exchanges/Polymarket/HL); dbnet = Postgres.
     # analytics_internal is `internal: true` (no egress), so workers must also
     # sit on edge to reach the venues. Not published — being on a network does
