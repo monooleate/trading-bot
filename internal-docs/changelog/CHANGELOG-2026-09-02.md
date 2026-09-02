@@ -126,3 +126,6 @@ CX33 (4 vCPU/7.6GB/2GB swap/66GB szabad), Docker 29.7+Compose v5.4, `analytics_e
 
 ### HÁTRA — Phase 4 (adat-migráció) ⚠ a Netlify-törlés ELŐTT
 A Netlify Blobs (teljes paper-history + IC-kalibráció + ledger) **csak a Netlify-en él**; a Docker-stack üresen indult. **A Netlify projekt törlése végleg törli ezt.** A user dönt: (a) history-migráció (`netlify login/link` → `export-blobs.mjs` → scp → `import-blobs.ts`), vagy (b) tiszta indulás. A user a Netlify-t **csak explicit jelzésre** törli.
+
+### Phase 4/6 döntés (2026-09-02)
+A user **tiszta indulást** választott — a Netlify Blobs history NEM lett átemelve (a box üres sessionökkel fut). Zöld jelzés a **trading SITE** törlésére (a box Netlify-független: workers/api/model + Postgres mind a boxon). ⚠ A **Netlify DNS-zóna maradjon** — a `stats.jmeszaros.dev` (umami) ÉS a `trade.jmeszaros.dev` is azon a zónán van (A `91.99.218.165` + AAAA `2a01:4f8:c014:1d5::1`). A migráció ezzel **funkcionálisan kész**; nyitott opcionális: ledger→prediction_ledger tábla, Phase 7 Chronos-súly.

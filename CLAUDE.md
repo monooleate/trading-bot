@@ -390,7 +390,10 @@ A user kérte a [migration-runbook.md](internal-docs/roadmap/migration-runbook.m
 
 - **Phase 5 (deploy) ✅ 2026-09-02:** a stack ÉL `https://trade.jmeszaros.dev`-en (paper). LE-cert, umami érintetlen. Deploy-fixek: api-image `COPY migrations/`, az `api` szolgálja a frontendet is (egy origin, nulla umami-módosítás), `workers` a `edge` hálóra (egress). Verifikálva: normalizált Postgres-írás + valódi paper-order-ök + 0 swap.
 
-**HÁTRA:** **Phase 4 adat-migráció ⚠** — a Netlify Blobs (teljes paper-history + IC-kalibráció + ledger) csak a Netlify-en él; **a Netlify törlése előtt exportálni kell** (`scripts/export-blobs.mjs` netlify CLI-vel → `import-blobs.ts`), KÜLÖNBEN elvész. A user dönt: history-migráció VAGY tiszta indulás. A user a Netlify-t **csak jelzésre** törli (Phase 6). Kisebb follow-up: ledger a normalizált `prediction_ledger` táblára (jelenleg blob_kv); **Phase 7** Chronos-súly (16 GB rescale után). Részletek: [changelog 2026-09-02](internal-docs/changelog/CHANGELOG-2026-09-02.md).
+- **Phase 4 (adat-migráció):** a user **tiszta indulást** választott (2026-09-02) — a Netlify Blobs history (paper-trade + IC-kalibráció + ledger) NEM lett átemelve; a box üres sessionökkel fut. Az `export-blobs.mjs`/`import-blobs.ts` tooling megvan, ha később mégis kellene (de a Netlify törlésével a forrás elvész).
+- **Phase 6 (Netlify-nyugdíjazás):** zöld jelzés a user-nek a **trading SITE** törlésére (a box Netlify-független). ⚠ A **DNS-zóna maradjon** (a `stats.` [umami] ÉS a `trade.` is Netlify-DNS-en van).
+
+**HÁTRA (opcionális, nem blokkoló):** ledger a normalizált `prediction_ledger` táblára (jelenleg blob_kv, koordinált worker+api follow-up); **Phase 7** Chronos-súly (16 GB rescale után). Részletek: [changelog 2026-09-02](internal-docs/changelog/CHANGELOG-2026-09-02.md).
 
 ### Korábbi munka (53. session, 2026-09-01) — forecasting discovery + a TELJES A-lépcső (#1–#9) implementálva + szerver-audit
 
