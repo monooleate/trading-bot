@@ -78,6 +78,30 @@ function routeName(pathname: string): string | null {
   return null;
 }
 
+// Static frontend (Astro build) served for every non-API path, so the whole
+// site lives behind one origin (Caddy → edgecalc-api). Keeps the frontend in
+// the edgecalc project — the umami caddy needs no dist mount, only the
+// reverse_proxy block. WEB_DIST is baked into the api image (see Dockerfile).
+const WEB_DIST = (typeof process !== "undefined" && process.env.WEB_DIST) || "/app/dist";
+
+async function serveStatic(pathname: string): Promise<Response | null> {
+  const b = Bun as any;
+  if (!b?.file) return null;
+  const clean = pathname.replace(/\/+$/, "");
+  const candidates = [
+    pathname === "/" ? "/index.html" : pathname,   // exact asset (e.g. /_astro/x.js)
+    `${clean}/index.html`,                          // Astro dir route (/tools → /tools/index.html)
+    `${clean}.html`,
+  ];
+  for (const c of candidates) {
+    const f = b.file(WEB_DIST + c);
+    if (await f.exists()) return new Response(f);
+  }
+  const idx = b.file(WEB_DIST + "/index.html");     // SPA-ish fallback
+  if (await idx.exists()) return new Response(idx, { headers: { "Content-Type": "text/html" } });
+  return null;
+}
+
 export async function fetchHandler(req: Request): Promise<Response> {
   const url = new URL(req.url);
   if (url.pathname === "/health" || url.pathname === "/api/health") {
@@ -87,20 +111,28 @@ export async function fetchHandler(req: Request): Promise<Response> {
   }
   const name = routeName(url.pathname);
   const handler = name ? ROUTES[name] : undefined;
-  if (!handler) return new Response(JSON.stringify({ ok: false, error: "Not found" }), {
+  if (handler) {
+    try {
+      return await handler(req, {});
+    } catch (err: any) {
+      return new Response(JSON.stringify({ ok: false, error: err?.message ?? "handler error" }), {
+        status: 502, headers: { "Content-Type": "application/json" },
+      });
+    }
+  }
+  // Not an API path → serve the static frontend.
+  const isApiPath = url.pathname.startsWith("/api/") || url.pathname.startsWith("/.netlify/functions/");
+  if (!isApiPath && req.method === "GET") {
+    const asset = await serveStatic(url.pathname);
+    if (asset) return asset;
+  }
+  return new Response(JSON.stringify({ ok: false, error: "Not found" }), {
     status: 404, headers: { "Content-Type": "application/json" },
   });
-  try {
-    return await handler(req, {});
-  } catch (err: any) {
-    return new Response(JSON.stringify({ ok: false, error: err?.message ?? "handler error" }), {
-      status: 502, headers: { "Content-Type": "application/json" },
-    });
-  }
 }
 
 // Bun runtime global (no @types/bun needed for tsc).
-declare const Bun: { serve(opts: { port: number; fetch: (req: Request) => Response | Promise<Response> }): unknown } | undefined;
+declare const Bun: { serve(opts: { port: number; fetch: (req: Request) => Response | Promise<Response> }): unknown; file(path: string): { exists(): Promise<boolean> } } | undefined;
 
 async function main() {
   const env = loadEnv();
