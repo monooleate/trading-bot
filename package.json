@@ -1,11 +1,15 @@
 {
-  "name": "edge-calc",
+  "name": "edgecalc",
   "version": "1.0.0",
   "private": true,
+  "description": "EdgeCalc monorepo — apps/web (Astro), services/{api,worker,feeds}, packages/core. Migrating Netlify+Blobs → Hetzner Docker co-host (Postgres). See internal-docs/roadmap/migration-runbook.md.",
   "scripts": {
-    "dev": "astro dev",
-    "build": "astro build",
-    "preview": "astro preview"
+    "dev": "npm --prefix apps/web run dev",
+    "build": "npm --prefix apps/web run build",
+    "build:web": "npm --prefix apps/web run build",
+    "preview": "npm --prefix apps/web run preview",
+    "typecheck": "tsc --noEmit",
+    "test": "node scripts/run-tests.mjs"
   },
   "dependencies": {
     "@astrojs/react": "^3.6.0",
@@ -25,6 +29,8 @@
     "@types/node": "^25.6.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
-    "tailwindcss": "^3.4.14"
+    "tailwindcss": "^3.4.14",
+    "tsx": "^4.23.13",
+    "typescript": "^5.9.0"
   }
 }

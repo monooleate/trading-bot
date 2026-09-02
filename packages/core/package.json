@@ -1,0 +1,10 @@
+{
+  "name": "@edgecalc/core",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Pure forecasting + proper-scoring modules and shared types, storage-agnostic. Phase 2 adds the Postgres I/O adapter (db.ts, env.ts, ledger.ts).",
+  "exports": {
+    "./*": "./src/*"
+  }
+}

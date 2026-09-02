@@ -45,8 +45,8 @@ Kezdd a Phase 1-gyel (repo-restrukturálás). Minden lépést dokumentálj a cha
 - [x] **Swap kész** — 2 GB `/swapfile` + fstab + `vm.swappiness=10`.
 - [x] **umami-stack ép** — caddy + umami + postgres:17 `healthy`, `analytics_edge`/`analytics_internal` hálók.
 - [x] **Forecasting A-lépcső kész** — branch `feat/forecasting-harness-and-ledger` (#1–#9, default-off, tesztelt).
-- [ ] **Branch mergelve** a `main`-be (vagy a migráció róla indul) — **Phase 0 döntés**.
-- [ ] **Secret-leltár** (lásd Phase 0).
+- [x] **Branch-döntés** (2026-09-02) — **külön migráció-branch**: `feat/hetzner-migration`, a `feat/forecasting-harness-and-ledger`-ről ágazva (a forecasting-munka reviewelhető marad, a nagy restruktúra izolált). NEM merge-eltük main-be → a Netlify main-deploy (strangler) érintetlen.
+- [x] **Secret-leltár** kész — `process.env` teljes scan → `.env.example` (Phase 0). Lásd Phase 0.
 
 ---
 
@@ -61,6 +61,8 @@ Kezdd a Phase 1-gyel (repo-restrukturálás). Minden lépést dokumentálj a cha
 3. **`.env.example`** összeállítása (secret-értékek NÉLKÜL) a repóba.
 
 **Acceptance:** branch-döntés megvan; teljes secret-lista + `.env.example` kész; a szerver-oldali titkok elérhetők (nem a git-ben).
+
+> **✅ DONE (2026-09-02).** Branch: `feat/hetzner-migration`. `.env.example` a repo-gyökérben (grouped: mode / Postgres[új] / auth / HL / Polymarket / exchange / LLM / Telegram / optional), a `process.env` teljes scan alapján (~100 hivatkozás; a tuning-knobok kód-defaulttal opcionálisak → az `.env.example` csak a secret+infra+mode kötelezőket sorolja, a teljes 61-vár katalógus az `env-vars.md`). **Új infra-secret:** `EDGECALC_DB_PASSWORD` + `DATABASE_URL` (a §18.2 edgecalc Postgres-user). A valós titkok NINCSENEK a gitben — a szerver `/opt/edgecalc/.env`-jébe kerülnek (Phase 5).
 
 ---
 
@@ -78,6 +80,21 @@ A cél a [`hetzner-docker-setup.md` §4](./hetzner-docker-setup.md) szerkezet: `
 - **Fontos:** a `.mts` tesztek (`*.test.mts`) átjönnek a modulokkal — a köv. session futtassa őket a port után (regresszió-védelem).
 
 **Acceptance:** `tsc --noEmit` zöld az új szerkezeten; a 10 forecasting teszt-suite zöld a `packages/core` alól; `apps/web` build zöld.
+
+> **✅ DONE (2026-09-02).** A restruktúra kész, mind a 3 acceptance-gate zöld. Részletek: [changelog 2026-09-02](../changelog/CHANGELOG-2026-09-02.md).
+>
+> **Amit ténylegesen tettünk:**
+> - `src/` + `public/` + `astro.config.mjs` + `tailwind.config.mjs` → **`apps/web/`** (egészben, 0 frontend-import churn). Új `apps/web/{package.json,tsconfig.json}`. Build a hoisted root `node_modules`-ból (upward resolution) → **Phase 3-ig nincs külön install**.
+> - **`packages/core/src/`** ← a 9 pure modul + a shared `types.mts` + a **10 forecasting teszt-suite** (`prediction-ledger`, `har-rv`, `first-passage`, `deribit-rnd`, `devig`, `statistics`[proper-scores], `calibration`, `online-weights` + a self-contained `log-odds-pool`/`extremize` mirror-tesztek). A `prediction-ledger.mts` egyelőre **még `@netlify/blobs`-ot importál** — a Blobs→Postgres csere a **Phase 2**.
+> - **`services/worker/src/pillars/`** ← a teljes `auto-trader/` fa (crypto/weather/hyperliquid[+funding-arb nested]/sports/macro/politics/shared/index/registry-bootstrap) — belső struktúra megőrizve → az intra-fa relatív importok érvényben maradtak. `auto-trader-multi-cron.mts` + `scheduled-scan.mts` → `services/worker/src/` (a §13 szerint Phase 3-ban a belső scheduler váltja).
+> - **`services/api/src/routes/`** ← a ~25 endpoint `.mts` + `_auth-guard.ts` + `_resolution-risk.ts` + `edge-tracker/mock-trades.mts`.
+> - **`services/feeds/`** ← placeholder README (Phase 3 / B-lépcső WS-collectorok).
+> - **Import-repair path-aliasokkal** (`tsconfig.json` `paths`): `@core/*`→`packages/core/src`, `@worker/*`→`services/worker/src`, `@api/*`→`services/api/src`. A cross-boundary importok stabil, egy-string specifierré váltak; a repair `tsc`-vezérelt volt (minden „Cannot find module" hibát az alias-célra pointoltunk, iteratívan zöldig). A `tsx` futásidőben is honorálja a `paths`-t (a tesztek alias-importtal is futnak).
+> - **Új tooling:** `scripts/run-tests.mjs` (cross-platform: minden `*.test.mts` tsx-szel) + root `package.json` scriptek (`typecheck`/`test`/`build:web`). `.dockerignore` + `.env.example` a repo-gyökérben.
+>
+> **Acceptance-eredmény:** `tsc --noEmit` **exit 0**; `packages/core` **10/10** suite zöld (teljes suite **23/23**); `apps/web` astro build **zöld** (10 oldal). **176 git-rename** detektálva → a history megőrizve.
+>
+> **Ismert, Phase-later tétel:** a `netlify.toml` ezen a branchen elavult (üres `netlify/functions`-ra + root astro-build-re mutat) — a Netlify a **main**-ről deploy-ol (strangler), ezt a branchet NEM. A Netlify deploy-config tisztítása **Phase 5/6** (cutover). Per-service `package.json` + Dockerfile-ok + npm-workspaces = **Phase 3**.
 
 ---
 
@@ -172,6 +189,6 @@ A pure logika változatlan; **csak az I/O-adapter cserélődik** (Netlify Blobs 
 
 1. **Session-state séma-ALAK** (a reuse-on belül): `pillar_state_*` blob-modell (gyors port) VS normalizált táblák (jobb lekérdezhetőség) — a hetzner-infrastructure.md §4 két opciója. *(A tároló-instance eldöntve; csak a tábla-alak nyitott.)*
 2. **Bun router:** Hono vs Elysia.
-3. **Branch:** merge main-be vagy külön migráció-branch.
+3. ~~**Branch:** merge main-be vagy külön migráció-branch.~~ ✅ **ELDÖNTVE (2026-09-02):** külön `feat/hetzner-migration` branch (a Netlify main-strangler érintetlen).
 4. **Redis:** kihagyva az A-lépcsőben; a B-lépcső feed/pubsubhoz később.
 5. **Odds-feed (#9):** melyik provider (the-odds-api free tier?) — külön data-task, nem blokkoló.

@@ -11,7 +11,7 @@
 >
 > Ez a fájl **lokalizált, gyors operatív áttekintést** ad: "MIT csináljak most / a héten / a hónapban". A `master-plan.md` a **státusz-tracker** (✅/⚠️/❌), ez a fájl a **sprint-tracker** (active/next/backlog).
 >
-> **Utolsó frissítés:** 2026-07-23 (teljes 7-sávos code-review → B29–B32 P0 kódfixek IMPLEMENTED [gross-loss unbrick, combiner clamp, F-Arb forward-carry, edge-tracker under-report], B33–B40 nyitott follow-upok; operátor-knobok alkalmazva [sports stop+loss-limit, weather selectionShrink 1.0 + maxPos $15, F-Arb frMinSpread 0.00005]). Korábbi: 2026-06-04 (crypto 10-trade audit → B21 threshold-combiner K-anchoring)
+> **Utolsó frissítés:** 2026-09-02 (**Hetzner-migráció elindult** — Phase 0+1 kész [branch `feat/hetzner-migration`, repo → `apps/web`+`services/{api,worker,feeds}`+`packages/core` monorepo, tsc/23-teszt/build zöld]. A migráció **fázis-státusza a [`migration-runbook.md`](./migration-runbook.md)-ben él (SSOT)** — itt nem duplikáljuk. Következő: Phase 2 Blobs→Postgres adapter). Korábbi: 2026-07-23 (7-sávos code-review → B29–B32 P0 kódfixek, B33–B40 follow-upok)
 >
 > **Nomenklatúra-megjegyzés (2026-05-15):** a `sprints.md` ettől a frissítéstől **csak sequential integer**-eket használ (Sprint 38, 39e, 40, 41, 42 active). A CLAUDE.md "N. session" száma is ezzel szinkronban van — egyik suffix se versenyez a másikkal (előfordult korábban: "Sprint 39 active" ops vs "Sprint 39e" code-change). Ahol kétértelmű volt (Sprint 40A/B/C candidate vs 40f code-change), az új neve `40A → Sprint 42A candidate` lett.
 

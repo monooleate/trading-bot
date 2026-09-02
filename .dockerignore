@@ -1,0 +1,20 @@
+# Build contexts stay lean — see hetzner-docker-setup.md §6.
+node_modules
+**/node_modules
+dist
+**/dist
+.astro
+**/.astro
+.netlify
+.git
+.gitignore
+*.log
+.env
+.env.*
+!.env.example
+internal-docs
+_*.json
+__pycache__
+*.pyc
+.venv
+venv

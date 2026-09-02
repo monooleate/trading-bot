@@ -1,0 +1,1354 @@
+// netlify/functions/auto-trader/index.ts
+// POST /.netlify/functions/auto-trader  { action: "run" | "status" | "reset" | "stop" }
+// Scheduled: every 3 minutes (configure in netlify.toml)
+//
+// Main entry point for the EdgeCalc Auto-Trader.
+// Sprint 1: only crypto category is active.
+
+import type { Context } from "@netlify/functions";
+import { checkAuth } from "@api/routes/_auth-guard.ts";
+import { CORS, getTraderConfig, getEffectiveTraderConfig, getEffectiveBtcExitConfig, getBtcExitConfig } from "./shared/config.mts";
+
+// State-changing actions require a valid JWT cookie. Read-only `status` is
+// public so the home page + per-venue dashboards can render without
+// forcing login on every visitor.
+//
+// `run` is intentionally NOT in this set: the Netlify cron triggers
+// `/auto-trader?action=run` every 3 min as an internal scheduled invocation
+// without a cookie. Blocking `run` would silently disable the bot. Any
+// abuse here is bounded — a `run` only fires the configured signal once
+// against the existing session; it cannot mutate config or unblock a
+// stopped session (those need `reset`/`resume`, which DO require auth).
+const PROTECTED_ACTIONS = new Set(["reset", "stop", "resume", "topup"]);
+import { log, getLogBuffer, getLogBufferForCategory } from "./shared/logger.mts";
+import { alertTradeOpen, alertTradeClosed, alertSessionStop, alertError, alertCalibrationNoise, alertLiveBlocked, alertTopup } from "./shared/telegram.mts";
+import { computeLiveReadiness, shouldForcePaper, type LiveReadinessReport } from "./shared/live-readiness.mts";
+import { appendPredictions, reconcileLedger } from "@core/prediction-ledger.mts";
+import { PAPER_SIM_VERSION } from "./crypto/session-manager.mts";
+import { findBtcMarkets } from "./crypto/btc-market-finder.mts";
+import { aggregateSignals } from "./crypto/signal-aggregator.mts";
+import { makeDecision, setCooldown, padCryptoGates, warmCooldownCache } from "./crypto/decision-engine.mts";
+import { placeBuyOrder } from "./crypto/execution.mts";
+import { handleBuyLifecycle, handleSellLifecycle, checkExitConditions } from "./crypto/order-lifecycle.mts";
+import { resolvePendingPaperPositions } from "./crypto/paper-resolver.mts";
+import { probeProvisionalOutcome } from "./shared/provisional-outcome.mts";
+import { loadPaperNeverStop, isAutoStopReason } from "./shared/paper-never-stop.mts";
+import { fetchYesMidpoint } from "./crypto/live-price.mts";
+import { markRunStart, markRunFinish, getCryptoRunStatus } from "./crypto/run-state.mts";
+import {
+  loadSession,
+  saveSession,
+  addOpenPosition,
+  closePosition,
+  stopSession,
+  resumeSession,
+  resetSession,
+  topupSession,
+} from "./crypto/session-manager.mts";
+import { computeCalibrationHealth } from "@core/statistics.mts";
+import type { SessionState, MarketInfo, SignalBreakdown, Position, EntryDecisionSnapshot } from "@core/types.mts";
+import { runWeatherTrader, getWeatherRunStatus } from "./weather/index.mts";
+import { getWeatherConfig, getEffectiveWeatherConfig } from "./weather/decision-engine.mts";
+import { runWeatherReconciler, getPendingPositions } from "./weather/reconciler.mts";
+import {
+  runHyperliquidTrader,
+  getHlStatus,
+  hlReset,
+  hlStop,
+  hlResume,
+  hlTopup,
+} from "./hyperliquid/index.mts";
+import {
+  runFundingArbLoop,
+  getArbStatus,
+  arbReset,
+  arbStop,
+  arbResume,
+  arbTopup,
+} from "./hyperliquid/funding-arb/index.mts";
+
+const DEFAULT_BANKROLL = 150; // $150 USDC
+
+// ─── Main handler ─────────────────────────────────────────
+
+export default async function handler(req: Request, _ctx: Context) {
+  if (req.method === "OPTIONS") {
+    return new Response(null, { status: 204, headers: CORS });
+  }
+
+  try {
+    // Parse action + category (+ layer for hyperliquid)
+    let action = "run";
+    let category = "crypto";
+    let layer = "directional";
+    // Optional starting bankroll for reset — caller supplies the dashboard
+    // input value here so reset mints a session with that bankroll instead
+    // of falling back to the per-bot DEFAULT_BANKROLL.
+    let bankrollOverride: number | undefined;
+    // Sprint 42B (2026-05-15): topup amount (delta to add to bankrollStart
+    // + bankrollCurrent). Same clamping range as bankrollOverride to
+    // protect against typos that would mint a million-dollar topup.
+    let topupAmount: number | undefined;
+    // Netlify scheduled functions POST a body with `next_run` (ISO timestamp
+    // of the next scheduled invocation). Detecting it here lets the run-state
+    // tag direct cron ticks as "cron" even though netlify.toml doesn't let us
+    // pin a `?source=cron` query string on the schedule.
+    let isScheduledTick = false;
+    if (req.method === "POST") {
+      try {
+        const body = await req.json();
+        action = body.action || "run";
+        category = body.category || "crypto";
+        layer = body.layer || "directional";
+        if (typeof body.bankroll === "number" && Number.isFinite(body.bankroll)) {
+          // Clamp into a sane range so a typo can't mint a million-dollar
+          // session or a $0 one. Matches the min={10} on the dashboard input.
+          bankrollOverride = Math.max(10, Math.min(1_000_000, body.bankroll));
+        }
+        // Sprint 42B (2026-05-15): topup delta. Same clamp [1, 1M] but
+        // min=1 (positive) to disallow zero / negative — the reset action
+        // exists for "0 bankroll" cases.
+        if (typeof body.amount === "number" && Number.isFinite(body.amount)) {
+          topupAmount = Math.max(1, Math.min(1_000_000, body.amount));
+        }
+        if (typeof body.next_run === "string" && body.next_run.length > 0) {
+          isScheduledTick = true;
+        }
+      } catch {
+        action = "run";
+      }
+    } else if (req.method === "GET") {
+      const url = new URL(req.url);
+      action = url.searchParams.get("action") || "status";
+      category = url.searchParams.get("category") || "crypto";
+      layer = url.searchParams.get("layer") || "directional";
+    }
+
+    // Auth gate for state-changing actions (reset/stop/resume).
+    if (PROTECTED_ACTIONS.has(action)) {
+      const auth = await checkAuth(req);
+      if (!auth.ok) return auth.error;
+    }
+
+    const config = getTraderConfig();
+
+    // ─── Registry-first dispatch (non-breaking, additive) ─────────────
+    // Új bot-ok (Sports + jövőbeli) a `shared/bot-registry.mts`-en
+    // keresztül regisztrálják magukat. A dispatcher CSAK a nem-legacy
+    // kategóriákra próbálja a registry-t — a {crypto, weather,
+    // hyperliquid} hármas a régi switch-case-en megy keresztül 100%-ban,
+    // zéró viselkedés-változással.
+    const LEGACY_CATEGORIES = new Set(["crypto", "weather", "hyperliquid"]);
+    if (!LEGACY_CATEGORIES.has(category)) {
+      try { await import("./registry-bootstrap.mts"); } catch (err: any) {
+        console.error("[dispatcher] registry-bootstrap import failed:", err?.message || err);
+      }
+      const { dispatchToRegistry } = await import("./shared/bot-registry.mts");
+      const url = new URL(req.url);
+      const source: "manual" | "cron" =
+        (url.searchParams.get("source") === "cron" || isScheduledTick) ? "cron" : "manual";
+
+      const out = await dispatchToRegistry({
+        category,
+        action: action as any,
+        source,
+        bankrollOverride,
+        topupAmount,
+      });
+      if (out.handled) {
+        if (out.error) return jsonResponse({ ok: false, error: out.error }, 400);
+        return jsonResponse(out.result);
+      }
+      // Nem regisztrált bot → explicit hiba helyett a régi fallback-tól
+      // védjük az ismeretlen kategóriát, ami eddig csendben crypto-ra
+      // mapped (és a crypto bot futott a sports request-re, bitcoin
+      // piacokkal contaminálva a sports panelt — 2026-05-11 (j) bug).
+      return jsonResponse({
+        ok: false,
+        error: `Unknown category "${category}" — not registered in bot-registry and not a legacy category (crypto/weather/hyperliquid).`,
+      }, 400);
+    }
+
+    // Route by category for all actions (each category has its own session)
+    const cat = category === "weather"     ? "weather"
+              : category === "hyperliquid" ? "hyperliquid"
+              : "crypto";
+
+    // Hyperliquid has its own self-contained dispatcher
+    if (cat === "hyperliquid") {
+      // `layer` selects between the directional trader and the funding-arb layer.
+      // Default is directional for backwards compat; UI passes layer: "arb" for FR.
+      if (layer === "arb") {
+        switch (action) {
+          case "run": {
+            // ?source=cron lets the dispatcher tag the run-state as
+            // cron-driven, so the UI status pill says "Scanning… (cron)".
+            // Netlify scheduled invocations also count (`next_run` body).
+            const url = new URL(req.url);
+            const source: "manual" | "cron" =
+              (url.searchParams.get("source") === "cron" || isScheduledTick) ? "cron" : "manual";
+            return jsonResponse(await runFundingArbLoop(source));
+          }
+          case "status": return jsonResponse(await getArbStatus());
+          case "reset":  return jsonResponse(await arbReset(bankrollOverride));
+          case "stop":   return jsonResponse(await arbStop());
+          case "resume": return jsonResponse(await arbResume());
+          // F-Arb has its OWN bankroll (2026-05-29) — topup targets the arb
+          // session directly (no longer delegates to hlTopup).
+          case "topup":  return jsonResponse(await arbTopup(topupAmount));
+          default:       return jsonResponse({ ok: false, error: `Unknown action: ${action}` }, 400);
+        }
+      }
+
+      switch (action) {
+        case "run": {
+          // Distinguish manual UI calls from the auto-trader-multi-cron
+          // fan-out (or a direct Netlify schedule) so the live status pill
+          // shows the right source.
+          const url = new URL(req.url);
+          const source: "manual" | "cron" =
+            (url.searchParams.get("source") === "cron" || isScheduledTick) ? "cron" : "manual";
+          return jsonResponse(await runHyperliquidTrader(undefined, source));
+        }
+        case "status": return jsonResponse(await getHlStatus());
+        case "reset":  return jsonResponse(await hlReset(bankrollOverride));
+        case "stop":   return jsonResponse(await hlStop());
+        case "resume": return jsonResponse(await hlResume());
+        case "topup":  return jsonResponse(await hlTopup(topupAmount));
+        default:       return jsonResponse({ ok: false, error: `Unknown action: ${action}` }, 400);
+      }
+    }
+
+    switch (action) {
+      case "run":
+        if (cat === "weather") {
+          const wConfig = await getEffectiveWeatherConfig();
+          // Scheduled-vs-manual detection. Weather is now driven by the shared
+          // `auto-trader-multi-cron` fan-out (?source=cron) — its standalone
+          // `schedule()`-wrapper cron never registered under the esbuild/.mts
+          // build, so it sat idle from 2026-05-21 (see 2026-05-29 changelog).
+          const url = new URL(req.url);
+          const source: "manual" | "cron" =
+            (url.searchParams.get("source") === "cron" || isScheduledTick) ? "cron" : "manual";
+          // Honour the `weatherCronEnabled` toggle on cron-driven ticks only.
+          // The old weather-cron wrapper gated on `cfg.cronEnabled`; preserve
+          // that pause semantics now that the multi-cron fan-out drives weather.
+          // Manual "Scan" clicks always run regardless of the toggle.
+          if (source === "cron" && !wConfig.cronEnabled) {
+            return jsonResponse({ ok: true, action: "skipped", reason: "Weather cron disabled (weatherCronEnabled = 0)" });
+          }
+          return jsonResponse(await runWeatherTrader(wConfig, source));
+        }
+        // The crypto trader records run-state itself so cron and manual
+        // invocations both surface in the UI status pills. Three signals can
+        // mark a run as cron-driven:
+        //   1. ?source=cron query (multi-cron fan-out)
+        //   2. internal _source override (legacy direct call)
+        //   3. body.next_run from the Netlify scheduled invocation
+        {
+          const url = new URL(req.url);
+          const source: "manual" | "cron" =
+            (url.searchParams.get("source") === "cron"
+              || (req as any)._source === "cron"
+              || isScheduledTick)
+              ? "cron"
+              : "manual";
+          return await runCryptoTrader(config, source);
+        }
+      case "status":
+        return await getStatus(config, cat);
+      case "reset":
+        return await handleReset(config, cat, bankrollOverride);
+      case "stop":
+        return await handleStop(config, cat);
+      case "resume":
+        return await handleResume(config, cat);
+      case "topup":
+        return await handleTopup(config, cat, topupAmount);
+      case "reconcile":
+        console.log("[DISPATCHER] reconcile case hit, cat=", cat);
+        // Manual reconcile — force a settlement pass without waiting for the
+        // next cron tick. Weather runs its dedicated runWeatherReconciler
+        // (Polymarket + METAR fallback). Crypto runs resolvePendingPaperPositions
+        // and ALSO returns a per-position Gamma diagnostic so the user can
+        // tell "UMA still voting" from "wrong conditionId" / "Gamma silent".
+        if (cat === "weather") {
+          // runWeatherReconciler returns a plain object → wrap into a Response.
+          return jsonResponse(await runWeatherReconciler(config.paperMode));
+        }
+        if (cat === "crypto") {
+          // handleCryptoReconcile already returns a Response (it calls
+          // jsonResponse internally). Re-wrapping with jsonResponse would
+          // JSON.stringify(Response) → `{}` (no enumerable own props),
+          // which is exactly the "HTTP 200 body={}" bug we hit. Return it
+          // directly.
+          return await handleCryptoReconcile(config);
+        }
+        return jsonResponse({ ok: false, error: "reconcile is crypto + weather only" }, 400);
+      default:
+        return jsonResponse({ ok: false, error: `Unknown action: ${action}` }, 400);
+    }
+  } catch (err: any) {
+    // Surface SOMETHING for the UI even when `err.message` is empty/undefined
+    // (e.g. when something throws a primitive). The previous "Unknown error"
+    // UI fallback hid which side actually failed.
+    const errMsg = (err && (err.message || err.toString?.() || String(err))) || "internal error";
+    log("ERROR", true, { error: errMsg, stack: err?.stack });
+    await alertError(errMsg).catch(() => {});
+    return jsonResponse({ ok: false, error: errMsg }, 500);
+  }
+}
+
+// ─── Crypto trader main loop ──────────────────────────────
+
+async function runCryptoTrader(
+  initialConfig: ReturnType<typeof getTraderConfig>,
+  source: "manual" | "cron" = "manual",
+) {
+  // Mark "scanning" right away so the UI Idle→Scanning pill flips on the
+  // very next status poll. Wrapped in try so a Blobs hiccup never blocks
+  // the actual trade run.
+  await markRunStart(source).catch(() => {});
+
+  // Pull live overrides from the trader-settings store so paper-mode
+  // tuning takes effect on the next cron tick without a redeploy.
+  const baseConfig = await getEffectiveTraderConfig();
+  // Mutable copy: the live-readiness gate below may flip paperMode back
+  // to true if the session hasn't met validation thresholds yet.
+  const config: typeof baseConfig = { ...baseConfig };
+  const btcExit = await getEffectiveBtcExitConfig();
+  // P1.3 OB-imbalance thresholds + market-finder knobs + live-readiness
+  // thresholds (all override-able via /trader-settings). The paper-resolver
+  // no longer takes any tunable: simVersion 3 closes paper positions only
+  // on real Polymarket resolution, no simulator path.
+  let obUp = 1.8, obDown = 0.55;
+  let btcMinPriceBand      = 0.10;
+  const readyOv: Record<string, number> = {};
+  try {
+    const mod: any = await import("@api/routes/trader-settings.mts");
+    const ov = await mod.loadRuntimeOverrides();
+    if (typeof ov.obImbalanceUpRatio    === "number") obUp                 = ov.obImbalanceUpRatio;
+    if (typeof ov.obImbalanceDownRatio  === "number") obDown               = ov.obImbalanceDownRatio;
+    if (typeof ov.btcMinPriceBand       === "number") btcMinPriceBand      = ov.btcMinPriceBand;
+    for (const k of ["liveReadyMinTrades", "liveReadyMinWinRate", "liveReadyMinIC", "liveReadyMaxCalibDev", "liveReadyMinSharpe", "liveReadyMaxDrawdownPct", "liveReadyOverrideEnabled", "bonferroniAlpha", "bonferroniGoodMultiplier"]) {
+      if (typeof ov[k] === "number") readyOv[k] = ov[k];
+    }
+  } catch {}
+  let session = await loadSession(config.paperMode, DEFAULT_BANKROLL);
+
+  // ─── Paper "never stop" safety valve (2026-09-01) ────────
+  // In paper mode, self-heal an AUTOMATIC stop (session-loss-limit /
+  // calibration-noise) so the bot resumes on the next tick without a manual
+  // resume API call. resumeSession also zeroes the monotonic gross-loss
+  // odometer (B29), so a net-profitable longshot book (crypto +$445 with
+  // $1162 gross loss) unbricks itself. A MANUAL stop is preserved. Live mode
+  // ignores the valve entirely.
+  const paperNeverStop = await loadPaperNeverStop();
+  if (config.paperMode && paperNeverStop && session.stopped && isAutoStopReason(session.stoppedReason)) {
+    log("PAUSE_AUTORECOVER", config.paperMode, { category: "crypto", paperNeverStop: true, clearedStop: session.stoppedReason });
+    session = resumeSession(session);
+    await saveSession(session);
+  }
+  // Raise the loss-limit to +Infinity so neither the auto-stop set-site nor
+  // the decision-engine's "Session loss limit" gate can halt (or block) the
+  // paper bot. Keeps it TRADING, not just un-stopped. Live mode untouched.
+  if (config.paperMode && paperNeverStop) {
+    config.sessionLossLimit = Number.POSITIVE_INFINITY;
+  }
+
+  // ─── Live-readiness gate ─────────────────────────────────
+  // Even if PAPER_MODE=false is configured, the bot will not place real
+  // money trades until the paper track record passes every applicable gate
+  // (trade count, IC, calibration deviation, sharpe, drawdown, sim version,
+  // session not stopped). When the gate trips we flip paperMode back to
+  // true for this tick and fire a Telegram alarm once per session.
+  const cryptoReadiness = computeLiveReadiness({
+    category: "crypto",
+    session,
+    simVersionExpected: PAPER_SIM_VERSION,
+    thresholds: {
+      minTrades:         readyOv.liveReadyMinTrades,
+      minWinRate:        readyOv.liveReadyMinWinRate,
+      minIC:             readyOv.liveReadyMinIC,
+      maxCalibrationDev: readyOv.liveReadyMaxCalibDev,
+      minSharpe:         readyOv.liveReadyMinSharpe,
+      maxDrawdownPct:    readyOv.liveReadyMaxDrawdownPct,
+    } as any,
+  });
+  const overrideEnabled = readyOv.liveReadyOverrideEnabled === 1;
+  const cryptoForce = shouldForcePaper(config.paperMode, cryptoReadiness, overrideEnabled);
+  if (cryptoForce.forcePaper) {
+    config.paperMode = true;
+    if (!session.calibrationAlertSentAt) {
+      log("ERROR", true, { liveBlocked: true, category: "crypto", reason: cryptoForce.reason });
+      const failed = cryptoReadiness.gates.filter((g) => g.applicable && !g.passed).map((g) => g.label);
+      await alertLiveBlocked("crypto", cryptoForce.reason!, failed);
+      session = { ...session, calibrationAlertSentAt: new Date().toISOString() };
+      await saveSession(session);
+    }
+  } else if (cryptoForce.overrideActive && !session.calibrationAlertSentAt) {
+    // Audit log: user has consciously bypassed the readiness gate. One
+    // Telegram alarm per session so they don't forget the override is on.
+    log("ERROR", false, { liveOverride: true, category: "crypto", reason: "OVERRIDE ACTIVE — readiness gate bypassed" });
+    await alertLiveBlocked("crypto", "OVERRIDE ACTIVE — bot trades LIVE despite readiness gate", ["liveReadyOverrideEnabled=1"]).catch(() => {});
+    session = { ...session, calibrationAlertSentAt: new Date().toISOString() };
+    await saveSession(session);
+  }
+
+  // Helper: persists the final result snapshot into the run-state store and
+  // returns the HTTP response. Every early return below funnels through this
+  // so the UI's "last run" pill always reflects what just happened. Also
+  // embeds liveReadiness + the effective paperMode so the UI can render the
+  // readiness badge from any of the cron tick payloads.
+  const finish = async (payload: any, status = 200) => {
+    const enriched = {
+      ...payload,
+      source,
+      finishedAt: new Date().toISOString(),
+      paperMode: config.paperMode,
+      liveReadiness: cryptoReadiness,
+    };
+    await markRunFinish(enriched).catch(() => {});
+    return jsonResponse(enriched, status);
+  };
+
+  // Resolve any open positions whose markets have resolved on Polymarket.
+  // Both paper AND live: same Polymarket-settlement path (v3 invariant —
+  // paper PnL == live PnL). Positions whose underlying market hasn't
+  // published an outcome yet stay open. Live closes also book the PnL
+  // into the session state, but on-chain USDC redemption needs a separate
+  // /polymarket-redeem call (logged via PAPER_RESOLVED.requiresRedeem).
+  if (session.openPositions.length > 0) {
+    const r = await resolvePendingPaperPositions(session);
+    session = r.session;
+    if (r.resolutions.length > 0) {
+      for (const res of r.resolutions) {
+        const last = session.closedTrades[session.closedTrades.length - 1];
+        if (last && last.market === res.market) {
+          await alertTradeClosed(config.paperMode, last, session.sessionPnL, session.openPositions.length);
+        }
+      }
+      // Recompute + persist realized IC calibration when new trades closed.
+      // Cheap (O(N × signals)) so we always do it on close; the combiner
+      // decides whether to BLEND it via the `useRealizedIC` Settings knob.
+      // Pass the half-life from Settings so the persisted record reflects
+      // the operator's chosen recency weighting (default null = uniform).
+      try {
+        const cal: any = await import("./shared/signal-calibration.mts");
+        const halfLifeOv = (readyOv as any).icHalfLifeTrades;
+        const halfLifeTrades: number | null =
+          typeof halfLifeOv === "number" && Number.isFinite(halfLifeOv) && halfLifeOv > 0
+            ? halfLifeOv : null;
+        await cal.persistCalibration("crypto", session.closedTrades, { halfLifeTrades });
+      } catch (err: any) {
+        log("ERROR", config.paperMode, { calibration: "persist-failed", category: "crypto", error: err?.message });
+      }
+    }
+  }
+
+  // Live early-exit pass (TP / SL / hold-to-end): for live sessions only,
+  // walk every still-open position, fetch current YES midpoint from CLOB,
+  // and exit via handleSellLifecycle if checkExitConditions trips. Paper
+  // mode INTENTIONALLY does not run this — paper PnL must equal eventual
+  // settlement PnL, so an early-exit simulator would re-introduce the
+  // halfway/Brownian artefacts the v3 contract removes.
+  if (!config.paperMode && session.openPositions.length > 0) {
+    const liveExitResults = await runLiveEarlyExits(session, btcExit);
+    session = liveExitResults.session;
+    for (const closed of liveExitResults.closed) {
+      await alertTradeClosed(false, closed, session.sessionPnL, session.openPositions.length);
+    }
+  }
+
+  // Calibration-noise alarm: when paper has accumulated ≥30 trades and the
+  // Bonferroni-corrected weak threshold is not cleared, surface a Telegram
+  // alert (once per session) and force-stop live sessions. Paper continues
+  // so the user can iterate. The Bonferroni params (familywise α, good
+  // multiplier) are now Settings-tunable — defaults preserve Tier 1
+  // behaviour (α=0.05, multiplier=2.0).
+  const health = computeCalibrationHealth(session.closedTrades, 30, {
+    bonferroniAlpha:          readyOv.bonferroniAlpha,
+    bonferroniGoodMultiplier: readyOv.bonferroniGoodMultiplier,
+  });
+  if (health.shouldSuspendLive && !session.calibrationAlertSentAt) {
+    log("CALIBRATION_ALARM", config.paperMode, {
+      maxAbsIC: health.maxAbsIC,
+      topSignal: health.topSignal,
+      tradeCount: health.tradeCount,
+      message: health.message,
+    });
+    await alertCalibrationNoise(config.paperMode, health.message, health.tradeCount, health.maxAbsIC);
+    session = { ...session, calibrationAlertSentAt: new Date().toISOString() };
+    if (!config.paperMode) {
+      session = stopSession(session, `Calibration noise: ${health.message}`);
+      await alertSessionStop(false, health.message, session);
+      await saveSession(session);
+      return await finish({
+        ok: true,
+        action: "stopped",
+        reason: "calibration_noise",
+        calibrationHealth: health,
+        session: sessionSummary(session),
+      });
+    }
+  }
+
+  // Check if session is stopped
+  if (session.stopped) {
+    await saveSession(session);
+    return await finish({
+      ok: true,
+      action: "skipped",
+      reason: `Session stopped: ${session.stoppedReason}`,
+      session: sessionSummary(session),
+    });
+  }
+
+  // 0. Pre-warm cooldown cache from Blobs (cold-start protection — the
+  //    no-revenge-trade guard used to be lost between cron ticks).
+  await warmCooldownCache();
+
+  // 1. Find active BTC markets (deep-OTM band filter applied). Open-position
+  // slugs bypass the band/OI filter so the Why? Live-Gates panel always
+  // has a fresh evaluation for every open position — even after the
+  // price drifted to a region the bot would normally skip.
+  const activeOpenSlugs = session.openPositions
+    .filter((p) => !p.endDate || new Date(p.endDate).getTime() >= Date.now())
+    .map((p) => p.market);
+  const markets = await findBtcMarkets(config.minOpenInterest, btcMinPriceBand, activeOpenSlugs);
+  if (markets.length === 0) {
+    return await finish({
+      ok: true,
+      action: "skipped",
+      reason: "No active BTC Up/Down markets found",
+      session: sessionSummary(session),
+      config: traderConfigSummary(config, btcExit, btcMinPriceBand),
+    });
+  }
+
+  let updatedSession = session;
+  const results: any[] = [];
+  // Build the scan list:
+  //   - top 3 by Gamma's volume24hr ranking (the bot's normal entry universe)
+  //   - PLUS any open-position market not in top 3 (so the open position's
+  //     Why? Live-Gates panel renders fresh data even when the market
+  //     slipped below top 3 — typical once the position is in profit / deep
+  //     OTM after BTC's intraday move)
+  const top3 = markets.slice(0, 3);
+  const top3Slugs = new Set(top3.map((m) => m.slug));
+  const extraOpen = markets.filter((m) => activeOpenSlugs.includes(m.slug) && !top3Slugs.has(m.slug));
+  const scanList = [...top3, ...extraOpen];
+  // Dropped list = markets below top 3 AND not an open-position carve-out.
+  // The carve-outs are scanned, just for live-gate purposes, not for new entries.
+  const droppedMarkets = markets
+    .slice(3)
+    .filter((m) => !activeOpenSlugs.includes(m.slug))
+    .map((m) => ({
+      slug: m.slug,
+      title: m.title,
+      currentPrice: m.currentPrice,
+      volume24h: m.volume24h,
+      endDate: m.endDate,
+      reason: "below_top_3",
+    }));
+
+  // 2. Process each market
+  const cryptoMaxOpen = config.maxOpenPositions ?? 5;
+  // Active positions only — past-endDate pending positions are effectively
+  // done (waiting for Polymarket UMA resolution) and shouldn't block new
+  // entries. The "Pending" card on the UI already separates them visually.
+  const activeOpenCount = updatedSession.openPositions.filter((p) => {
+    if (!p.endDate) return true;
+    return new Date(p.endDate).getTime() >= Date.now();
+  }).length;
+  for (const market of scanList) {
+    // Check session loss limit. In paper mode with the paperNeverStop valve
+    // ON, config.sessionLossLimit is raised to +Infinity below, so this never
+    // trips (and neither does the decision-engine's loss-limit gate).
+    if (updatedSession.sessionLoss >= config.sessionLossLimit) {
+      updatedSession = stopSession(updatedSession, "Session loss limit reached");
+      await alertSessionStop(config.paperMode, "Session loss limit reached", updatedSession);
+      break;
+    }
+
+    // Whether this market already has an open position. We DON'T early-skip
+    // anymore — the Why? panel on the corresponding open-position row needs
+    // the *real* current gate state (would the bot open this market right
+    // now?), not a single "already open" stub. The buy execution path
+    // remains gated on this flag below.
+    const alreadyOpen = updatedSession.openPositions.some((p) => p.market === market.slug);
+
+    // Max-open-positions gate: stop opening new entries once the cap is hit.
+    // Counts only ACTIVE (still-trading-window) positions — pending settle
+    // doesn't block new entries. Settings-tunable via cryptoMaxOpenPositions.
+    // Skipped for already-open markets so the Why? panel still gets a fresh
+    // gate evaluation (the cap doesn't apply to an existing position).
+    if (activeOpenCount >= cryptoMaxOpen && !alreadyOpen) {
+      results.push({
+        market: market.slug,
+        title: market.title,
+        action: "skip",
+        reason: `Max active positions reached: ${activeOpenCount}/${cryptoMaxOpen}`,
+        marketPrice: market.currentPrice,
+        endDate: market.endDate,
+        gates: [{
+          label: "Max open positions",
+          passed: false,
+          actual: `${activeOpenCount}/${cryptoMaxOpen}`,
+          required: `< ${cryptoMaxOpen}`,
+          hint: "Csak az aktív (még trading-window-on belüli) pozíciókat számolja — a pending settle nem.",
+        }],
+        evaluatedAt: new Date().toISOString(),
+      });
+      continue;
+    }
+
+    try {
+      // 3. Aggregate signals
+      const signal = await aggregateSignals(market.slug, { up: obUp, down: obDown });
+
+      log("SIGNAL", config.paperMode, {
+        market: market.slug,
+        finalProb: signal.finalProb,
+        marketPrice: market.currentPrice,
+        edge: Math.abs(signal.finalProb - market.currentPrice),
+        kelly: signal.kellyFraction,
+        activeSignals: signal.activeSignals,
+      });
+
+      // 4. Make decision
+      const decision = makeDecision(
+        signal,
+        market,
+        updatedSession.bankrollCurrent,
+        updatedSession.sessionLoss,
+        config,
+        btcExit,
+        // Cross-position monotonicity gate (2026-05-14e): pass current
+        // open positions so the engine can block a contradictory candidate
+        // (e.g. NO @ 78K + YES @ 80K with non-monotonic predProbs).
+        updatedSession.openPositions,
+      );
+
+      // Common per-market context surfaced in the response so the UI can
+      // explain *why* the bot acted the way it did, regardless of branch.
+      // `gates` powers the unified "X/Y gates" chip + hover popover — same
+      // shape across all 4 bots. `evaluatedAt` is the per-row scan timestamp,
+      // read by the status endpoint's `pickLiveScanForSlug` so the Why?
+      // panel's "Evaluated:" line is accurate.
+      const marketContext = {
+        market: market.slug,
+        title: market.title,
+        marketPrice: market.currentPrice,
+        predictedProb: signal.finalProb,
+        edge: Math.abs(signal.finalProb - market.currentPrice),
+        netEdge: decision.edge,
+        direction: decision.direction,
+        kelly: signal.kellyFraction,
+        kellyUsed: decision.kellyUsed,
+        activeSignals: signal.activeSignals,
+        signalBreakdown: signal.signalBreakdown,
+        obImbalance: signal.obImbalance ?? null,
+        endDate: market.endDate,
+        gates: decision.gates ?? [],
+        evaluatedAt: new Date().toISOString(),
+      };
+
+      // Already-open guard: real gates were just evaluated above, so the
+      // result row carries the real picture (what the bot would do if no
+      // position existed). We just block the buy.
+      if (alreadyOpen) {
+        log("DECISION_SKIP", config.paperMode, {
+          market: market.slug,
+          reason: "Already has open position",
+        });
+        results.push({ ...marketContext, action: "skip", reason: "Already has open position" });
+        continue;
+      }
+
+      if (!decision.shouldTrade) {
+        log("DECISION_SKIP", config.paperMode, {
+          market: market.slug,
+          reason: decision.reason,
+        });
+        results.push({ ...marketContext, action: "skip", reason: decision.reason });
+        continue;
+      }
+
+      log("DECISION_TRADE", config.paperMode, {
+        market: market.slug,
+        direction: decision.direction,
+        size: decision.positionSizeUSDC,
+        edge: decision.edge,
+        kelly: decision.kellyUsed,
+      });
+
+      // 5. Execute buy
+      const buyOrder = await placeBuyOrder(
+        market,
+        decision.direction,
+        decision.entryPrice,
+        decision.positionSizeUSDC,
+        config.paperMode,
+      );
+
+      // 6. Handle buy lifecycle
+      const position = await handleBuyLifecycle(buyOrder, market, config.paperMode);
+
+      if (!position) {
+        results.push({ ...marketContext, action: "failed", reason: "Buy order not filled" });
+        continue;
+      }
+
+      // Build the full decision snapshot so the UI can answer "why did the
+      // bot enter this?" later — every gate, the kelly math, the signal mix
+      // and the OB imbalance are all preserved on the position record.
+      const grossEdge = Math.abs(signal.finalProb - market.currentPrice);
+      const entryDecision: EntryDecisionSnapshot = {
+        decidedAt:        new Date().toISOString(),
+        finalProb:        signal.finalProb,
+        marketPrice:      market.currentPrice,
+        grossEdge,
+        netEdge:          decision.edge,
+        feePct:           config.roundtripFeePct,
+        direction:        decision.direction,
+        kellyRaw:         signal.kellyFraction,
+        kellyCapped:      decision.kellyUsed,
+        kellyCap:         config.maxKellyFraction,
+        positionSizeUSDC: decision.positionSizeUSDC,
+        entryPrice:       decision.entryPrice,
+        activeSignals:    signal.activeSignals,
+        signalBreakdown:  signal.signalBreakdown,
+        obImbalance:      signal.obImbalance ?? null,
+        gates:            decision.gates ?? [],
+        reason:           decision.reason,
+      };
+
+      // Attach resolver + live-exit metadata so the next cron tick can:
+      //   - close this position via real Polymarket settlement (paper +
+      //     live alike — paper-resolver path);
+      //   - in live mode, also evaluate TP/SL via checkExitConditions and
+      //     drive a CLOB sell through handleSellLifecycle. clobTokenIds
+      //     is mandatory for the live early-exit path.
+      const paperPosition: Position = {
+        ...position,
+        clobTokenIds:       market.clobTokenIds,
+        conditionId:        market.conditionId,
+        endDate:            market.endDate,
+        marketPriceAtEntry: market.currentPrice,
+        predictedProb:      signal.finalProb,
+        signalBreakdown:    signal.signalBreakdown,
+        category:           "crypto",
+        entryDecision,
+      };
+
+      // 7. Update session with open position
+      updatedSession = addOpenPosition(updatedSession, paperPosition);
+      await setCooldown(market.slug, config.cooldownSeconds);
+
+      // Format signal arrows for telegram
+      const signalArrows = formatSignalArrows(signal.signalBreakdown);
+
+      await alertTradeOpen(
+        config.paperMode,
+        market.title,
+        decision.direction,
+        decision.entryPrice,
+        decision.positionSizeUSDC,
+        updatedSession.bankrollCurrent + decision.positionSizeUSDC,
+        decision.edge,
+        decision.kellyUsed,
+        signalArrows,
+      );
+
+      // 8. Position is now open. In both paper and live modes the exit is
+      //    handled by a separate path that observes real market dynamics:
+      //    - paper: resolvePendingPaperPositions (real Polymarket resolution
+      //             or a Brownian-bridge fallback, neither of which uses
+      //             finalProb — so signal IC stays meaningful)
+      //    - live:  the existing sell-side lifecycle (TP/SL polling,
+      //             emergency FOK, etc.)
+      results.push({
+        ...marketContext,
+        action: "position_opened",
+        entry: decision.entryPrice,
+        size: decision.positionSizeUSDC,
+        paperMode: config.paperMode,
+      });
+    } catch (err: any) {
+      log("ERROR", config.paperMode, { market: market.slug, error: err.message });
+      // Error rows still get the full padded gate list — the chip renders
+      // "0/9 ✗" with the failing "evaluation completed" gate plus 8
+      // "not evaluated" rows so Y is identical to the happy path.
+      results.push({
+        market: market.slug, title: market.title, action: "error", error: err.message,
+        gates: padCryptoGates([{
+          label: "Session loss limit",
+          passed: false,
+          actual: `error: ${err.message}`,
+          required: "no exception during scan",
+          hint: "Hiba dobódott a piac kiértékelése közben.",
+        }]),
+      });
+    }
+  }
+
+  // Save session state
+  await saveSession(updatedSession);
+
+  // Prediction ledger (model-discovery §2): log EVERY scanned market's
+  // forecast (taken + skipped) + fill outcomes for taken markets from
+  // closedTrades, then reconcile a budgeted slice of past-endDate skipped
+  // markets against Gamma. Best-effort, non-throwing — never breaks a tick.
+  await appendPredictions("crypto", results, scanList, updatedSession.closedTrades);
+  await reconcileLedger("crypto");
+
+  return await finish({
+    ok: true,
+    action: "run",
+    paperMode: config.paperMode,
+    marketsScanned: markets.length,
+    marketsConsidered: Math.min(markets.length, 3),
+    results,
+    droppedMarkets,
+    config: traderConfigSummary(config, btcExit, btcMinPriceBand),
+    session: sessionSummary(updatedSession),
+  });
+}
+
+// ─── Live early-exit pass (TP/SL/hold-to-end) ─────────────────────────
+// Runs ONCE per cron tick, before the entry scanner, on every still-open
+// LIVE position. For each position:
+//   1. Pull the current YES midpoint from CLOB.
+//   2. Run the pure checkExitConditions() against (TP, SL, hold-to-end).
+//   3. If shouldExit → handleSellLifecycle() places a real GTC sell at
+//      the position-side price; on timeout it falls back to FOK at best
+//      bid via emergencySell.
+//   4. Apply the resulting ClosedTrade to the session (closePosition
+//      mutates bankroll + sessionPnL + sessionLoss + tradeCount).
+//
+// Paper mode does NOT call this — paper closes only at real Polymarket
+// settlement (paper-resolver), which is the v3 "paper PnL == live PnL"
+// invariant. Adding a paper TP/SL would re-introduce the kind of
+// halfway-toward-prediction artefacts that v1/v2 produced.
+// Max live exits to drive per cron tick. Each handleSellLifecycle poll loop
+// is up to ~30s (GTC) + emergency FOK; processing too many serially would
+// blow the Netlify scheduled-function budget. Positions skipped this tick
+// are picked up next tick (cron is */3 min), and the settlement resolver
+// closes them at outcome regardless.
+const LIVE_EXIT_BUDGET_PER_TICK = 3;
+
+async function runLiveEarlyExits(
+  session: SessionState,
+  btcExit: ReturnType<typeof getBtcExitConfig>,
+): Promise<{ session: SessionState; closed: import("@core/types.mts").ClosedTrade[] }> {
+  let updated = session;
+  const closed: import("@core/types.mts").ClosedTrade[] = [];
+
+  // Sort by endDate ASC so positions closest to settlement are evaluated
+  // first — those have the tightest exit window.
+  const queue = [...session.openPositions].sort((a, b) => {
+    const ea = a.endDate ? new Date(a.endDate).getTime() : Infinity;
+    const eb = b.endDate ? new Date(b.endDate).getTime() : Infinity;
+    return ea - eb;
+  }).slice(0, LIVE_EXIT_BUDGET_PER_TICK);
+
+  for (const pos of queue) {
+    // We need both YES + NO clob token ids to drive placeSellOrder. Skip
+    // positions opened before clobTokenIds was added — the next
+    // settlement-resolver tick will close them at outcome.
+    if (!pos.clobTokenIds || pos.clobTokenIds.length !== 2) {
+      log("ORDER_REJECTED", false, {
+        market: pos.market,
+        reason: "live_early_exit_skipped: missing clobTokenIds",
+      });
+      continue;
+    }
+
+    // Always resolve via the YES tokenId so the midpoint semantics are
+    // unambiguous (positionPrice = NO ? 1 - mid : mid in checkExitConditions).
+    const yesTokenId = pos.clobTokenIds[0];
+    const yesMid = await fetchYesMidpoint(yesTokenId);
+    if (yesMid === null) {
+      log("ORDER_REJECTED", false, {
+        market: pos.market,
+        reason: "live_early_exit_skipped: no midpoint",
+      });
+      continue;
+    }
+
+    const minimalMarket: MarketInfo = {
+      slug:          pos.market,
+      conditionId:   pos.conditionId ?? "",
+      questionId:    "",
+      title:         pos.market,
+      clobTokenIds:  pos.clobTokenIds,
+      currentPrice:  yesMid,
+      openInterest:  0,
+      volume24h:     0,
+      endDate:       pos.endDate ?? "",
+      active:        true,
+    };
+
+    const decision = checkExitConditions(pos, minimalMarket, yesMid, Date.now(), btcExit);
+    if (!decision.shouldExit) continue;
+
+    const trade = await handleSellLifecycle(pos, minimalMarket, decision.exitPrice, false);
+    // Carry over the entry context onto the closed trade (handleSellLifecycle
+    // builds the bare PnL skeleton and doesn't see entryDecision/predictedProb).
+    const enriched: import("@core/types.mts").ClosedTrade = {
+      ...trade,
+      category:           pos.category ?? "crypto",
+      predictedProb:      pos.predictedProb,
+      marketPriceAtEntry: pos.marketPriceAtEntry,
+      edgeAtEntry:
+        pos.predictedProb !== undefined && pos.marketPriceAtEntry !== undefined
+          ? Math.abs(pos.predictedProb - pos.marketPriceAtEntry)
+          : undefined,
+      signalBreakdown:    pos.signalBreakdown ?? null,
+    };
+    updated = closePosition(updated, pos.buyOrderId, enriched);
+    closed.push(enriched);
+    log("TRADE_CLOSED", false, {
+      market: pos.market,
+      reason: decision.reason,
+      exitPrice: trade.exitPrice,
+      pnl: Math.round(trade.pnl * 100) / 100,
+    });
+  }
+
+  return { session: updated, closed };
+}
+
+// ─── Status endpoint ──────────────────────────────────────
+
+async function getStatus(config: ReturnType<typeof getTraderConfig>, category: string = "crypto") {
+  const session = await loadSession(config.paperMode, DEFAULT_BANKROLL, category);
+  const base: any = {
+    ok: true,
+    action: "status",
+    category,
+    session: sessionSummary(session),
+    recentLogs: getLogBufferForCategory(category).slice(-20),
+  };
+
+  // Live-readiness gate verdict — surfaced for every category so each
+  // trader page can render a uniform "READY / NOT READY" badge.
+  let readyOv: any = {};
+  try {
+    const mod: any = await import("@api/routes/trader-settings.mts");
+    readyOv = (await mod.loadRuntimeOverrides()) ?? {};
+  } catch {}
+  const thresholds = {
+    minTrades:         readyOv.liveReadyMinTrades,
+    minWinRate:        readyOv.liveReadyMinWinRate,
+    minIC:             readyOv.liveReadyMinIC,
+    maxCalibrationDev: readyOv.liveReadyMaxCalibDev,
+    minSharpe:         readyOv.liveReadyMinSharpe,
+    maxDrawdownPct:    readyOv.liveReadyMaxDrawdownPct,
+  } as any;
+  base.liveReadiness = computeLiveReadiness({
+    category: category as any,
+    session,
+    simVersionExpected: category === "crypto" ? PAPER_SIM_VERSION : null,
+    thresholds,
+  });
+  // Surface override state for the UI even on the read-only status path
+  // (so the badge can show "OVERRIDE" without waiting for a cron tick).
+  base.liveReadiness.overrideActive = readyOv.liveReadyOverrideEnabled === 1;
+
+  // Surface weather-specific live status: lastRun timestamp, currently-
+  // scanning flag, and the most recent run summary. Powers the UI badge.
+  if (category === "weather") {
+    base.runStatus = await getWeatherRunStatus();
+    const wcfg = await getEffectiveWeatherConfig();
+    base.cronEnabled = wcfg.cronEnabled;
+    // Past-METAR-window positions awaiting settlement.
+    base.pending = await getWeatherPendingForSettlement(config.paperMode);
+    // Active positions still in the trading window (reconcileAfter in the future).
+    // Pass the last scan's results so we can surface a "live gates" snapshot
+    // per open position — what the bot's decision-engine would say RIGHT NOW
+    // (as of the last cron tick) about that market. The frozen entry-decision
+    // shows why the bot opened; live-gates shows whether the conviction holds.
+    base.openDetails = getWeatherOpenActive(
+      session,
+      base.runStatus?.lastResult?.results ?? null,
+      base.runStatus?.lastResult?.finishedAt ?? base.runStatus?.lastRunAt ?? null,
+    );
+  } else if (category === "crypto") {
+    // Same status payload shape as weather: the UI's status cluster reads
+    // the same fields regardless of venue.
+    base.runStatus   = await getCryptoRunStatus();
+    base.cronEnabled = true; // crypto cron (auto-trader */3) is always on
+    // Past-endDate paper positions awaiting Polymarket resolution. simVersion
+    // 3 has no simulator fallback — positions stay open until Gamma publishes
+    // outcomePrices ∈ {0,1}.
+    base.pending = await getCryptoPendingPositions(session);
+    // Active positions still in the trading window (with live-gate snapshot).
+    base.openDetails = getCryptoOpenActive(
+      session,
+      base.runStatus?.lastResult?.results ?? null,
+      base.runStatus?.lastResult?.finishedAt ?? base.runStatus?.lastRunAt ?? null,
+    );
+  }
+  return jsonResponse(base);
+}
+
+// Lookup helper: pick the most recent scan-result entry that matches the
+// open position's slug. Returns the gates + key inputs the engine evaluated
+// on its last tick, so the UI can render a "current gate state" panel next
+// to the frozen entry-decision snapshot. `tickFinishedAt` is the lastResult
+// timestamp — used as a per-tick fallback when the row didn't stamp its own
+// evaluatedAt (older row shapes, error branches).
+function pickLiveScanForSlug(
+  scanResults: any[] | null,
+  slug: string,
+  tickFinishedAt: string | null = null,
+): any | null {
+  if (!Array.isArray(scanResults)) return null;
+  const r = scanResults.find((x) => x?.market === slug);
+  if (!r) return null;
+  return {
+    evaluatedAt:   r.evaluatedAt   ?? tickFinishedAt ?? null,
+    action:        r.action        ?? null,
+    reason:        r.reason        ?? null,
+    marketPrice:   r.marketPrice   ?? null,
+    predictedProb: r.predictedProb ?? null,
+    netEdge:       r.netEdge       ?? null,
+    edge:          r.edge          ?? null,
+    direction:     r.direction     ?? null,
+    activeSignals: r.activeSignals ?? null,
+    kellyUsed:     r.kellyUsed     ?? null,
+    gates:         Array.isArray(r.gates) ? r.gates : [],
+  };
+}
+
+// Active (still-trading-window) open positions for the crypto bot.
+function getCryptoOpenActive(
+  session: SessionState,
+  scanResults: any[] | null = null,
+  tickFinishedAt: string | null = null,
+) {
+  const now = Date.now();
+  return session.openPositions
+    .filter((p) => !p.endDate || new Date(p.endDate).getTime() >= now)
+    .map((p) => ({
+      market:             p.market,
+      title:              (p as any).title ?? null,
+      direction:          p.direction,
+      size:               p.costBasis,
+      avgEntry:           p.avgEntry,
+      shares:             p.shares,
+      openedAt:           p.openedAt,
+      endDate:            p.endDate ?? null,
+      marketPriceAtEntry: p.marketPriceAtEntry ?? null,
+      predictedProb:      p.predictedProb ?? null,
+      entryDecision:      p.entryDecision ?? null,
+      liveGates:          pickLiveScanForSlug(scanResults, p.market, tickFinishedAt),
+    }))
+    .sort((a, b) => (a.endDate ?? "").localeCompare(b.endDate ?? ""));
+}
+
+// Active (still-future-reconcile) weather positions and the past-METAR
+// pending list — both are derived from the same session.openPositions array,
+// split by reconcileAfter.
+function getWeatherOpenActive(
+  session: SessionState,
+  scanResults: any[] | null = null,
+  tickFinishedAt: string | null = null,
+) {
+  const now = Date.now();
+  return session.openPositions
+    .filter((p) => p.weatherMeta && new Date(p.weatherMeta.reconcileAfter).getTime() > now)
+    .map((p) => ({
+      market:        p.market,
+      city:          p.weatherMeta!.city,
+      date:          p.weatherMeta!.date,
+      bucket:        p.weatherMeta!.bucketLabel,
+      direction:     p.direction,
+      size:          p.costBasis,
+      avgEntry:      p.avgEntry,
+      predictedMaxC: p.weatherMeta!.predictedMaxC,
+      openedAt:      p.openedAt,
+      reconcileAfter: p.weatherMeta!.reconcileAfter,
+      entryDecision: p.entryDecision ?? null,
+      liveGates:     pickLiveScanForSlug(scanResults, p.market, tickFinishedAt),
+    }))
+    .sort((a, b) => a.reconcileAfter.localeCompare(b.reconcileAfter));
+}
+
+async function getWeatherPendingForSettlement(paperMode: boolean) {
+  const all = await getPendingPositions(paperMode);
+  const ready = all.positions.filter((p: any) => p.isReady);
+  // Provisional won/lost from the bucket sub-market's CURRENT Gamma
+  // outcomePrices (real data, cached 90s) — same as crypto.
+  const enriched = await Promise.all(ready.map(async (p: any) => ({
+    ...p,
+    provisionalOutcome: await probeProvisionalOutcome(p.conditionId, p.direction),
+  })));
+  return { count: enriched.length, nextReconcileAt: enriched[0]?.reconcileAfter ?? null, positions: enriched };
+}
+
+// Pending paper-position view for the crypto bot.
+//
+// Lists open positions whose endDate has elapsed but Polymarket hasn't
+// published a resolved outcome yet. Each */3 auto-trader cron tick re-queries
+// Gamma; when the market settles the position closes on the next tick. There
+// is no simulator fallback — a position can sit here for the full UMA
+// resolution window (5–60 min typical, occasionally hours during disputes).
+async function getCryptoPendingPositions(session: SessionState) {
+  const now = Date.now();
+  const pastPositions = session.openPositions
+    .filter((p) => p.endDate && new Date(p.endDate).getTime() < now);
+
+  // Probe each pending market's CURRENT Gamma outcomePrices in parallel to
+  // surface a provisional won/lost even before UMA finalises (cached 90s).
+  const past = await Promise.all(pastPositions.map(async (p) => {
+    const endTs = new Date(p.endDate!).getTime();
+    const ageMs = now - endTs;
+    // Per-position diagnostic: explains *why* the resolver hasn't closed
+    // this position yet, so the operator can distinguish "UMA still
+    // voting" from "legacy position lacks conditionId".
+    let waitReason: string;
+    if (!p.conditionId) {
+      waitReason = "missing conditionId (legacy position — predates resolver wiring)";
+    } else if (ageMs < 5 * 60_000) {
+      waitReason = "UMA settlement window — typical 5–15 min after endDate";
+    } else if (ageMs < 60 * 60_000) {
+      waitReason = "extended UMA window — Polymarket not yet reporting closed";
+    } else {
+      waitReason = "long wait (>1h) — possible UMA dispute / market not finalised";
+    }
+    const provisionalOutcome = await probeProvisionalOutcome(p.conditionId, p.direction);
+    return {
+      market:             p.market,
+      title:              (p as any).title ?? null,
+      direction:          p.direction,
+      size:               p.costBasis,
+      endDate:            p.endDate!,
+      marketPriceAtEntry: p.marketPriceAtEntry ?? null,
+      predictedProb:      p.predictedProb ?? null,
+      ageMs,
+      hasConditionId:     !!p.conditionId,
+      waitReason,
+      // "won" | "lost" | "pending" — provisional, from current outcomePrices.
+      provisionalOutcome,
+    };
+  }));
+  past.sort((a, b) => a.endDate.localeCompare(b.endDate));
+  return {
+    count: past.length,
+    nextReconcileAt: past[0]?.endDate ?? null,
+    positions: past,
+  };
+}
+
+// ─── Reset session ────────────────────────────────────────
+
+async function handleReset(
+  config: ReturnType<typeof getTraderConfig>,
+  category: string = "crypto",
+  bankrollOverride?: number,
+) {
+  // Per-category default: weather sessions historically started at $100,
+  // crypto at $150. The dashboard input wins when supplied.
+  const fallback = category === "weather" ? 100 : DEFAULT_BANKROLL;
+  const bankroll = bankrollOverride ?? fallback;
+  const session = resetSession(bankroll, config.paperMode);
+  await saveSession(session, category);
+  return jsonResponse({
+    ok: true,
+    action: "reset",
+    category,
+    session: sessionSummary(session),
+  });
+}
+
+// ─── Stop session ─────────────────────────────────────────
+
+async function handleStop(config: ReturnType<typeof getTraderConfig>, category: string = "crypto") {
+  const session = await loadSession(config.paperMode, DEFAULT_BANKROLL, category);
+  const stopped = stopSession(session, "Manual stop");
+  await saveSession(stopped, category);
+  await alertSessionStop(config.paperMode, "Manual stop", stopped);
+  return jsonResponse({
+    ok: true,
+    action: "stopped",
+    category,
+    session: sessionSummary(stopped),
+  });
+}
+
+// ─── Resume session ───────────────────────────────────────
+// Symmetric to handleStop. Clears the manual-stop flag so the bot resumes
+// trading on the next cron tick (or "Run Scan" click). Used by all four
+// bot tabs — the dispatch routes hyperliquid + funding-arb to their own
+// hlResume / arbResume handlers earlier in the switch, this one covers
+// crypto + weather. Without this the UI's Resume button hit a 400
+// "Unknown action: resume".
+async function handleResume(config: ReturnType<typeof getTraderConfig>, category: string = "crypto") {
+  const session = await loadSession(config.paperMode, DEFAULT_BANKROLL, category);
+  const resumed = resumeSession(session);
+  await saveSession(resumed, category);
+  return jsonResponse({
+    ok: true,
+    action: "resumed",
+    category,
+    session: sessionSummary(resumed),
+  });
+}
+
+// ─── Topup bankroll ───────────────────────────────────────
+// Sprint 42B (2026-05-15): non-destructive bankroll injection. Preserves
+// closedTrades / tradeCount / sessionPnL / sessionLoss / openPositions /
+// realized signal-IC. Used for paper-mode "keep accumulating after
+// sessionLossLimit hit without losing the trade history" workflow + for
+// future live-mode capital infusion. Auth-gated like `reset`.
+//
+// The `amount` parameter is the delta to add (positive). If undefined or
+// not-finite, returns a 400 — the UI dialog enforces a positive amount.
+async function handleTopup(
+  config: ReturnType<typeof getTraderConfig>,
+  category: string = "crypto",
+  amount?: number,
+) {
+  if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0) {
+    return jsonResponse({ ok: false, error: "Topup amount must be a positive number" }, 400);
+  }
+  const session = await loadSession(config.paperMode, DEFAULT_BANKROLL, category);
+  const bankrollBefore = session.bankrollCurrent;
+  const topped = topupSession(session, amount);
+  await saveSession(topped, category);
+  // Telegram audit alert — fire-and-forget so a Telegram outage doesn't
+  // block the topup itself.
+  alertTopup(
+    config.paperMode,
+    category,
+    amount,
+    bankrollBefore,
+    topped.bankrollCurrent,
+    topped.bankrollStart,
+  ).catch(() => { /* swallow */ });
+  return jsonResponse({
+    ok: true,
+    action: "topup",
+    category,
+    amount,
+    bankrollBefore,
+    session: sessionSummary(topped),
+  });
+}
+
+// ─── Crypto manual reconcile + diagnostic ─────────────────
+// User-triggered settlement pass for the crypto bot. Mirrors the weather
+// "Reconcile pending" button. Two-step:
+//   1. Run resolvePendingPaperPositions — closes any past-endDate position
+//      whose Polymarket market has settled (Gamma closed=true + UMA final).
+//   2. For positions that DIDN'T close, query Gamma per conditionId and
+//      surface the live state (closed flag, outcomePrices, UMA status).
+//
+// The diagnostic is the actionable piece — without it the UI just says
+// "awaiting Polymarket resolution" with no way to tell UMA-still-voting
+// from wrong-conditionId. Returns:
+//   { resolved: ResolutionRecord[], stillPending: PendingDiagnostic[] }
+async function handleCryptoReconcile(config: ReturnType<typeof getTraderConfig>) {
+  // DEBUG markers — pin a known sentinel so we can tell from the response
+  // body whether THIS handler ran, vs the response being mangled / cached /
+  // produced by Netlify infrastructure.
+  console.log("[RECONCILE] handler entered, paperMode=", config.paperMode);
+  const debugMarker = "v3-parallel-2026-05-11";
+  try {
+    const session = await loadSession(config.paperMode, DEFAULT_BANKROLL);
+    console.log("[RECONCILE] session loaded, openPositions=", session.openPositions.length);
+    // Single pass: the resolver does ONE Gamma fetch per past-endDate
+    // position and emits both the close decision AND the per-position
+    // diagnostic.
+    const r = await resolvePendingPaperPositions(session);
+    console.log("[RECONCILE] resolver done, resolutions=", r.resolutions.length, "pendingDiagnostics=", r.pendingDiagnostics?.length ?? 0);
+    if (r.resolutions.length > 0) {
+      await saveSession(r.session);
+    }
+    return jsonResponse({
+      ok: true,
+      action: "reconciled",
+      category: "crypto",
+      _debugMarker: debugMarker,
+      resolved: r.resolutions,
+      stillPending: r.pendingDiagnostics ?? [],
+      session: sessionSummary(r.session),
+    });
+  } catch (err: any) {
+    const msg = (err && (err.message || err.toString?.() || String(err))) || "reconcile failed";
+    console.error("[RECONCILE] threw:", msg, err?.stack);
+    log("ERROR", true, { event: "reconcile_failed", error: msg, stack: err?.stack });
+    return jsonResponse({
+      ok: false,
+      action: "reconcile_failed",
+      category: "crypto",
+      _debugMarker: debugMarker,
+      error: `Reconcile failed: ${msg}`,
+    }, 500);
+  }
+}
+
+// ─── Helpers ──────────────────────────────────────────────
+
+function traderConfigSummary(
+  config: ReturnType<typeof getTraderConfig>,
+  btcExit: ReturnType<typeof getEffectiveBtcExitConfig> extends Promise<infer T> ? T : never,
+  btcMinPriceBand: number,
+) {
+  return {
+    edgeThreshold:    config.edgeThreshold,
+    maxKellyFraction: config.maxKellyFraction,
+    cooldownSeconds:  config.cooldownSeconds,
+    sessionLossLimit: config.sessionLossLimit,
+    minOpenInterest:  config.minOpenInterest,
+    roundtripFeePct:  config.roundtripFeePct,
+    paperMode:        config.paperMode,
+    btcTpTarget:      btcExit.tpTarget,
+    btcSlTarget:      btcExit.slTarget,
+    btcMinPriceBand,
+    btcEntryWindowStartMs: btcExit.entryWindowStartMs,
+    btcEntryWindowEndMs:   btcExit.entryWindowEndMs,
+  };
+}
+
+function sessionSummary(s: SessionState) {
+  return {
+    paperMode: s.paperMode,
+    stopped: s.stopped,
+    stoppedReason: s.stoppedReason,
+    bankrollStart: s.bankrollStart,
+    bankrollCurrent: Math.round(s.bankrollCurrent * 100) / 100,
+    sessionPnL: Math.round(s.sessionPnL * 100) / 100,
+    sessionLoss: Math.round(s.sessionLoss * 100) / 100,
+    tradeCount: s.tradeCount,
+    closedTrades: s.closedTrades.length,
+    openPositions: s.openPositions.length,
+    startedAt: s.startedAt,
+    // simVersion is needed by run-state.mts:getCryptoRunStatus to invalidate
+    // stale lastResult snapshots written under an older paper simulator.
+    simVersion: s.simVersion ?? null,
+  };
+}
+
+function formatSignalArrows(breakdown: SignalBreakdown): string {
+  const arrows: string[] = [];
+  if (breakdown.funding_rate   !== null) arrows.push(`FR${breakdown.funding_rate     > 0.5 ? "↑" : "↓"}`);
+  if (breakdown.orderflow      !== null) arrows.push(`VPIN${breakdown.orderflow      > 0.5 ? "↑" : "↓"}`);
+  if (breakdown.vol_divergence !== null) arrows.push(`VOL${breakdown.vol_divergence  > 0.5 ? "↑" : "↓"}`);
+  if (breakdown.apex_consensus !== null) arrows.push(`APEX${breakdown.apex_consensus > 0.5 ? "↑" : "↓"}`);
+  if (breakdown.cond_prob      !== null) arrows.push(`CP${breakdown.cond_prob        > 0.5 ? "↑" : "↓"}`);
+  if (breakdown.momentum       !== null) arrows.push(`MOM${breakdown.momentum        > 0.5 ? "↑" : "↓"}`);
+  if (breakdown.contrarian     !== null) arrows.push(`CTR${breakdown.contrarian      > 0.5 ? "↑" : "↓"}`);
+  if (breakdown.pairs_spread   !== null) arrows.push(`PRS${breakdown.pairs_spread    > 0.5 ? "↑" : "↓"}`);
+  return arrows.join(" ") || "–";
+}
+
+function jsonResponse(data: any, status = 200) {
+  return new Response(JSON.stringify(data, null, 2), {
+    status,
+    headers: CORS,
+  });
+}

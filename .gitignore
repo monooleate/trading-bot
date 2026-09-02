@@ -36,3 +36,6 @@ npm-debug.log*
 # External reference material (matekmegoldasok.hu structure — nem ehhez a projekthez tartozik)
 internal-docs/mathSEO_reference/
 
+
+# Local runtime artifacts (state dumps)
+_*.json
