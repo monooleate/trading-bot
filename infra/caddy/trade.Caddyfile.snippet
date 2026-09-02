@@ -1,0 +1,17 @@
+# Add this block to the EXISTING /opt/analytics/Caddyfile (next to the umami
+# site), then recreate caddy so the single-file bind-mount picks up the new
+# inode (hetzner-docker-setup §18.4):
+#
+#   docker compose -p analytics up -d --force-recreate caddy
+#
+# DNS: point trade.<domain> A-record at the VPS IP, Cloudflare proxy OFF
+# (grey cloud), same as the other sites.
+
+trade.grabit.hu {          # or whatever subdomain you choose
+    tls {
+        dns cloudflare {env.CLOUDFLARE_API_TOKEN}   # same DNS/ACME as umami
+    }
+    encode gzip
+    reverse_proxy edgecalc-api:7000
+    log { output stdout; format json }
+}

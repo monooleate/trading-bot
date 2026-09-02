@@ -1,0 +1,79 @@
+name: edgecalc
+
+# Co-host on the existing `analytics` box next to umami (hetzner-docker-setup
+# §18.3). Separate compose project → isolated from the umami stack; joins its
+# networks as external. Postgres = the umami postgres:17 container's `edgecalc`
+# DB (§18.2). Redis is skipped in the A-step (cache in-process, state in PG).
+
+x-common: &common
+  restart: unless-stopped
+  env_file: [.env]
+  security_opt: ["no-new-privileges:true"]
+  logging: { driver: json-file, options: { max-size: "10m", max-file: "3" } }
+
+services:
+  # All 5 pillar loops in one container (RAM-lean). Internal scheduler replaces
+  # the Netlify cron; state via @core → Postgres. DB network only (not public).
+  workers:
+    <<: *common
+    build: { context: ., dockerfile: services/worker/Dockerfile }
+    container_name: edgecalc-workers
+    environment:
+      PILLARS: "crypto,weather,hyperliquid,funding-arb,sports"
+      LOOP_INTERVAL_SEC: "180"
+      DATABASE_URL: "postgresql://edgecalc:${EDGECALC_DB_PASSWORD}@db:5432/edgecalc"
+    networks: [dbnet]
+    mem_limit: 384m
+
+  # Read/API + signal endpoints. Reached by the analytics caddy on `edge`;
+  # reaches Postgres on `dbnet`.
+  api:
+    <<: *common
+    build: { context: ., dockerfile: services/api/Dockerfile }
+    container_name: edgecalc-api
+    environment:
+      PORT: "7000"
+      DATABASE_URL: "postgresql://edgecalc:${EDGECALC_DB_PASSWORD}@db:5432/edgecalc"
+    expose: ["7000"]
+    networks: [edge, dbnet]
+    mem_limit: 256m
+
+  # B-step ML — Chronos-Bolt + calibration, LOAD-ON-DEMAND. Workers/api call it
+  # at http://model:8000 behind the default-off knobs. Not public.
+  model:
+    build: { context: ., dockerfile: services/model/Dockerfile }
+    restart: unless-stopped
+    env_file: [.env]
+    container_name: edgecalc-model
+    environment:
+      HF_HOME: /cache
+      MODEL_TIER: chronos-bolt-small
+      LOAD_ON_DEMAND: "1"
+      MODEL_IDLE_TTL_SEC: "600"
+    volumes:
+      - /opt/edgecalc/data/model-cache:/cache
+    expose: ["8000"]
+    networks: [dbnet]
+    security_opt: ["no-new-privileges:true"]
+    logging: { driver: json-file, options: { max-size: "10m", max-file: "3" } }
+    mem_limit: 2560m
+
+  # One-shot schema migration: `docker compose --profile migrate run --rm migrate`
+  migrate:
+    profiles: ["migrate"]
+    build: { context: ., dockerfile: services/api/Dockerfile }
+    env_file: [.env]
+    environment:
+      DATABASE_URL: "postgresql://edgecalc:${EDGECALC_DB_PASSWORD}@db:5432/edgecalc"
+    command: ["bun", "run", "services/api/src/migrate.ts"]
+    networks: [dbnet]
+
+# The existing analytics-project networks, joined as external. VERIFY the names
+# on the box: `docker network ls` → expected analytics_edge / analytics_internal.
+networks:
+  edge:
+    external: true
+    name: analytics_edge      # so analytics-caddy can reach `api`
+  dbnet:
+    external: true
+    name: analytics_internal  # so workers/api/migrate can reach `db` (postgres)

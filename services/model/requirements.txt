@@ -1,0 +1,18 @@
+# B-lépcső ML model service. Heavy deps (torch/chronos) are load-on-demand at
+# runtime; the service boots + /health works without the weights resident.
+fastapi==0.115.*
+uvicorn[standard]==0.32.*
+pydantic==2.*
+numpy==2.*
+pandas==2.*
+scikit-learn==1.5.*
+arch==7.*
+properscoring==0.1
+# Foundation forecaster + tensor backend (large — pinned, pulled on build):
+#   torch  (CPU wheel — set --index-url in the Dockerfile for the CPU build)
+#   chronos-forecasting
+# Uncomment for Phase 7 when the box is on the 16 GB tier:
+# torch==2.*
+# chronos-forecasting==1.*
+# mapie==0.9.*
+# venn-abers==1.*
