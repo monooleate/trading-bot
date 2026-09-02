@@ -502,6 +502,14 @@ A korábbi B9 (Topup action) átkerült a "📋 Next sprint candidates" szekció
 - **B-lépcső (Hetzner-precondition):** foundation model (Chronos-Bolt/TimesFM) mint *kalibrált* distribution-estimator; Realized-GARCH; logisztikus/GBM stacking; LLM-signal sportra. → a `hetzner-migration.md`-be új modell-service fázisként promotálandó, amikor odaérünk.
 - **Acceptance (#1, kész):** az Edge Tracker minden kategórián mutatja a Brier/Log-score/skill KPI-ket + reliability-diagramot; a Murphy-identitás önkonzisztens (unit-tesztben pinned).
 
+### B42–B45 — teljes-audit follow-upok (2026-09-03) 🟡
+
+A 2026-09-03 teljes audit (5 bot + infra + security) implementált fixei: [changelog 2026-09-03](../changelog/CHANGELOG-2026-09-03.md). A NEM-azonnal-implementált maradékok:
+- **B42 — login KDF-upgrade.** A jelszó jelenleg sótlan SHA-256 (a doc bcrypt-et ír). Bevezetni bcrypt/scrypt/argon2-t + az operátornak új `AUTH_PASSWORD_HASH`-t generálni (breaking → operátor-feladat). A timingSafeEqual + per-IP rate-limit már él.
+- **B43 — mély sign-aware realized-IC.** A `computeRealizedICs` (`shared/signal-calibration.mts`) csak `pnl>0`-val korrelál, iránytól függetlenül → HL SHORT-trade-eken zavaros IC. Korrelálja a signalt a direkcionális kimenettel. (A `t.side`→`t.direction` typo már javítva.) Shared-infra, óvatosan.
+- **B44 — sports snapshot Pinnacle fair value.** A `sports/index.mts` a `predictedProb`/snapshot-ot a shrink-képletből re-deriválja a döntést vezérlő `pinnacleFairYes` helyett. Csak `sportsUsePinnacle`/B37 bekapcsolásakor releváns (akkor P1).
+- **B45 — HL Kelly conviction-scale knob.** A B36-fix `BRACKET_CONVICTION_SCALE` konstans (0.5); tegyük Settings-knobbá (`hlKellyConvictionScale`) a mérés utáni hangoláshoz.
+
 ---
 
 ## ✅ Completed sprints (rolling 5 utolsó)

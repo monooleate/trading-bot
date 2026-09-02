@@ -378,7 +378,11 @@ netlify deploy --prod --dir=dist
 
 **Élő deploy:** **`https://trade.jmeszaros.dev`** — a Hetzner `analytics` Docker co-host (workers+api+model), **ÉL paper módban** (2026-09-02, Phase 5 kész). A régi `mj-trading.netlify.app` Netlify-build a `main`-en törött (a monorepo-restruktúra óta), a Netlify **nyugdíjazásra vár** (a user törli — Phase 6 — de előbb a Phase 4 adat-export döntés). Paper mode végig.
 
-### Legutóbbi munka (54. session, 2026-09-02) — Hetzner-migráció Phase 1→4 (a teljes kód kész, main-en)
+### Legutóbbi munka (55. session, 2026-09-03) — teljes audit (5 bot + infra + security) + prio-fixek
+
+A user kérte mind az 5 bot teljes auditját (helyes implementáció + a beállítások tényleg módosítanak-e), + security auditot, prio-listát és a fixek indítását, + az oldal rejtését AI/kereső-botok elől. **5 párhuzamos read-only audit-ágens**, minden találat kódra verifikálva. **0 valós P0 a botlogikában; 1 P0 az infrában.** Implementálva (mind zöld, boxra deployolva): **P0** HL session sosem perzisztált (`coin`/`sizeCoins`/`pnlUSDC` vs `NOT NULL market` → néma adatvesztés) → migration 007 + `rebuild` null-skip + valódi-HL round-trip teszt. **P1:** sports NO-edge frame-hiba; crypto `icHalfLifeTrades` holt knob; HL Kelly túl-konfidencia (B36, driftmentes-baseline horgony); HL paper testnet-adat → mainnet; llm/resolution-risk auth-gate (Anthropic-budget). **P2/P3:** user-settings/trade-logger auth-gate, login timingSafeEqual+rate-limit, JWT HS256-pin + secret-length, static-path containment, scheduler-drain, migrate atomi, compat-delete session-routing, crypto/weather max-open cap. **Crawler-rejtés:** Caddy `trade.` blokk `X-Robots-Tag noindex` + `robots.txt Disallow:/` + 403 ~25 AI-UA-ra. Deferred: **sprints B42–B45** (login KDF, mély sign-aware IC, sports Pinnacle-snapshot, HL conviction-knob). Részletek: [changelog 2026-09-03](internal-docs/changelog/CHANGELOG-2026-09-03.md).
+
+### Korábbi munka (54. session, 2026-09-02) — Hetzner-migráció Phase 1→4 (a teljes kód kész, main-en)
 
 A user kérte a [migration-runbook.md](internal-docs/roadmap/migration-runbook.md) végrehajtását (Netlify+Blobs → `analytics` Docker co-host), majd: minden branch szinkronba a main-nel + push main-re; session-séma **normalizált**; a live-oldal leállása OK; **„folytasd a teljes implementálást"**. **Minden a `main`-en** (a forecasting A-lépcső 12 commitja + a migráció; a 3 feature-branch törölve; `origin/main` @ `612058d`). Minden lépésnél `tsc` exit 0 + **25/25 teszt zöld**.
 
