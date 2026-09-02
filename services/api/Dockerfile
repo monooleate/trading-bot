@@ -19,6 +19,7 @@ RUN bun install
 COPY tsconfig.json ./
 COPY packages/ ./packages/
 COPY services/ ./services/
+COPY migrations/ ./migrations/
 COPY --from=webbuild /web/dist ./dist
 ENV WEB_DIST=/app/dist
 USER bun
