@@ -115,6 +115,15 @@ A pure logika változatlan; **csak az I/O-adapter cserélődik** (Netlify Blobs 
 
 **Acceptance:** a ledger + a session-I/O pure tesztek zöldek; egy lokális Postgresen a ledger round-trip (upsert→load) egyezik; `docker compose --profile migrate run migrate` lefut tisztán.
 
+> **✅ DONE (2026-09-02).** A pure logika változatlan; csak az I/O-adapter új. Validálva **valós beágyazott Postgresen (PGlite)** — Docker nélkül. Session-séma **döntés: normalizált** (§11.1, a user választása).
+> - `packages/core/db.ts` (Db/TxDb interface — `pg` Pool prodban, PGlite tesztben — + `tx()` + iso/num coerce), `env.ts` (zod), `migrate.ts` (idempotens runner, `schema_migrations`).
+> - `packages/core/ledger.ts` — a ledger Postgres-persistence: a **pure fn-ek 1:1 re-export**, a Blobs whole-array write → `upsert-per-(category,slug)` + prune (§8).
+> - `packages/core/session-store.ts` — **normalizált** `pillar_session`/`pillar_open_position`/`pillar_closed_trade`, mode-aware (paper/live, PK `(category,mode)`); generikus mind az 5 botra (known scalars → oszlop, bot-specifikus context → JSONB residual).
+> - `packages/core/settings-store.ts` — settings KV. `packages/core/blobs-compat.ts` — Netlify Blobs drop-in (Postgres durable + in-process cache) + **session-dispatch** a normalizált táblákra (a session-managerek ÉS az edge-tracker/multi-status readerek változatlanul, konzisztensen).
+> - `migrations/001..006` (init, settings, prediction_ledger, trade_log, pillar_state[normalized], blob_kv). `services/api/src/migrate.ts` = a `--profile migrate` entrypoint.
+> - **Tesztek (valós SQL, PGlite):** `pg-roundtrip.test.mts` (14) + `blobs-compat.test.mts` (11). tsc + teljes suite (25/25) zöld.
+> - **Ledger normalizálás:** a `prediction_ledger` tábla + `@core/ledger` kész+tesztelt, de **runtime-ban egyelőre blob_kv** (a `prediction-ledger↔compat` import-ciklus elkerülésére) — a normalizált táblára kötés koordinált worker+api follow-up.
+
 ---
 
 ## 5. Phase 3 — `services/` (worker, api, model)
@@ -128,6 +137,12 @@ A pure logika változatlan; **csak az I/O-adapter cserélődik** (Netlify Blobs 
 
 **Acceptance:** `docker compose build` sikeres; minden service elindul; `curl trade.<domain>/api/status` válaszol; a `model` `/health` OK (súly nélkül, idle).
 
+> **✅ DONE (2026-09-02) — kód kész, build a szerveren (Phase 5).** Router-döntés: **nincs framework** — a route-handlerek eleve Web-Fetch `(Request)→Response`-ok, így egy vékony `Bun.serve` router név szerint dispatch-el (0 handler-átírás). Bun-decision: az entrypointok Bun-on futnak, a `.mts` logika változatlan.
+> - `services/worker/src/{main.ts,scheduler.ts}` — belső ütemező (Netlify cron helyett): azonnali + interval tick, overlap-guard; a **meglévő dispatchert** hívja `{action,category,layer}` payloaddal (0 pillér-duplikáció); `setBlobsDb(pool)` induláskor.
+> - `services/api/src/server.ts` — `Bun.serve` router; kiszolgálja a `/.netlify/functions/<name>` (jelenlegi frontend, 0 churn) ÉS `/api/<name>` utakat + `/health`.
+> - `services/model/app/*` (FastAPI): `/health`, `/vol` (realized+GARCH), `/forecast` (Chronos-Bolt **load-on-demand**, naive fallback), `/calibrate` (isotonic/Platt), `/score` (Brier/log/CRPS). A nehéz depek (torch/chronos) a 16 GB-tier-ig kommentben; a service súly nélkül bootol + `/health` válaszol (pure fn-ek smoke-tesztelve).
+> - Dockerfile-ok: `services/{worker,api}` (Bun), `apps/web` (Astro build→export), `services/model` (Python). `docker-compose.yml` (§18.3 co-host + `migrate` profil). `infra/caddy/trade.Caddyfile.snippet` (§18.4). tsc + suite (25/25) zöld. **A build/`up` a szerveren történik (Phase 5).**
+
 ---
 
 ## 6. Phase 4 — Adat-migráció (Blobs → Postgres) ⚠ MEGERŐSÍTÉS ELŐTTE
@@ -138,6 +153,11 @@ A pure logika változatlan; **csak az I/O-adapter cserélődik** (Netlify Blobs 
 3. **Import** — `services/api/src/import-blobs.ts` one-shot (`--profile migrate` mintára): JSON → Postgres (`prediction_ledger`, `pillar_state_*`, `settings`).
 
 **Acceptance:** a sorok száma egyezik (export vs Postgres); az `api` edge-tracker route ugyanazt a történelmet + proper-scores-t adja, mint a Netlify.
+
+> **🛠️ TOOLING KÉSZ (2026-09-02) — a VÉGREHAJTÁS megerősítés-köteles + szerver kell.**
+> - `scripts/export-blobs.mjs` — a durable Blobs-store-okat a **netlify CLI-vel** dumpolja `blobs-export.json`-ba (`[{store,key,value}]`; a blob-adat a törött main-build ellenére is él a Netlify storage-ban; a `*-cache` kimarad). Operátor futtatja (`netlify login`+`link`).
+> - `services/api/src/import-blobs.ts` — a `blobs-export.json`-t a **futásidejű compat facade-on át** írja (session→normalizált, ledger/KV→blob_kv) → byte-konzisztens a read-utakkal. Idempotens.
+> - **Export-megjegyzés:** a `@netlify/blobs` alias miatt kódból nem olvasható a valódi Blobs → az export a netlify CLI-n megy (nem függvényből).
 
 ---
 

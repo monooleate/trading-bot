@@ -52,6 +52,49 @@
 - Per-service `package.json` + Dockerfile-ok + npm-workspaces → Phase 3.
 - Az api↔worker cross-importok (`@worker/*` az api-ban, `@api/routes/trader-settings` a workerben) átmeneti layering — a Phase 3 (a settings → `packages/core`/Postgres, a scheduler → worker) tisztítja. Phase 1-ben tudatosan megtartva a zéró-logika-változás érdekében.
 
-### Következő lépés
+---
 
-**Phase 2 — `packages/core` Blobs→Postgres adapter** (a load-bearing lépés): `db.ts` (pg pool) + `env.ts` (zod) + `ledger.ts` port (a pure fn-ek változatlanul, csak a `loadLedger`/`saveLedger` → Postgres `ON CONFLICT`) + a session-state/settings I/O + `migrations/*.sql`. Nyitott döntés a Phase 2 elejére: `pillar_state_*` blob-modell vs normalizált táblák (runbook §11.1). Runbook-tracked.
+## Hetzner-migráció — Phase 2 + Phase 3 + Phase 4-tooling (ugyanaznap, folytatás)
+
+A user: *„hozd szinkronba a main-nel az összes branchet … main-re menjen a push-od is"* + *„Normalized, proceed"* (session-séma) + *„nem baj ha az elő oldal nem lesz elérhető a migráció végéig. csak én használom!"* + *„folytasd a teljes implementálást"*.
+
+### Branch-konszolidáció
+
+A `feat/hetzner-migration` + `feat/forecasting-harness-and-ledger` **fast-forward a `main`-re** (12 forecasting commit + a Phase 1 restruktúra), **push `origin/main`** (`57be7e5..b273580`). Törölt (mind a main őse): `feat/hetzner-migration`, `feat/forecasting-harness-and-ledger`, `fix/p0-profitability-fixes`. **A Netlify main-deploy ezzel törött (üres `netlify/functions`) — a user tudatosan vállalta** (paper-only, egyszemélyes). A `main` a single trunk; a további migráció is ide megy.
+
+### Phase 2 — `packages/core` Postgres-alap (valós SQL-en tesztelve PGlite-tal)
+
+Session-séma-döntés: **normalizált** (§11.1). A pure logika változatlan; csak az I/O új.
+- `db.ts` (Db/TxDb: `pg` Pool prod / PGlite teszt + `tx()` + coerce), `env.ts` (zod), `migrate.ts` (idempotens, `schema_migrations`).
+- `ledger.ts` — a pure fn-ek 1:1 re-export; Blobs whole-array → `upsert ON CONFLICT (category,slug)` + prune (§8).
+- `session-store.ts` — normalizált `pillar_session`/`pillar_open_position`/`pillar_closed_trade`, **mode-aware** (paper/live, PK `(category,mode)`); generikus mind az 5 botra (known scalars→oszlop, context→JSONB residual).
+- `settings-store.ts` (KV). `migrations/001..006`. `services/api/src/migrate.ts` (`--profile migrate`).
+- Teszt: `pg-roundtrip.test.mts` (14) — migrations-idempotencia, ledger save/load/upsert/prune/append/stats, normalizált session + HL-residual + paper/live izoláció, settings CRUD.
+
+### Phase 3a — Bun-runnability: Netlify Blobs compat facade
+
+`blobs-compat.ts` = drop-in `getStore()`: durable→Postgres `blob_kv` (migr. 006), `*-cache`→in-process. A `tsconfig` **aliasolja `@netlify/blobs` → compat** → az EGÉSZ worker/api kód **változatlanul** fut Bun+Postgres-en (tsc zöld az aliasszal = a compat API mindent lefed). Teszt: `blobs-compat.test.mts` (11).
+
+### Phase 2 (normalizált sessions bekötése, churn nélkül)
+
+A compat facade **maga dispatch-eli** a session-store-okat a normalizált táblákra (`sessionRoute` (store,key)→(category,mode)) → a session-managerek (write) ÉS az edge-tracker/multi-status (read) **változatlanul, konzisztensen** a normalizált táblát használják. Archive-kulcsok + F-Arb (dokumentum-alakú `ArbSessionState`) → blob_kv.
+
+### Phase 3 — Bun entrypointok + model service + Docker stack
+
+- `worker/src/{main.ts,scheduler.ts}` — belső ütemező, a meglévő dispatchert hívja (0 duplikáció), `setBlobsDb(pool)` induláskor.
+- `api/src/server.ts` — `Bun.serve` router (nincs framework — a handlerek eleve Fetch); `/.netlify/functions/<name>` (0 frontend-churn) + `/api/<name>` + `/health`.
+- `services/model/app/*` (FastAPI): `/health`, `/vol`, `/forecast` (Chronos load-on-demand + naive fallback), `/calibrate`, `/score`. Nehéz depek a 16 GB-tier-ig kommentben; súly nélkül bootol. Pure fn-ek smoke-tesztelve (Python 3.14).
+- Dockerfile-ok (worker/api Bun, web Astro-export, model Python) + `docker-compose.yml` (§18.3 co-host + migrate profil) + `infra/caddy/trade.Caddyfile.snippet` (§18.4).
+
+### Phase 4 — data-migráció TOOLING (végrehajtás megerősítés-köteles)
+
+- `scripts/export-blobs.mjs` (netlify CLI → `blobs-export.json`), `services/api/src/import-blobs.ts` (a compat facade-on át → session→normalizált, ledger/KV→blob_kv; idempotens).
+
+**Minden lépésnél `tsc --noEmit` exit 0 + a teljes teszt-suite 25/25 zöld.** Commitok a `main`-en: `b273580` (Phase 0/1) → `1e92df9` (Phase 2 core) → `0458fa8` (3a compat) → `cb081c1` (normalized sessions) → `a98d4e2` (Phase 3 services+docker) → `612058d` (Phase 4 tooling).
+
+### Hátralévő (operatív, szerver + megerősítés kell)
+
+- **Phase 5 (deploy az `analytics`-ra):** `/opt/edgecalc` + `.env` (valós titkok, chmod 600) + `edgecalc` DB (§18.2) + `migrate` + `docker compose up -d --build` + `apps/web` export a caddynek + `trade.<domain>` Caddy-blokk. **Operátor futtatja** (SSH read-only/install-only szabály + secret-kezelés).
+- **Phase 4 (adat-import) ⚠ + Phase 6 (parity + cutover) ⚠ — explicit megerősítés-kötelesek.**
+- **Ledger normalizálás bekötése** (prediction_ledger tábla live) — koordinált worker+api follow-up (jelenleg blob_kv).
+- **Phase 7:** a `model` Chronos-Bolt súly bekötése (16 GB rescale után).
