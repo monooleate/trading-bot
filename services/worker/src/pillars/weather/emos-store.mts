@@ -26,6 +26,7 @@ export interface EmosResidual {
   ensStd: number;           // forecast σ (ensemble stddev or heuristic)
   obs: number | null;       // realised daily-max °C (filled from METAR after the date)
   ts: string;
+  seed?: boolean;           // B50 #5: historical-backfill residual (down-weighted; ages out)
 }
 
 interface StationEmos {
@@ -100,6 +101,39 @@ export async function reconcileEmosObs(station: string, tz: string, budget = 6):
     if (filled > 0) { refit(s); await save(station, s); }
   } catch { /* swallow */ }
   return { filled };
+}
+
+/**
+ * B50 #5: inject historical seed residuals (obs already filled) for a station and
+ * refit. Only adds dates NOT already present — never overwrites a forward-logged
+ * (production-matched) residual. Seeds are tagged + land on old dates, so they age
+ * out of the rolling window as forward pairs accumulate. Best-effort, non-throwing.
+ */
+export async function injectSeedResiduals(
+  station: string,
+  samples: Array<{ date: string; ensMean: number; ensStd: number; obs: number }>,
+): Promise<{ added: number; total: number; fitted: boolean }> {
+  try {
+    const s = await load(station);
+    const have = new Set(s.residuals.map((r) => r.date));
+    const now = new Date().toISOString();
+    let added = 0;
+    for (const smp of samples ?? []) {
+      if (!smp?.date || have.has(smp.date)) continue;
+      if (!Number.isFinite(smp.ensMean) || !Number.isFinite(smp.ensStd) || smp.ensStd < 0 || !Number.isFinite(smp.obs)) continue;
+      s.residuals.push({ date: smp.date, ensMean: smp.ensMean, ensStd: smp.ensStd, obs: smp.obs, ts: now, seed: true });
+      have.add(smp.date);
+      added++;
+    }
+    if (s.residuals.length > CAP) {
+      s.residuals = s.residuals.sort((a, b) => a.date.localeCompare(b.date)).slice(-CAP);
+    }
+    if (added > 0) refit(s);
+    await save(station, s);
+    return { added, total: s.residuals.length, fitted: !!s.params?.fitted };
+  } catch {
+    return { added: 0, total: 0, fitted: false };
+  }
 }
 
 /** Load the fitted EMOS params for a station, or null if none/insufficient data. */
