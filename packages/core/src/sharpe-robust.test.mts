@@ -86,6 +86,24 @@ const approx = (a: number, b: number, eps = 2e-3) => Math.abs(a - b) < eps;
   const dsr  = deflatedSharpe(0.35, 80, 0, 3, 20, 0.2);
   expect(dsr < psr0, t, `DSR < PSR-vs-0 (${dsr.toFixed(3)} < ${psr0.toFixed(3)})`);
   expect(dsr >= 0 && dsr <= 1, t, "DSR ∈ [0,1]");
+  // pinned reference for E[maxSR] so a coefficient swap can't pass silently
+  // (γ=0.5772, N=10, σ=1): (1−γ)·Φ⁻¹(0.9)+γ·Φ⁻¹(1−1/(10e)) ≈ 1.575 (Bailey/LdP).
+  expect(approx(expectedMaxSharpe(10, 1), 1.575, 5e-3), t, `E[maxSR](10,1)≈1.575, got ${expectedMaxSharpe(10, 1).toFixed(4)}`);
+}
+
+// ── audit fixes: DSR σ_SR fallback + degenerate PSR guard ─────────────────────
+{
+  const t = "dsr-fallback";
+  // sdSharpe≤0 must NOT collapse DSR to PSR-vs-0 — the |SR|-fraction fallback
+  // still deflates by best-of-N (audit P3).
+  const psr0 = probabilisticSharpe(0.4, 60, 0, 3, 0);
+  const dsr0 = deflatedSharpe(0.4, 60, 0, 3, 25, 0);       // degenerate σ_SR proxy
+  expect(dsr0 < psr0, t, `σ_SR=0 still deflates (${dsr0.toFixed(3)} < ${psr0.toFixed(3)})`);
+  expect(deflatedSharpe(0.4, 60, 0, 3, 1, 0) >= 0, t, "N=1 fallback stays finite");
+  // extreme skew/kurtosis making the raw variance term ≤ 0 → neutral 0.5, not a
+  // saturated ~0/~1 (audit P3).
+  const degen = probabilisticSharpe(0.6, 30, 4, 1.2, 0);   // raw term ≈ −1.38 ≤ 0
+  expect(degen === 0.5, t, `degenerate variance term → 0.5, got ${degen}`);
 }
 
 // ─── CLI report ───────────────────────────────────────────────────────────

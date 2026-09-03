@@ -97,7 +97,12 @@ export function probabilisticSharpe(
   sr: number, n: number, skew: number, kurt: number, srBenchmark = 0,
 ): number {
   if (!(n >= 2) || !Number.isFinite(sr)) return NaN;
-  const z = (sr - srBenchmark) * Math.sqrt(n - 1) / Math.sqrt(psrVarianceTerm(sr, skew, kurt));
+  // A non-positive raw variance term (extreme skew/kurtosis on a small sample)
+  // makes the floored z explode into a saturated, falsely-confident PSR. Treat
+  // that degenerate case as "no evidence" (0.5) rather than a spurious ~0/~1.
+  const rawTerm = 1 - skew * sr + ((kurt - 1) / 4) * sr * sr;
+  if (!(rawTerm > 0)) return 0.5;
+  const z = (sr - srBenchmark) * Math.sqrt(n - 1) / Math.sqrt(rawTerm);
   return normalCdf(z);
 }
 
@@ -137,6 +142,12 @@ export function deflatedSharpe(
   sr: number, n: number, skew: number, kurt: number,
   nTrials: number, sdSharpe: number,
 ): number {
-  const srStar = expectedMaxSharpe(nTrials, sdSharpe);
+  // If the caller has no usable σ_SR (e.g. a degenerate bootstrap CI on a short
+  // record collapses its proxy to 0), fall back to a conservative fraction of
+  // |SR| as the cross-trial spread — otherwise expectedMaxSharpe returns 0 and
+  // DSR silently degrades to plain PSR-vs-0, understating the multiple-trials
+  // deflation exactly when the record is small (audit P3).
+  const sd = sdSharpe > 0 ? sdSharpe : 0.5 * Math.abs(sr);
+  const srStar = expectedMaxSharpe(nTrials, sd);
   return probabilisticSharpe(sr, n, skew, kurt, srStar);
 }

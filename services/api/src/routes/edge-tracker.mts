@@ -342,6 +342,11 @@ export default async function handler(req: Request, _ctx: Context) {
     // 3. Sort chronologically
     trades.sort((a, b) => new Date(a.closedAt).getTime() - new Date(b.closedAt).getTime());
 
+    // Snapshot the unfiltered, all-category list (already loaded per `mode`)
+    // before category/day filtering — the cross-bot ENB card reuses it instead
+    // of re-loading every store, and it honours `mode` for free (audit P2).
+    const unfilteredTrades = trades.slice();
+
     // 4. Apply filters (after mock fallback so filter works on mock too)
     trades = filterByCategory(trades, category);
     trades = filterByDays(trades, days);
@@ -400,9 +405,15 @@ export default async function handler(req: Request, _ctx: Context) {
     let enb: (EnbResult & { labels?: string[] }) | null = null;
     if (!isMock) {
       try {
-        const perBot = await Promise.all(
-          STORE_SPECS.map((s) => loadTradesFromStore(s.store, s.paperKey, s.category).then((ts) => ({ cat: s.category, ts }))),
-        );
+        // Group the already-loaded (mode-aware) trades by bot — no extra store
+        // reads, and consistent with the summary's paper/live/both selection.
+        const byCat = new Map<string, ClosedTrade[]>();
+        for (const s of STORE_SPECS) byCat.set(s.category, []);
+        for (const t of unfilteredTrades) {
+          const c = t.category ?? "unknown";
+          if (byCat.has(c)) byCat.get(c)!.push(t);
+        }
+        const perBot = [...byCat.entries()].map(([cat, ts]) => ({ cat, ts }));
         const dayKey = (iso?: string) => (iso || "").slice(0, 10);
         const dateSet = new Set<string>();
         for (const b of perBot) for (const t of b.ts) { const d = dayKey(t.closedAt); if (d) dateSet.add(d); }

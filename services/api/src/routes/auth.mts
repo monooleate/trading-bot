@@ -51,10 +51,25 @@ function loginLocked(ip: string): boolean {
   if (Date.now() - e.firstAt > LOGIN_WINDOW_MS) { LOGIN_ATTEMPTS.delete(ip); return false; }
   return e.count >= MAX_LOGIN_ATTEMPTS;
 }
+// Cap the map size so header rotation (each spoofed X-Forwarded-For makes a new
+// entry) can't grow it without bound. When over the cap, drop expired entries
+// first, then — if still over — the oldest, so live throttles are kept.
+const MAX_LOGIN_ENTRIES = 10_000;
+function sweepLoginAttempts(): void {
+  if (LOGIN_ATTEMPTS.size <= MAX_LOGIN_ENTRIES) return;
+  const now = Date.now();
+  for (const [k, e] of LOGIN_ATTEMPTS) if (now - e.firstAt > LOGIN_WINDOW_MS) LOGIN_ATTEMPTS.delete(k);
+  while (LOGIN_ATTEMPTS.size > MAX_LOGIN_ENTRIES) {
+    const oldest = LOGIN_ATTEMPTS.keys().next().value;   // Map preserves insertion order
+    if (oldest === undefined) break;
+    LOGIN_ATTEMPTS.delete(oldest);
+  }
+}
 function recordLoginFail(ip: string): void {
   const e = LOGIN_ATTEMPTS.get(ip);
   if (!e || Date.now() - e.firstAt > LOGIN_WINDOW_MS) LOGIN_ATTEMPTS.set(ip, { count: 1, firstAt: Date.now() });
   else e.count++;
+  sweepLoginAttempts();
 }
 
 function getSecret(): Uint8Array {

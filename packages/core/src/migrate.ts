@@ -32,7 +32,12 @@ export async function applyMigrations(db: Db, migrations: Migration[]): Promise<
   const { rows } = await db.query<{ version: string }>("SELECT version FROM schema_migrations");
   const done = new Set(rows.map((r) => r.version));
   const applied: string[] = [];
-  const tdb: TxDb = asTxDb(db);
+  // Prefer the db's own transaction when it has one (the production `pool()`
+  // checks out a single client for BEGIN…COMMIT). asTxDb's fallback runs
+  // BEGIN/COMMIT via the Pool, where each query can land on a different client
+  // — so its "tx" is not actually atomic. Only wrap a plain Db (e.g. PGlite in
+  // tests, which is single-connection). Audit P2.
+  const tdb: TxDb = typeof (db as Partial<TxDb>).tx === "function" ? (db as TxDb) : asTxDb(db);
   for (const m of migrations) {
     if (done.has(m.version)) continue;
     // Apply the file + record the version atomically, so a mid-file failure

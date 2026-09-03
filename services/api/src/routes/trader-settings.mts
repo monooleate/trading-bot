@@ -700,14 +700,20 @@ export default async function handler(req: Request, _ctx: Context) {
       });
     }
     // B49 #3: log the knobs that actually changed as a "trial" for the DSR's
-    // honest trial count. A change = the submitted value differs from the prior
-    // stored value (a brand-new key counts as a change).
-    const changedKeys = Object.keys(v.overrides).filter((k) => {
+    // honest trial count. Compare the new PRUNED set against the old pruned set
+    // (both have defaults removed) so that re-submitting default values — e.g.
+    // re-applying a preset that sets several knobs to their defaults — does NOT
+    // inflate the trial count (audit P3). A knob reverted to its default (now
+    // absent from `pruned`) is still a real config change.
+    const changedKeys = new Set<string>();
+    for (const k of Object.keys(pruned)) {
       const before = (existing as any)[k];
-      const after = (v.overrides as any)[k];
-      return typeof after === "number" && (typeof before !== "number" || !eqNum(before, after));
-    });
-    await appendTrial(changedKeys);
+      if (typeof before !== "number" || !eqNum(before, pruned[k] as number)) changedKeys.add(k);
+    }
+    for (const k of Object.keys(existing)) {
+      if (!(k in pruned)) changedKeys.add(k);
+    }
+    await appendTrial([...changedKeys]);
     return new Response(JSON.stringify({ ok: true, overrides: pruned }), { status: 200, headers: CORS });
   }
 

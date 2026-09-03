@@ -17,7 +17,7 @@
 // Session state does NOT come through here — the session-managers use the
 // normalized session-store directly (runbook §11.1). The ledger uses @core/ledger.
 
-import type { Db } from "./db.ts";
+import type { Db, TxDb } from "./db.ts";
 import { loadSession, saveSession, type SessionMode } from "./session-store.ts";
 
 export interface BlobMetadata { [k: string]: unknown }
@@ -140,9 +140,20 @@ function dispatchingStore(db: Db, name: string): BlobStore {
       if (!r) return base.delete(key);
       // Clear the normalized rows for this (category, mode) — a base.delete on a
       // session key would no-op against blob_kv and leave state behind (audit P2).
-      await db.query("DELETE FROM pillar_open_position WHERE category = $1 AND mode = $2", [r.category, r.mode]);
-      await db.query("DELETE FROM pillar_closed_trade WHERE category = $1 AND mode = $2", [r.category, r.mode]);
-      await db.query("DELETE FROM pillar_session WHERE category = $1 AND mode = $2", [r.category, r.mode]);
+      // Run the three deletes atomically when the db exposes a transaction (the
+      // production pool does), so a mid-way failure can't leave partial state
+      // (audit P3). Falls back to sequential for a plain Db.
+      const stmts: [string, unknown[]][] = [
+        ["DELETE FROM pillar_open_position WHERE category = $1 AND mode = $2", [r.category, r.mode]],
+        ["DELETE FROM pillar_closed_trade  WHERE category = $1 AND mode = $2", [r.category, r.mode]],
+        ["DELETE FROM pillar_session       WHERE category = $1 AND mode = $2", [r.category, r.mode]],
+      ];
+      const tx = (db as Partial<TxDb>).tx;
+      if (typeof tx === "function") {
+        await tx.call(db, async (t) => { for (const [sql, p] of stmts) await t.query(sql, p); });
+      } else {
+        for (const [sql, p] of stmts) await db.query(sql, p);
+      }
     },
   };
 }

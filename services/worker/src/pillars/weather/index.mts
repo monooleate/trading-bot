@@ -252,6 +252,14 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
   let updatedSession = session;
   const results: any[] = [];
 
+  // Per-tick EMOS reconcile guard: reconcileEmosObs is per-STATION (fills past
+  // residuals + refits), not per-market — several markets share one ICAO. It
+  // also issues up to 6 METAR fetches per call, so reconciling once per unique
+  // station per tick (instead of once per market) avoids a needless network
+  // fan-out (audit P2). logForecast stays inline — it's a cheap per-(icao,date)
+  // upsert.
+  const reconciledStations = new Set<string>();
+
   // 3. Process each market
   const weatherMaxOpen = config.maxOpenPositions ?? 5;
   // Active positions only — past-reconcileAfter (pending settle) positions
@@ -366,7 +374,11 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
       // documented ensemble underdispersion. Default OFF → raw passthrough.
       await logForecast(station.icao, market.date, forecast.predictedMaxC, rawSigma);
       // Fill past-date residuals from METAR + refit (unbiased; budgeted, best-effort).
-      await reconcileEmosObs(station.icao, station.tz).catch(() => ({ filled: 0 }));
+      // Once per unique station per tick — many markets share one ICAO.
+      if (!reconciledStations.has(station.icao)) {
+        reconciledStations.add(station.icao);
+        await reconcileEmosObs(station.icao, station.tz).catch(() => ({ filled: 0 }));
+      }
       let emosMu = forecast.predictedMaxC;
       let sigma = rawSigma;
       if (config.useEmos) {
