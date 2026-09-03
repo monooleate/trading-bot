@@ -51,6 +51,12 @@ const CATEGORY_TABS: Record<string, [string, string][]> = {
     ["trader",       "Manual + Auto-Claim"],
     ["settings",     "⚙ Beállítások"],
   ],
+  // B49 UX: dedicated surface for the cross-bot "common" knobs (fill model,
+  // portfolio risk, risk overlays, OI-Δ, live-readiness, Bonferroni) so a single
+  // global value no longer appears duplicated on every bot's Settings tab.
+  global: [
+    ["settings",     "⚙ Közös beállítások"],
+  ],
 };
 
 function renderCryptoTab(tab: string, bankroll: number) {
@@ -135,6 +141,9 @@ export default function CategoryDashboard({ category }: { category: string }) {
       case "bybit":              return renderBybitTab(tab);
       case "binance":            return renderBinanceTab(tab);
       case "polymarket-manual":  return renderPolymarketManualTab(tab);
+      case "global":             return tab === "settings"
+        ? <SettingsPanel category="common" title="Közös beállítások" subtitle="Minden botra kiterjedő globális paraméterek — fill-modell · portfólió-risk · signal-toggle-ök · live-readiness" />
+        : null;
       default:                   return renderCryptoTab(tab, bankroll);
     }
   };

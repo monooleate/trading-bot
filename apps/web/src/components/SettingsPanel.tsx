@@ -185,19 +185,14 @@ export default function SettingsPanel({ category, title, subtitle }: SettingsPan
     );
   }
 
-  // Filter schema by category if requested, then group by spec.group
-  // Auto-trader categories also see the cross-trader "common" fields
-  // (e.g. live-readiness gates), so the operator can tune the
-  // live-trade lockout from any per-venue settings tab. Manual venues
-  // (bybit / binance / polymarket-manual) don't have an auto-trader,
-  // so the common gates wouldn't apply — those tabs stay focused.
-  const isAutoTraderCategory =
-    category === "crypto" || category === "weather" || category === "hyperliquid" ||
-    category === "funding-arb" || category === "sports";
+  // Filter schema by category. Each tab shows ONLY its own category's knobs.
+  // The cross-bot "common" fields (fill model, portfolio risk, risk overlays,
+  // OI-Δ, live-readiness, Bonferroni) live on their own dedicated "Közös
+  // beállítások" surface (category="common", /trade/global) — see B49 UX fix.
+  // This removes the per-bot duplication that made a single global value look
+  // like a per-bot setting.
   const visibleEntries = Object.entries(data.schema).filter(([, spec]) =>
-    category
-      ? spec.category === category || (isAutoTraderCategory && spec.category === "common")
-      : true,
+    category ? spec.category === category : true,
   );
 
   // Pick the preset bundle for this category (if any). The Loose/Normal/Strict
@@ -376,13 +371,9 @@ export default function SettingsPanel({ category, title, subtitle }: SettingsPan
 }
 
 function ReadOnlyView({ data, category }: { data: ServerResponse; category?: string }) {
-  const isAutoTraderCategory =
-    category === "crypto" || category === "weather" || category === "hyperliquid" ||
-    category === "funding-arb" || category === "sports";
+  // Each tab shows only its own category (common knobs live on /trade/global).
   const visible = Object.entries(data.schema).filter(([, spec]) =>
-    category
-      ? spec.category === category || (isAutoTraderCategory && spec.category === "common")
-      : true,
+    category ? spec.category === category : true,
   );
   const order: string[] = [];
   const grouped: Record<string, [string, FieldSpec][]> = {};

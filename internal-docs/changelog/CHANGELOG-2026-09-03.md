@@ -234,4 +234,8 @@ A user: „aztán mehetsz az 5-ös csomagra" → sorban a maradék. Két portfó
 
 `tsc` exit 0 + **35/35 teszt** + build zöld.
 
+### UX — dedikált „Közös beállítások" felület + de-dup (operátor-kérés)
+
+A user észrevette: a `common` (minden botra kiterjedő) knobok **minden bot Settings-fülén** megjelentek (duplikáció → úgy nézett ki, mintha per-bot lenne). Fix: **de-dup** — a [`SettingsPanel.tsx`](../../apps/web/src/components/SettingsPanel.tsx) szűrője (interaktív + read-only nézet) mostantól **csak a saját kategória** knobjait mutatja (a `common`-on-minden-auto-trader-fülön logika törölve); + **dedikált felület**: új `global` pseudo-kategória ([`CategoryDashboard.tsx`](../../apps/web/src/components/CategoryDashboard.tsx) + [`trade/[category].astro`](../../apps/web/src/pages/trade/[category].astro) statikus út) egyetlen „⚙ Közös beállítások" füllel, ami a `SettingsPanel category="common"`-t rendereli; + HomePage-kártya (`/trade/global/`). Így a fill-modell / portfólió-risk / risk-overlay / OI-Δ / live-readiness / Bonferroni egy helyen, egyetlen értékként állítható; a bot-specifikus knobok (weather EMOS, crypto edge-threshold, HL leverage…) a bot-füleken maradnak. `tsc` exit 0 + 35/35 teszt + build zöld (11 oldal).
+
 **🎉 B49 A-lépcső (#1–#9) TELJES:** #1 depth-aware fill · #2 crypto-béta cap · #3 PSR/MinTRL/DSR · #4 walk-forward scoring · #5 OI-Δ signal · #6 weather EMOS · #7 sports Shin de-vig · #8 vol-target/DD-kill · #9 ENB monitor. Mind pure-core + teszt + bekötés + doksi (math/18–26), default-OFF/mérés-first. **Maradó a méréshez:** a knobok élesítése + adat-gyűjtés (fill/beta/OI ON → Edge Tracker realized-IC/proper-score/walk-forward/ENB összevetés); sports odds-feed (B37); a B-lépcső Hetzner/live-precondition.

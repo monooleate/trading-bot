@@ -192,6 +192,17 @@ const CARDS: Card[] = [
     venue: "Polymarket",
     auto: "manual",
   },
+  {
+    id: "global-settings",
+    title: "Közös beállítások",
+    blurb: "Minden botra kiterjedő globális paraméterek · fill-modell · portfólió-risk · signal-toggle-ök · live-readiness",
+    icon: "⚙️",
+    href: "/trade/global/",
+    mode: "MANUAL",
+    group: "execution",
+    venue: "Global",
+    auto: "manual",
+  },
 
   // ── Analysis: /tools (csak elemzés, nincs trading itt) ──
   {
