@@ -18,6 +18,7 @@ export interface WeatherConfig {
   applyCityOffset: boolean;   // default false — see forecast-engine.mts
   forecastDays: number;       // 0 = auto-compute from target date
   useEnsemble: boolean;       // default true since 2026-05-11
+  useEmos: boolean;           // B49 #6: apply fitted per-station EMOS calibration (default false)
   // Cron-driven background runs from the scheduled wrapper.
   cronEnabled: boolean;       // default false (manual-only)
   // Skip trades where the bot's prediction disagrees with the market's
@@ -97,6 +98,11 @@ export function getWeatherConfig(): WeatherConfig {
     applyCityOffset: process.env.WEATHER_APPLY_CITY_OFFSET === "true",
     forecastDays:    parseInt(process.env.WEATHER_FORECAST_DAYS     || "0", 10),
     useEnsemble:     useEnsembleEnv === "false" ? false : true,
+    // B49 #6: apply fitted per-station EMOS/NGR calibration to (μ,σ) before the
+    // bucket-matcher. Default OFF (measure-first): the residual log always runs
+    // to gather data; the calibration is applied only when this is on AND the
+    // station has ≥20 resolved residuals.
+    useEmos:         process.env.WEATHER_USE_EMOS === "true",
     // Default ON (2026-05-14d): paper mode-ban biztonságos, math validálva.
     // A 4 bot közül csak ennek volt explicit cron-gate-je — most aszimmetria
     // megszűnt, mind a 4 default-ban tüzel. Csak `WEATHER_CRON_ENABLED=false`
@@ -141,6 +147,8 @@ export async function getEffectiveWeatherConfig(): Promise<WeatherConfig> {
       forecastDays:    ov.weatherForecastDays    ?? env.forecastDays,
       useEnsemble:     ov.weatherUseEnsemble !== undefined
         ? ov.weatherUseEnsemble >= 0.5 : env.useEnsemble,
+      useEmos:         ov.weatherUseEmos !== undefined
+        ? ov.weatherUseEmos >= 0.5 : env.useEmos,
       cronEnabled:     ov.weatherCronEnabled !== undefined
         ? ov.weatherCronEnabled >= 0.5 : env.cronEnabled,
       marketDisagreeMaxC: ov.weatherMarketDisagreeMaxC ?? env.marketDisagreeMaxC,

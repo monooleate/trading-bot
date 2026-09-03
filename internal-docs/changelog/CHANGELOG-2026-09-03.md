@@ -192,3 +192,18 @@ A user: „aztán mehetsz az 5-ös csomagra". A discovery TOP új **korrelálatl
 **Maradó (B49):** BTC-hardcode teljes leváltása (vol_div/funding a threshold-combinerben → new-strategies #3); funding cross-section percentilis (#17); window-tuning. Doksi: [`math/22-oi-delta.md`](../math/22-oi-delta.md).
 
 **B49 A-lépcső: #1–#5 ✅; hátra #6 weather EMOS, #7 sports Shin de-vig, #8 vol-target/max-DD, #9 ENB monitor.**
+
+### 63. session — B49 #6: weather EMOS/NGR kalibráció (apply default-OFF, residual-log mindig-on)
+
+A user: „aztán mehetsz az 5-ös csomagra" → #5 után #6. A weather „jó irány (forecast_edge IC +0.39), rossz sizing" gyökér-oka az ensemble-**underdispersion** (túl kicsi σ → tail-túlbizakodottság → a Kelly a legmagabiztosabb téves tétre méretez). Fix: σ-kalibráció (EMOS/NGR, Gneiting 2005).
+
+**Implementálva (mind zöld):**
+- **Pure modul** [`packages/core/src/emos.mts`](../../packages/core/src/emos.mts): `gaussianCrps` (zárt-alak CRPS), `emosApply` (μ=a+b·ensMean, σ²=c+d·ensVar, varFloor → σ-infláció), `fitEmos` (two-step OLS: átlag-regresszió + reziduál-variancia-regresszió; identity fallback <20 minta; rawCrps→calibratedCrps a nyereség-mérésre), `observationRank`. 6-csoportos [teszt](../../packages/core/src/emos.test.mts).
+- **Adat-pipeline** [`weather/emos-store.mts`](../../services/worker/src/pillars/weather/emos-store.mts): `logForecast` (minden scannelt állomás+dátum → torzításmentes), `reconcileEmosObs` (**METAR-alapú** obs-fill a lejárt residualokra + refit — NEM trade-függő → unbiased), `loadStationEmosParams`. Blobs `weather-emos`, per-állomás, cap 400.
+- **Bekötés** [`weather/index.mts`](../../services/worker/src/pillars/weather/index.mts): a `matchBucket` előtt log+reconcile MINDIG fut (adat-óra, best-effort, non-throwing); az EMOS-apply csak `config.useEmos` ON + fittelt map esetén cseréli a (μ,σ)-t. Config `useEmos` + env `WEATHER_USE_EMOS` + `weatherUseEmos` SCHEMA-knob (0/1 default 0, weather).
+
+**Fontos:** a trading-viselkedés OFF-nál **változatlan** (a bucket-matcher a nyers μ,σ-t kapja); csak a háttér-residual-logolás + METAR-reconcile fut (mint a prediction-ledger — a point-in-time forecast/obs pár nem rekonstruálható később, ezért indul most). Élesítés: `weatherUseEmos=1` + ≥20 feloldott residual/állomás után; a fit `rawCrps→calibratedCrps` + a #4 walk-forward mutatja a nyereséget.
+
+**Maradó (B49):** full CRPS-minimum estimation; rank-histogram az Edge Trackerre; per-évszak fit; Open-Meteo multi-model blend. Kötődik B15/B35/B40. Doksi: [`math/23-emos.md`](../math/23-emos.md).
+
+**B49 A-lépcső: #1–#6 ✅; hátra #7 sports Shin de-vig, #8 vol-target/max-DD, #9 ENB monitor.**

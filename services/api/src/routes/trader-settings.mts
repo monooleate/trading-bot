@@ -179,6 +179,9 @@ const SCHEMA: Record<string, FieldSpec> = {
   // viselkedés; 0.5 = fele méret (AKTÍV default 2026-09-01). Párosítsd az
   // alacsony maxPositionUSD-vel a downside cappeléséhez.
   weatherKellyScale:         { default: 0.5,  min: 0.1, max: 1.0, label: "Kelly de-risk scale (B35)", step: 0.05, unit: "ratio", category: "weather", group: "Risk & sizing", help: "A weather végső ¼-Kelly frakcióját szorzó de-risk faktor. A weather irány jó (forecast_edge IC +0.317), de a payoff 0.44 (kis nyerő / nagy vesztő) miatt a méretezés vérzik. 1.0 = régi méret; 0.5 = fele méret (default) → korlátozza a downside-t amíg az edge több trade-en validálódik. Kockázat-csökkentő, nem alfa-fix." },
+  // B49 #6: EMOS/NGR per-station kalibráció. A residual-log MINDIG fut (adatgyűjtés);
+  // ez a knob csak azt kapcsolja, hogy a fittelt (μ,σ) alkalmazódik-e a bucket-matcher előtt.
+  weatherUseEmos:            { default: 0,    min: 0,   max: 1,   label: "EMOS calibration (B49 #6)", step: 1, unit: "bool", category: "weather", group: "Risk & sizing", help: "ON: a fittelt per-állomás EMOS/NGR kalibráció (μ=a+b·ensMean, σ²=c+d·ensVar) alkalmazódik a bucket-matcher előtt — a σ-infláció javítja a dokumentált ensemble-underdispersion-t (jó irány, rossz sizing). Csak akkor hat, ha az állomásnak van ≥20 feloldott residualja. OFF (default): a nyers ensemble (μ,σ) megy tovább, de a residual-log fut a kalibrációhoz. Mérés-first: a CRPS-javulást az állomás-fit rawCrps→calibratedCrps mutatja." },
   // ─── Tier 1 (32. session) belső konstansok expose-olva ──────────────
   // A Black-Scholes vol_divergence + collinearity matrix + Bonferroni IC
   // threshold számára. Default = a Tier 1 hardcoded értékei, vagyis a

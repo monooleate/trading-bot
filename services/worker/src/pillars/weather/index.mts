@@ -9,6 +9,8 @@ import { getStation, getSeason } from "./station-config.mts";
 import { getForecast } from "./forecast-engine.mts";
 import { detectModelLag } from "./model-lag-detector.mts";
 import { matchBucket, marketConsensusModalTempC } from "./bucket-matcher.mts";
+import { logForecast, loadStationEmosParams, reconcileEmosObs } from "./emos-store.mts";
+import { emosApply } from "@core/emos.mts";
 import { makeWeatherDecision, getWeatherConfig, padWeatherGates } from "./decision-engine.mts";
 import type { WeatherTradeDecision, WeatherConfig } from "./decision-engine.mts";
 import { placeBuyOrder } from "../crypto/execution.mts";
@@ -352,11 +354,30 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
       // accidentally clustering into a tight σ doesn't mean the true
       // forecast skill is sub-half-a-degree).
       const ensembleSigma = forecast.ensembleDetail?.dailyMaxStdDev;
-      const sigma =
+      const rawSigma =
         typeof ensembleSigma === "number" && Number.isFinite(ensembleSigma) && ensembleSigma > 0
           ? Math.max(0.5, ensembleSigma)
           : (forecast.cloudCoverPct > 60 ? 1.5 : 1.0);
-      const match = matchBucket(forecast.predictedMaxC, market.outcomes, sigma);
+
+      // B49 #6: log the (raw forecast μ, σ) for EMOS calibration — starts the
+      // per-station data clock (point-in-time; can't be reconstructed later).
+      // Then, when EMOS is enabled AND the station has a fitted map, replace
+      // (μ,σ) with the calibrated Gaussian — the σ-inflation fixes the
+      // documented ensemble underdispersion. Default OFF → raw passthrough.
+      await logForecast(station.icao, market.date, forecast.predictedMaxC, rawSigma);
+      // Fill past-date residuals from METAR + refit (unbiased; budgeted, best-effort).
+      await reconcileEmosObs(station.icao, station.tz).catch(() => ({ filled: 0 }));
+      let emosMu = forecast.predictedMaxC;
+      let sigma = rawSigma;
+      if (config.useEmos) {
+        const params = await loadStationEmosParams(station.icao);
+        if (params?.fitted) {
+          const cal = emosApply(params, forecast.predictedMaxC, rawSigma, params.varFloor);
+          emosMu = cal.mu;
+          sigma = cal.sigma;
+        }
+      }
+      const match = matchBucket(emosMu, market.outcomes, sigma);
       if (!match) {
         results.push({
           market: market.slug, city: market.city, action: "skip", reason: "No matching bucket",
