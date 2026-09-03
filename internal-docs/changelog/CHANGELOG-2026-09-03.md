@@ -177,3 +177,18 @@ A user: „menj tovább a #4-el". A #3 párja — a validációs réteg másik f
 **Maradó (B49):** purge/embargo korrelált klaszterekre; anchored-fit walk-forward a #2 Platt-kalibrációval; per-kategória UI-bontás. Doksi: [`math/21-walk-forward.md`](../math/21-walk-forward.md).
 
 **B49 A-lépcső állás:** #1 ✅ · #2 ✅ · #3 ✅ · #4 ✅ — hátra: #5 OI-Δ signal, #6 weather EMOS, #7 sports Shin de-vig, #8 vol-target/max-DD, #9 ENB monitor.
+
+### 62. session — B49 #5: OI-Δ × price signal (a 9. combiner-signal, default-OFF)
+
+A user: „aztán mehetsz az 5-ös csomagra". A discovery TOP új **korrelálatlan** signalja: az open-interest változása × ármozgás (leverage-flow kvadráns) — ortogonális az orderflow-val (pozíció-életciklus vs passzív könyv), natívan multi-coin.
+
+**Implementálva (mind zöld):**
+- **Pure modul** [`packages/core/src/oi-delta.mts`](../../packages/core/src/oi-delta.mts): `classifyOiQuadrant` (fresh_longs/short_covering/fresh_shorts/long_unwind/neutral) + `oiDeltaProb` (emelkedő OI megerősíti a mozgást → teljes tilt; csökkenő OI gyengíti → `confDampen` 0.3×; clamp [0.05,0.95]). 5-csoportos [teszt](../../packages/core/src/oi-delta.test.mts).
+- **Combiner-bekötés** ([signal-combiner.mts](../../services/api/src/routes/signal-combiner.mts)): `parseCoinSymbol` (multi-coin: BTC/ETH/SOL/XRP/DOGE/AVAX/BNB), `getOiDeltaSignal` (Binance `openInterestHist` 5m×7 + `klines` → oiChange/priceReturn → oiDeltaProb; knob-gate `oiDeltaEnabled` → **null OFF-nál → combine elejti → 8-signal output bit-azonos**), `SIGNAL_ICS.oi_delta=0.07`, **K_BLIND_SIGNALS** bővítés (strike-blind → threshold-downweight), `raw_signals.oi_delta`, `SignalBreakdown.oi_delta?` opcionális ([types.mts](../../packages/core/src/types.mts)).
+- **Knob:** `oiDeltaEnabled` (0/1 default 0, common/„Signal toggles"). Settings-only.
+
+**Anti-overfit tiszteletben tartva:** a `new-strategies.md` szabálya szerint a combiner nem nő live-ban 200 trade előtt → default-OFF, measure-first. Élesítés: knob ON → Edge Tracker realized-IC + #4 walk-forward igazolja a korrelálatlan edge-et.
+
+**Maradó (B49):** BTC-hardcode teljes leváltása (vol_div/funding a threshold-combinerben → new-strategies #3); funding cross-section percentilis (#17); window-tuning. Doksi: [`math/22-oi-delta.md`](../math/22-oi-delta.md).
+
+**B49 A-lépcső: #1–#5 ✅; hátra #6 weather EMOS, #7 sports Shin de-vig, #8 vol-target/max-DD, #9 ENB monitor.**

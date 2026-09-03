@@ -20,6 +20,8 @@ import { harRvSigma, type OHLC } from "@core/har-rv.mts";
 import { oneTouchProbability, classifyBarrierMarket } from "@core/first-passage.mts";
 // #7 Deribit risk-neutral density (Breeden–Litzenberger). Default-off σ/prob source.
 import { blDigitalAbove, type SmilePoint } from "@core/deribit-rnd.mts";
+// B49 #5 OI-Δ × price signal (pure math). Default-off; strike-blind (K_BLIND).
+import { oiDeltaProb, classifyOiQuadrant } from "@core/oi-delta.mts";
 
 const CORS = {
   "Access-Control-Allow-Origin":  "*",
@@ -41,6 +43,7 @@ const SIGNAL_ICS: Record<string, number> = {
   momentum:       0.06,  // Kakushadze 3.1: price momentum (Jegadeesh & Titman 1993)
   contrarian:     0.05,  // Kakushadze 10.3: mean-reversion vs market index (Wang & Yu 2004)
   pairs_spread:   0.07,  // Kakushadze 3.8: pairs Z-score on related markets
+  oi_delta:       0.07,  // B49 #5: open-interest change × price (leverage-flow); measure-first
 };
 
 // ─── Market info type ─────────────────────────────────────────────────────────
@@ -1067,6 +1070,72 @@ async function getFundingSignal(): Promise<{ prob: number | null; detail: any }>
   return { prob, detail: { funding_rate: (rate * 100).toFixed(4) + "%", source } };
 }
 
+// ─── OI-Δ × price signal (B49 #5) ─────────────────────────────────────────────
+// Open-interest change × price move → leverage-flow quadrant (see @core/oi-delta).
+// Default-OFF (anti-overfit: the combiner does not grow live until measured) — the
+// signal returns null unless `oiDeltaEnabled=1`, so combine() drops it and the
+// existing 8-signal output is bit-identical. Natively multi-coin: the coin is
+// parsed from the market so BTC/ETH/SOL/… all get their own OI feed.
+async function loadOiDeltaEnabled(): Promise<boolean> {
+  try {
+    const mod: any = await import("./trader-settings.mts");
+    const ov = await mod.loadRuntimeOverrides();
+    return ov.oiDeltaEnabled === 1;
+  } catch { return false; }
+}
+
+function parseCoinSymbol(m: MarketInfo): string | null {
+  const s = `${m.slug ?? ""} ${m.question ?? ""}`.toLowerCase();
+  if (/\b(bitcoin|btc)\b/.test(s))    return "BTCUSDT";
+  if (/\b(ethereum|eth)\b/.test(s))   return "ETHUSDT";
+  if (/\b(solana|sol)\b/.test(s))     return "SOLUSDT";
+  if (/\b(ripple|xrp)\b/.test(s))     return "XRPUSDT";
+  if (/\b(dogecoin|doge)\b/.test(s))  return "DOGEUSDT";
+  if (/\b(avalanche|avax)\b/.test(s)) return "AVAXUSDT";
+  if (/\b(bnb)\b/.test(s))            return "BNBUSDT";
+  return null;
+}
+
+async function getOiDeltaSignal(market: MarketInfo): Promise<{ prob: number | null; detail: any }> {
+  if (!(await loadOiDeltaEnabled())) return { prob: null, detail: { disabled: true } };
+  const symbol = parseCoinSymbol(market);
+  if (!symbol) return { prob: null, detail: { error: "coin not identified" } };
+  try {
+    const period = "5m", limit = 7;   // ~30-min window
+    const [oiRes, klRes] = await Promise.all([
+      fetch(`https://fapi.binance.com/futures/data/openInterestHist?symbol=${symbol}&period=${period}&limit=${limit}`, { signal: AbortSignal.timeout(5000) }),
+      fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${period}&limit=${limit}`, { signal: AbortSignal.timeout(5000) }),
+    ]);
+    if (!oiRes.ok || !klRes.ok) return { prob: null, detail: { error: "fetch failed" } };
+    const oiArr = await oiRes.json() as any[];
+    const klArr = await klRes.json() as any[];
+    if (!Array.isArray(oiArr) || oiArr.length < 2 || !Array.isArray(klArr) || klArr.length < 2) {
+      return { prob: null, detail: { error: "insufficient data" } };
+    }
+    const oi0 = parseFloat(oiArr[0].sumOpenInterest);
+    const oiN = parseFloat(oiArr[oiArr.length - 1].sumOpenInterest);
+    const p0 = parseFloat(klArr[0][4]);                 // close of oldest bar
+    const pN = parseFloat(klArr[klArr.length - 1][4]);  // close of latest bar
+    if (!(oi0 > 0) || !(p0 > 0) || !Number.isFinite(oiN) || !Number.isFinite(pN)) {
+      return { prob: null, detail: { error: "bad data" } };
+    }
+    const oiChange = (oiN - oi0) / oi0;
+    const priceReturn = (pN - p0) / p0;
+    const prob = oiDeltaProb(priceReturn, oiChange);
+    return {
+      prob: Number.isFinite(prob) ? prob : null,
+      detail: {
+        symbol,
+        priceReturnPct: (priceReturn * 100).toFixed(2) + "%",
+        oiChangePct: (oiChange * 100).toFixed(2) + "%",
+        quadrant: classifyOiQuadrant(priceReturn, oiChange),
+      },
+    };
+  } catch {
+    return { prob: null, detail: { error: "exception" } };
+  }
+}
+
 // ─── 6. MOMENTUM SIGNAL (Kakushadze 3.1: Price Momentum) ──────────────────────
 // "future returns are positively correlated with past returns"
 // Rcum = (P_now - P_past) / P_past → short-term directional bias
@@ -1323,6 +1392,7 @@ const K_BLIND_SIGNALS = new Set([
   "contrarian",
   "funding_rate",
   "pairs_spread",
+  "oi_delta",     // B49 #5: underlying leverage-flow, strike-blind → downweight on threshold markets
 ]);
 
 type MarketKind = "threshold" | "directional";
@@ -1612,7 +1682,7 @@ export default async function handler(req: Request, _ctx: Context) {
       ? Promise.resolve(null)
       : analyseResolutionRisk(riskMeta).catch(() => null);
 
-    const [vol, flow, apex, cond, fund, mom, contr, pairs, risk] = await Promise.all([
+    const [vol, flow, apex, cond, fund, mom, contr, pairs, oiDelta, risk] = await Promise.all([
       getVolSignal(market, volOptions),
       getOrderflowSignal(market),
       getApexSignal(market),
@@ -1621,6 +1691,7 @@ export default async function handler(req: Request, _ctx: Context) {
       getMomentumSignal(market),
       getContrarianSignal(market),
       getPairsSpreadSignal(market),
+      getOiDeltaSignal(market),   // B49 #5 — null unless oiDeltaEnabled=1 → dropped by combine()
       riskTask,
     ]);
 
@@ -1633,6 +1704,7 @@ export default async function handler(req: Request, _ctx: Context) {
       momentum:       mom.prob,
       contrarian:     contr.prob,
       pairs_spread:   pairs.prob,
+      oi_delta:       oiDelta.prob,
     };
 
     // Optional realized-IC blend. Off by default — operator opts in via

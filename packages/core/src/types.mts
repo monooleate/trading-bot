@@ -35,6 +35,9 @@ export interface SignalBreakdown {
   momentum: number | null;        // 0–1 score (Kakushadze 3.1, price momentum)
   contrarian: number | null;      // 0–1 score (Kakushadze 10.3, mean-reversion)
   pairs_spread: number | null;    // 0–1 score (Kakushadze 3.8, pairs Z-score)
+  // OI-Δ × price signal (B49 #5) — leverage-flow quadrant, default-OFF.
+  // Optional so pre-#5 producers/records stay valid. Null when disabled/absent.
+  oi_delta?: number | null;       // 0–1 score (open-interest change × price move)
   // Forecast-vs-market edge for prediction-driven bots without the 8-signal
   // combiner (weather, future). Stored as `predictedProb − marketPriceAtEntry`
   // so the live-readiness IC gate can measure forecast skill without

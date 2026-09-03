@@ -133,6 +133,11 @@ const SCHEMA: Record<string, FieldSpec> = {
   // korrelált BTC-pozícióvá álljon össze (barbell-kockázat). Default OFF.
   betaCapEnabled:  { default: 0,   min: 0,    max: 1,   label: "Crypto-beta exposure cap", step: 1,    unit: "bool", category: "common", group: "Portfolio risk", help: "ON: a crypto + HL directional botok EGYÜTTES lekötött crypto-tőkéje nem lépheti túl a kombinált bankroll `fraction`-jét — a bot skippel egy új belépőt, ami átlépné. Megvédi a portfóliót attól, hogy egy BTC-mozgás egyszerre üsse a crypto longokat ÉS a HL longokat. OFF (default): nincs aggregát cap (a per-bot 8% marad)." },
   betaCapFraction: { default: 0.25, min: 0.05, max: 1.0, label: "Crypto-beta cap fraction",  step: 0.01, unit: "frac", category: "common", group: "Portfolio risk", help: "A kombinált (crypto + HL) bankroll hányada, amennyi crypto-directional tőke egyszerre lekötve lehet. 0.25 = 25%. A discovery ~15-20%-ot javasol; 0.25 óvatosan generózus. Csak akkor hat, ha a cap ON." },
+  // ─── OI-Δ × price signal (model-discovery-expansion §4.D / B49 #5) ──
+  // Új, korrelálatlan signal: a nyílt kamat (open interest) változása × az ármozgás
+  // (leverage-flow kvadráns). Default OFF (anti-overfit: a combiner nem nő live-ban
+  // mérés előtt) → a signal null-t ad, a combiner elejti, a 8-signal output bit-azonos.
+  oiDeltaEnabled: { default: 0, min: 0, max: 1, label: "OI-Δ signal (open interest × price)", step: 1, unit: "bool", category: "common", group: "Signal toggles", help: "ON: a combiner 9. signalként beveszi az OI-Δ × ár leverage-flow kvadránst (ár↑+OI↑=friss longok/trend, ár↑+OI↓=short-cover/gyenge, stb.). Korrelálatlan az orderflow-val (pozíció-életciklus vs passzív könyv), natívan multi-coin (BTC/ETH/SOL…). Binance OI+kline feed. OFF (default): a régi 8-signal output változatlan. Mérés-first: kapcsold ON, hasonlítsd az Edge Tracker realized-IC-jét, majd döntsd el." },
   // ─── Paper "never stop" safety valve (2026-09-01) ───────────────
   // PAPER módban felülírja az AUTOMATIKUS loss-alapú leállásokat (session
   // loss limit, HL consecutive-loss pause, calibration noise), és minden
