@@ -207,3 +207,19 @@ A user: „aztán mehetsz az 5-ös csomagra" → #5 után #6. A weather „jó i
 **Maradó (B49):** full CRPS-minimum estimation; rank-histogram az Edge Trackerre; per-évszak fit; Open-Meteo multi-model blend. Kötődik B15/B35/B40. Doksi: [`math/23-emos.md`](../math/23-emos.md).
 
 **B49 A-lépcső: #1–#6 ✅; hátra #7 sports Shin de-vig, #8 vol-target/max-DD, #9 ENB monitor.**
+
+### 64. session — B49 #7: sports Shin de-vig (a legjobb FLB-kalibráció; a matek kész, az odds-feed a maradó adat-task)
+
+A user: „aztán mehetsz az 5-ös csomagra" → sorban #7. A sports „fair value" fabrikált (a PM-árat 0.5 felé húzza → megőrzi a favorite-longshot bias-t → ~90% bukás). A sports-kutatás szerint a **Shin** a legjobban kalibrált de-vig (Štrumbelj 2014); a multiplicative a legrosszabb (FLB-t őriz).
+
+**Implementálva (mind zöld):**
+- **`devigShin`** a meglévő [`packages/core/src/devig.mts`](../../packages/core/src/devig.mts)-ben: insider-frakció z modell, `p_i(z) = [√(z²+4(1−z)·q_i²/B) − z]/(2(1−z))`, bisekció z-re (Σp=1); fallback power-re, ha nincs margin/gyök. `DevigMethod += "shin"`, `twoWayFairYes(...,"shin")`.
+- **Teszt:** a [devig.test.mts](../../packages/core/src/devig.test.mts) Shin-blokkal (összeg=1, no-vig fallback 50/50, FLB-korrekció favorite>multiplicative, 3-way, heavy-fav).
+
+**A fogyasztó kész, a termelő hiányzik:** a [sports/decision-engine.mts](../../services/worker/src/pillars/sports/decision-engine.mts) már használja a `market.pinnacleFairYes`-t (`sportsUsePinnacle` knob) a #9 óta — de **semmi nem tölti fel** (nincs odds-feed). Ezért a #7 kód-része a Shin-matek; a **live tüzeléshez a B37 adat-task kell**: the-odds-api (`region=eu`=Pinnacle, `ODDS_API_KEY`, $30/hó) + Polymarket↔Pinnacle **event-matching** (a nehéz 80%) → `twoWayFairYes(...,"shin")` → `pinnacleFairYes`. Ez külső kulcsot + matching-motort igényel → nem tesztelhető live nélkül, ezért adat-taskként tracked (B37/B44).
+
+**Skeptikus:** a de-viggelt Pinnacle-close a marginig hatékony → nincs residual edge Pinnacle ellen; az edge csak a laggos PM-ár rése (szűk, likviditás-cap). A Shin megállítja a ~90% vérzést, de nem gyárt nagy edge-t. Amíg az odds-feed nincs, a sports maradjon leállítva.
+
+**Maradó (B49/B37/B44):** odds-feed + event-matching; CLV-KPI; NO-oldali leg-mismatch + fee-parity; freshness-gate. Doksi: [`math/24-sports-devig.md`](../math/24-sports-devig.md).
+
+**B49 A-lépcső: #1–#7 ✅ (a #7 matek-kész, odds-feed-gated); hátra #8 vol-target/max-DD, #9 ENB monitor.**

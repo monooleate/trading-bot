@@ -17,8 +17,8 @@
 //   • Power: find k with Σ q_i^k = 1, then p_i = q_i^k. Corrects favorite-longshot
 //     bias (longshots over-bet → their true prob is lower than implied) better
 //     than multiplicative.
-//   • Shin (insider-trading model) is the theoretical best for FLB but needs an
-//     iterative solve — a follow-up; power captures most of the benefit.
+//   • Shin (insider-trading model): the academically best-calibrated method for
+//     FLB (Štrumbelj 2014). Iterative solve for the insider fraction z. B49 #7.
 
 /** Raw implied probabilities q_i = 1/odds_i from decimal odds. NaN for odds ≤ 1. */
 export function impliedFromDecimal(odds: number[]): number[] {
@@ -63,7 +63,39 @@ export function devigPower(odds: number[]): number[] {
   return q.map((x) => (Number.isFinite(x) ? Math.pow(x, k) : NaN));
 }
 
-export type DevigMethod = "multiplicative" | "power";
+/**
+ * Shin (1992/93) de-vig: models the odds as reflecting a fraction z of
+ * insider/informed traders, and inverts to the true probabilities. The
+ * academically best-calibrated method for favorite-longshot bias (Štrumbelj
+ * 2014). For raw implied b_i = 1/odds_i with booksum B = Σ b_i:
+ *   p_i(z) = [ √(z² + 4(1−z)·b_i²/B) − z ] / (2(1−z))
+ * Solve z ∈ (0,1) so Σ p_i = 1 (bisection; Σ p_i(0) = √B > 1 and decreases in z).
+ * Falls back to power when the book has no margin (B ≤ 1), < 2 legs, or z does
+ * not bracket a root. Pure.
+ */
+export function devigShin(odds: number[]): number[] {
+  const q = impliedFromDecimal(odds);
+  const valid = q.filter((x) => Number.isFinite(x)) as number[];
+  const B = valid.reduce((s, x) => s + x, 0);
+  if (valid.length < 2 || B <= 1) return devigPower(odds);
+
+  const pForB = (b: number, z: number) =>
+    (Math.sqrt(z * z + 4 * (1 - z) * (b * b) / B) - z) / (2 * (1 - z));
+  const g = (z: number) => q.reduce((s, x) => s + (Number.isFinite(x) ? pForB(x, z) : 0), 0) - 1;
+
+  // g(0) = √B − 1 > 0; g decreases in z. If g(hi) is still > 0, no root → fallback.
+  const hi0 = 0.999;
+  if (g(hi0) > 0) return devigPower(odds);
+  let lo = 0, hi = hi0;
+  for (let i = 0; i < 100; i++) {
+    const mid = (lo + hi) / 2;
+    if (g(mid) > 0) lo = mid; else hi = mid;
+  }
+  const z = (lo + hi) / 2;
+  return q.map((x) => (Number.isFinite(x) ? pForB(x, z) : NaN));
+}
+
+export type DevigMethod = "multiplicative" | "power" | "shin";
 
 /**
  * Fair YES probability for a binary (2-way) market from the two decimal odds,
@@ -77,9 +109,11 @@ export function twoWayFairYes(
   method: DevigMethod = "multiplicative",
 ): number {
   if (!(oddsYes > 1) || !(oddsNo > 1)) return NaN;
-  const p = method === "power"
-    ? devigPower([oddsYes, oddsNo])
-    : devigMultiplicative([oddsYes, oddsNo]);
+  const p = method === "shin"
+    ? devigShin([oddsYes, oddsNo])
+    : method === "power"
+      ? devigPower([oddsYes, oddsNo])
+      : devigMultiplicative([oddsYes, oddsNo]);
   return Number.isFinite(p[0]) ? p[0] : NaN;
 }
 

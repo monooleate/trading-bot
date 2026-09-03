@@ -11,6 +11,7 @@ import {
   overround,
   devigMultiplicative,
   devigPower,
+  devigShin,
   twoWayFairYes,
   americanToDecimal,
 } from "./devig.mts";
@@ -64,11 +65,34 @@ const sum = (a: number[]) => a.reduce((s, x) => s + x, 0);
   expect(p[0] < 0.7, t, "favorite stays sane");
 }
 
+// ── Shin de-vig (B49 #7): sums to 1, no-vig fallback, FLB correction ─────────
+{
+  const t = "shin";
+  // No positive margin → falls back (2.0/2.0 → 50/50).
+  const s0 = devigShin([2.0, 2.0]);
+  expect(approx(s0[0], 0.5) && approx(s0[1], 0.5), t, `no-vig → 50/50, got ${s0}`);
+  // With vig: sums to 1.
+  const s = devigShin([1.5, 2.5]);
+  expect(approx(sum(s), 1, 2e-3), t, `shin sums to 1, got ${sum(s).toFixed(4)}`);
+  // FLB correction: Shin gives the favorite MORE than naive multiplicative
+  // (longshots over-bet → shrunk), like power.
+  const m = devigMultiplicative([1.5, 2.5]);
+  expect(s[0] > m[0], t, `shin favorite(${s[0].toFixed(4)}) > multiplicative(${m[0].toFixed(4)})`);
+  expect(s[0] > 0.5 && s[0] < 0.7, t, "shin favorite sane");
+  // 3-way book sums to 1.
+  const s3 = devigShin([2.1, 3.4, 3.9]);
+  expect(approx(sum(s3.filter(Number.isFinite)), 1, 3e-3), t, `3-way shin sums to 1, got ${sum(s3).toFixed(4)}`);
+  // Heavy-longshot correction is monotone with power in the same direction.
+  const sHF = devigShin([1.1, 8.0]);
+  expect(sHF[0] > 0.85, t, `heavy fav shin high, got ${sHF[0].toFixed(3)}`);
+}
+
 // ── twoWayFairYes convenience ───────────────────────────────────────────────
 {
   const t = "twoWay";
   expect(approx(twoWayFairYes(1.5, 2.5), 0.625), t, `2-way YES = 0.625, got ${twoWayFairYes(1.5, 2.5)}`);
   expect(twoWayFairYes(1.5, 2.5, "power") > 0.625, t, "power route > multiplicative");
+  expect(twoWayFairYes(1.5, 2.5, "shin") > 0.625, t, "shin route > multiplicative");
   // Heavy favorite.
   expect(twoWayFairYes(1.1, 8.0) > 0.85, t, `heavy fav YES high, got ${twoWayFairYes(1.1, 8.0).toFixed(3)}`);
 }
