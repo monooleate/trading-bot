@@ -17,6 +17,7 @@ import type { Context } from "@netlify/functions";
 import { getStore } from "@netlify/blobs";
 import { checkAuth } from "./_auth-guard.ts";
 import { CORS, getTraderConfig, getBtcExitConfig } from "@worker/pillars/shared/config.mts";
+import { effectiveTrialCount } from "@core/trial-cluster.mts";
 
 const STORE_NAME = "trader-settings";
 const KEY = "runtime-overrides-v1";
@@ -577,16 +578,33 @@ export async function appendTrial(changedKeys: string[]): Promise<void> {
   } catch { /* non-fatal */ }
 }
 
-export async function countTrials(): Promise<number> {
+async function loadTrialLog(): Promise<Array<{ ts: string; keys: string[] }>> {
   try {
     const store = getStore(TRIALS_STORE);
     const raw = await store.get(TRIALS_KEY);
-    if (!raw) return 0;
+    if (!raw) return [];
     const log = JSON.parse(raw as string);
-    return Array.isArray(log) ? log.length : 0;
+    return Array.isArray(log) ? log : [];
   } catch {
-    return 0;
+    return [];
   }
+}
+
+export async function countTrials(): Promise<number> {
+  return (await loadTrialLog()).length;
+}
+
+/**
+ * B50 #3: effective trial count for the DSR. Clusters near-duplicate knob tweaks
+ * (same knob-set) so a Sharpe is deflated by the trials the config search
+ * ACTUALLY explored, not the raw log length. Returns both so callers/UI can show
+ * the correction. `effective ≤ literal`.
+ */
+export async function effectiveTrials(threshold = 0.5): Promise<{ literal: number; effective: number }> {
+  const log = await loadTrialLog();
+  const literal = log.length;
+  const effective = literal === 0 ? 0 : effectiveTrialCount(log, threshold);
+  return { literal, effective };
 }
 
 // ─── HTTP handler ─────────────────────────────────────────────────────

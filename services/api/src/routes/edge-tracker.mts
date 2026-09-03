@@ -410,7 +410,10 @@ export default async function handler(req: Request, _ctx: Context) {
     // PnL. Reuses summary/properScores/walkForward already computed above.
     let promotionGate: PromotionGateResult | null = null;
     try {
-      const nTrials = await (await import("./trader-settings.mts")).countTrials();
+      // B50 #3: deflate by the EFFECTIVE (clustered) trial count — near-duplicate
+      // knob tweaks collapse, so the DSR benchmark reflects the trials the config
+      // search actually explored, not the raw log length.
+      const { effective: nTrials } = await (await import("./trader-settings.mts")).effectiveTrials();
       // σ_SR proxy from the bootstrap CI half-width (same approach live-readiness
       // uses); deflatedSharpe falls back internally if this collapses to 0.
       const sdProxy = (summary.sharpeCiHi - summary.sharpeCiLo) / (2 * 1.959963985);

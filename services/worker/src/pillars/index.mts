@@ -337,7 +337,10 @@ async function runCryptoTrader(
     for (const k of ["liveReadyMinTrades", "liveReadyMinWinRate", "liveReadyMinIC", "liveReadyMaxCalibDev", "liveReadyMinSharpe", "liveReadyMaxDrawdownPct", "liveReadyOverrideEnabled", "liveReadyMinPsr", "liveReadyUseMinTrl", "bonferroniAlpha", "bonferroniGoodMultiplier", "icHalfLifeTrades"]) {
       if (typeof ov[k] === "number") readyOv[k] = ov[k];
     }
-    if (typeof mod.countTrials === "function") trialsCount = Math.max(1, await mod.countTrials());
+    // B50 #3: deflate by the EFFECTIVE trial count (near-duplicate knob tweaks
+    // clustered), not the raw log length. Fall back to the literal count.
+    if (typeof mod.effectiveTrials === "function") trialsCount = Math.max(1, (await mod.effectiveTrials()).effective);
+    else if (typeof mod.countTrials === "function") trialsCount = Math.max(1, await mod.countTrials());
   } catch {}
   let session = await loadSession(config.paperMode, DEFAULT_BANKROLL);
 
@@ -1000,7 +1003,9 @@ async function getStatus(config: ReturnType<typeof getTraderConfig>, category: s
   try {
     const mod: any = await import("@api/routes/trader-settings.mts");
     readyOv = (await mod.loadRuntimeOverrides()) ?? {};
-    if (typeof mod.countTrials === "function") statusTrials = Math.max(1, await mod.countTrials());
+    // B50 #3: effective (clustered) trial count for the DSR; literal fallback.
+    if (typeof mod.effectiveTrials === "function") statusTrials = Math.max(1, (await mod.effectiveTrials()).effective);
+    else if (typeof mod.countTrials === "function") statusTrials = Math.max(1, await mod.countTrials());
   } catch {}
   const thresholds = {
     minTrades:         readyOv.liveReadyMinTrades,
