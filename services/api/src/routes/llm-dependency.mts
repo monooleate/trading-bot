@@ -4,7 +4,7 @@
 // GET  /.netlify/functions/llm-dependency?action=scan ← auto-scan top pairs
 //
 // Claude API alapú logikai függőség detektor.
-// A cikk módszertana: DeepSeek-R1 két piac leírását kapja, JSON-ban
+// A cikk módszertana: egy LLM két piac leírását kapja, JSON-ban
 // visszaadja a valid outcome kombinációkat és a függőség típusát.
 //
 // Ha N × M -nél kevesebb valid kombináció van → függőség → arbitrázs lehetőség
@@ -21,6 +21,9 @@ const CORS = {
 
 const GAMMA     = "https://gamma-api.polymarket.com";
 const CACHE_TTL = 30 * 60 * 1000; // 30 perc (LLM hívás drága)
+// Aktív modell — env-felülírható, hogy egy jövőbeli kivezetés csak konfig-váltás
+// legyen. Default: claude-sonnet-4-6 (a retired claude-sonnet-4-20250514 pótlása).
+const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6";
 
 // ─── Claude API hívás ─────────────────────────────────────────────────────────
 async function callClaude(prompt: string): Promise<string> {
@@ -32,7 +35,7 @@ async function callClaude(prompt: string): Promise<string> {
       "x-api-key":            process.env.ANTHROPIC_API_KEY || "",
     },
     body: JSON.stringify({
-      model:      "claude-sonnet-4-20250514",
+      model:      ANTHROPIC_MODEL,
       max_tokens: 800,
       messages:   [{ role: "user", content: prompt }],
     }),

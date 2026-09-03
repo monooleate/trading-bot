@@ -6,6 +6,7 @@
 // never enable futures or withdrawal. Keys come from env, never from code.
 
 import type { HlCoin } from "../types.mts";
+import { fetchWithRetry } from "@core/fetch-retry.mts";
 
 export interface HedgeOrderResult {
   ok:         boolean;
@@ -52,9 +53,10 @@ async function ensureLotSizeCache(): Promise<void> {
     // Filter to just the symbols we trade so the response stays small.
     const symbols = Object.values(BINANCE_SPOT_SYMBOL);
     const param = encodeURIComponent(JSON.stringify(symbols));
-    const r = await fetch(
+    const r = await fetchWithRetry(
       `https://api.binance.com/api/v3/exchangeInfo?symbols=${param}`,
-      { signal: AbortSignal.timeout(6000) },
+      {},
+      { timeoutMs: 6000 },   // read → full 429/5xx backoff
     );
     if (!r.ok) return;
     const d = await r.json() as any;
@@ -169,14 +171,19 @@ async function binanceSpotMarket(
   try {
     const signature = await binanceSign(params);
     const body = new URLSearchParams({ ...params, signature }).toString();
-    const res = await fetch("https://api.binance.com/api/v3/order", {
+    // Signed MARKET order is non-idempotent → retry ONLY on 429 (rejected
+    // pre-execution); never on 5xx/network, which could double-fill (B48).
+    const res = await fetchWithRetry("https://api.binance.com/api/v3/order", {
       method:  "POST",
       headers: {
         "X-MBX-APIKEY": apiKey,
         "Content-Type": "application/x-www-form-urlencoded",
       },
       body,
-      signal:  AbortSignal.timeout(8000),
+    }, {
+      timeoutMs: 8000,
+      retryOn5xx: false,
+      retryOnNetworkError: false,
     });
     const data = await res.json() as any;
     if (!res.ok) {

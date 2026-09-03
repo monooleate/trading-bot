@@ -39,3 +39,39 @@ A user kérése: minden botra teljes audit (helyes-e az implementáció, a beál
 
 ### Deploy (boxra, paper) — kész + deploy-közbeni extra find
 A fixek + migration 007 + Caddy-crawler-blokk deployolva. **Deploy-közben felszínre jött egy addig rejtett integrációs bug** (az auditágensek logikát néztek, nem a cross-service URL-t): a crypto `signal-aggregator` + HL `signal-source` a `signal-combiner`/`polymarket-proxy`-t `EDGECALC_BASE = process.env.URL || localhost:8888`-on hívta → a konténerben `URL` üres → `localhost:8888` → ConnectionRefused → **mindkét bot signal nélkül futott** (finalProb 0.5, activeSignals 0). Fix: `EDGECALC_INTERNAL_URL` (→ `http://edgecalc-api:7000`) a worker env-be. Utána: crypto activeSignals **8**, HL **7**, 0 worker-hiba. **Verifikáció:** market oszlop nullable; `llm-dependency` unauth POST → 401; browser → 200 + `X-Robots-Tag noindex`; GPTBot/ClaudeBot/CCBot/PerplexityBot → **403**; `robots.txt` Disallow:/; umami érintetlen (200). RAM 1.3/7.6 GB, 0 swap. Commitok: `534f637` (batch1) → `7b7e79c` (batch2+3) → `664e945` (internal-url) → `83c76bf` (caddy-fix).
+
+---
+
+## Külső API-audit (provider-doksik szerint) + up-to-date fixek — 56. session
+
+A user kérése: a botok által hívott API-k hatékonyan működnek-e, adtak-e ki a szolgáltatók olyan frissítést, ami érinti a bekötést, és a doksijuk szerint helyesen vannak-e bekötve — a kódból dolgozva. Majd: a fixek elvégzése + minden API up-to-date-re hozása.
+
+**Módszer:** 2 párhuzamos read-only katalógus-ágens (tőzsdék: Binance spot+futures, Bybit, Hyperliquid; illetve Polymarket Gamma/CLOB/Data, Anthropic, Deribit, weather/NOAA, sports) — minden külső `fetch` endpoint/param/aláírás file:line-nal kigyűjtve. Párhuzamosan a provider-changelogok webes ellenőrzése (Anthropic model-deprecations, Binance derivatives change-log, Bybit V5 changelog, Polymarket changelog, Deribit JSON-RPC changelog). Minden állítás kódra + doksira verifikálva.
+
+**Verdikt:** a bekötés túlnyomórészt helyes és aktuális (HMAC/EIP-712 aláírások, `&closed=true` Gamma-kvirk, endpoint-verziók). **1 ténylegesen törött** (retired Claude-modell) + **1 elavuló** (Binance fapi v2) + **1 latens** (apex-profiler hiányzó `x-api-key`).
+
+### Implementálva (mind: `tsc --noEmit` exit 0 + **26/26 teszt** zöld)
+
+- **P0 — retired Claude-modell (3 hívóhely).** A kód `claude-sonnet-4-20250514`-et hívott, amit az Anthropic **2026-06-15-én kivezetett** → a `/v1/messages` hívás retired modellre hibázik. Hatás: `llm-dependency` (arbmatrix tab) **halott**; `_resolution-risk` (crypto bot resolution-risk gate a combineren át) **csendben** a `fallbackScore` heurisztikára esett (nem crash, de az LLM-elemzés soha nem futott); `apex_wallet_profiler.py` CLI hibázott. **Fix:** env-felülírható `ANTHROPIC_MODEL` (default **`claude-sonnet-4-6`**, a hivatalos pótlás) mindhárom helyen — így a következő kivezetés csak konfig-váltás. Az `anthropic-version: 2023-06-01` fejléc továbbra is érvényes, változatlan. Fájlok: [llm-dependency.mts](../../services/api/src/routes/llm-dependency.mts) (+ félrevezető „DeepSeek-R1" komment javítva), [_resolution-risk.ts](../../services/api/src/routes/_resolution-risk.ts), [apex_wallet_profiler.py](../../apex_wallet_profiler.py).
+- **P1 — Binance Futures fapi v2 → v3.** A [binance-trade.mts](../../services/api/src/routes/binance-trade.mts) `/fapi/v2/balance` + `/fapi/v2/positionRisk`-et használt — a Binance mindkettőt **deprecalta** (→ `/fapi/v3/*`). Web/doksi-verifikáció: a v3 válasz a v2 **szuperhalmaza**, minden olvasott mező (`positionAmt`/`entryPrice`/`markPrice`/`unRealizedProfit`/`leverage`/`balance`/`availableBalance`/`crossUnPnl`) megvan; a `positionAmt !== 0` szűrő kezeli a viselkedésbeli eltérést → biztonságos csere. (Csak LIVE-on aktív; paper short-circuit.)
+- **Latens bekötési hiba — apex-profiler `x-api-key` hiány.** A `claude_analyze` Python-hívás soha nem küldött `x-api-key` fejlécet (az Anthropic doksi szerint kötelező) → a modelltől függetlenül 401-be futott. **Fix:** `os.environ` olvasás + `x-api-key` fejléc + korai visszatérés ha nincs kulcs (`import os` hozzáadva).
+
+### Egészséges (verifikálva, változatlan)
+Binance spot `/api/v3/*` (nem használ egy retired legacy `/api/v1/*`/userDataStream endpointot sem); Binance futures `/fapi/v1/{klines,premiumIndex,fundingInfo,order}`; Bybit v5 (endpoint + aláírási séma pontosan a spec, a 2026-os XAU/XAG/IP-whitelist/txn-log változások a crypto-perpeket nem érintik); Hyperliquid `/info` type-ok + `/exchange` SDK-delegált EIP-712; Polymarket Gamma/CLOB/Data (a `&closed=true` a resolution-úton, `closed=false` a scan-eken — helyes); Deribit (additív mezők); Open-Meteo/NOAA (zero-auth).
+
+### Tudatosan NEM auto-javítva → sprints.md **B46–B48**
+- **B46** — Polymarket offset→keyset lapozás (kivezetési pályán, de teljesen támogatott; sok hívóhelyet + cursor-refaktort érintő kockázatos változtatás).
+- **B47** — HL SDK (`@nktkas/hyperliquid`) nincs deklarált függőségként (dinamikus import; LIVE-only, paper short-circuit fedi).
+- **B48** — közös 429/rate-limit backoff helper (jelenleg csak HL `/info` retry-zik).
+
+**Deploy:** nincs auto-deploy ebben a sessionben (a fixek a `main`-en; a boxra a következő deploy viszi). Az `ANTHROPIC_MODEL` env opcionális (default aktív modell), külön beállítás nélkül is helyesre vált.
+
+### Follow-up (ugyanaznap) — B47 + B48 implementálva, B46 lezárva (user-kérés)
+
+A user kérte a B46/B47/B48 elvégzését is (majd egy közös commitot). Eredmény (`tsc` exit 0 + **27/27 teszt** zöld):
+
+- **B47 ✅ HL SDK deklarált függőség.** `npm install @nktkas/hyperliquid@^0.33.3 viem@^2.47.12 --save` → gyökér `package.json` + lockfile. A live HL adapter (`hl-client.mts`) eddig dinamikus `new Function("return import(...)")`-tel töltötte a signer SDK-t, deklaráció nélkül → LIVE-on néma import-hiba lett volna (paper short-circuit fedte). Futásidejű export-check: `HttpTransport`/`ExchangeClient` + `viem/accounts` `privateKeyToAccount` mind létezik; a konstruktor-alakok (`{isTestnet}`, `{transport,wallet}`) a jelenlegi API. Végső live-signing verifikáció → B10.
+- **B48 ✅ 429/rate-limit backoff helper.** Új [`packages/core/src/fetch-retry.mts`](../../packages/core/src/fetch-retry.mts) — `fetchWithRetry`: exponenciális backoff + full jitter 429/5xx/network-hibára, `Retry-After`-tisztelet, per-attempt friss `AbortSignal.timeout`. **Idempotencia-biztos:** POST order csak 429-re retry-zik (pre-execution reject), 5xx/network SOSEM (double-fill ellen). Bekötve: `binance-trade.mts` + `bybit-trade.mts` wrapperek (GET teljes retry, POST 429-only) + `hedge-manager.mts` (exchangeInfo GET teljes; spot MARKET order 429-only). Új `fetch-retry.test.mts` (9 eset, injektált `_fetch`/`_sleep` — nincs valós hálózat/timer). A HL `/info` saját 1-retry-ja maradt.
+- **B46 ⚪ NOT APPLICABLE.** A feltételezett offset-lapozás-deprecation nem áll fenn: `grep -ri "offset" services/**/*.mts` csak weather `city_offset`-et talál — egyetlen Gamma-hívás sem `offset`-lapoz; mind egyoldalas `order=volume24hr` top-N. Nincs mit keyset-re migrálni; cursor-refaktor tiszta churn lenne. Lezárva (később újranyílik, ha valódi lapozás kell).
+
+**Commit:** a P0/P1/latens fixek + B47 + B48 + a teljes doksi egy commitban.

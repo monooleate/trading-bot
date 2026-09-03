@@ -510,6 +510,14 @@ A 2026-09-03 teljes audit (5 bot + infra + security) implementált fixei: [chang
 - **B44 — sports snapshot Pinnacle fair value.** A `sports/index.mts` a `predictedProb`/snapshot-ot a shrink-képletből re-deriválja a döntést vezérlő `pinnacleFairYes` helyett. Csak `sportsUsePinnacle`/B37 bekapcsolásakor releváns (akkor P1).
 - **B45 — HL Kelly conviction-scale knob.** A B36-fix `BRACKET_CONVICTION_SCALE` konstans (0.5); tegyük Settings-knobbá (`hlKellyConvictionScale`) a mérés utáni hangoláshoz.
 
+### B46–B48 — API-frissítés follow-upok (2026-09-03, 56. session)
+
+> A 56. session API-auditjának follow-upjai. A user kérésére **B47 + B48 implementálva**, **B46 kód-verifikáltan nem alkalmazható**. Részletek: [changelog 2026-09-03](../changelog/CHANGELOG-2026-09-03.md).
+
+- **B46 — Polymarket keyset-lapozás migráció ⚪ NOT APPLICABLE (2026-09-03).** A feltételezett gyökérok (offset-lapozás deprecation) **nem áll fenn**: a `grep -ri "offset" services/**/*.mts` kizárólag weather `city_offset`-et talál — **egyetlen Gamma-hívás sem használ `offset` paramétert**. A `/markets` és `/events` hívások mind **egyoldalas, `order=volume24hr` szerinti top-N** lekérdezések (nem lapoznak túl az 1. oldalon) → nincs mit keyset-re migrálni; egy cursor-refaktor tiszta churn lenne 0 haszonnal. A base-endpointok stabilak. (Ha később valódi lapozás kell, akkor nyílik újra.)
+- **B47 — HL SDK (`@nktkas/hyperliquid`) deklarált függőség ✅ DONE (2026-09-03).** Felvéve a gyökér `package.json`-be: `@nktkas/hyperliquid@^0.33.3` + `viem@^2.47.12` (`npm install`, lockfile frissítve). Futásidejű export-verifikáció: `HttpTransport`/`ExchangeClient` + `viem/accounts` `privateKeyToAccount` mind létezik → a live HL adapter (`hl-client.mts` dinamikus import) mostantól tisztán resolvál a korábbi néma import-hiba helyett. A konstruktor-alakok (`{isTestnet}`, `{transport,wallet}`) a jelenlegi SDK API-ja. **Végső live-signing verifikáció** valós kulccsal → B10 (live-infra) bekapcsolásakor.
+- **B48 — Külső API 429/rate-limit backoff ✅ DONE (2026-09-03).** Új shared helper [`packages/core/src/fetch-retry.mts`](../../packages/core/src/fetch-retry.mts) (`fetchWithRetry`): korlátozott exponenciális backoff + full jitter 429/5xx/network-hibára, `Retry-After` fejléc-tisztelettel, per-attempt friss `AbortSignal.timeout`. **Idempotencia-biztos:** order-placement (POST) csak 429-re retry-zik (pre-execution reject), 5xx/network SOSEM (double-fill ellen). Bekötve a 3 signed live-útba: `binance-trade.mts`/`bybit-trade.mts` wrapperek (GET teljes retry, POST 429-only) + `hedge-manager.mts` (exchangeInfo GET teljes; spot MARKET order 429-only). Új `fetch-retry.test.mts` (9 eset) zöld. A HL `/info` saját 1-retry-ját meghagytuk.
+
 ---
 
 ## ✅ Completed sprints (rolling 5 utolsó)

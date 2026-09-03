@@ -22,6 +22,7 @@ Futtatás:
 import argparse
 import json
 import math
+import os
 import sys
 import time
 from collections import defaultdict
@@ -594,8 +595,14 @@ For each signal, provide:
 
 Keep response concise, factual, no hype. Format as JSON array."""
 
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if not api_key:
+            return "Claude elemzés nem elérhető: ANTHROPIC_API_KEY nincs beállítva"
+        # Aktív modell — env-felülírható; default a retired claude-sonnet-4-20250514 pótlása.
+        model = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+
         body = json.dumps({
-            "model": "claude-sonnet-4-20250514",
+            "model": model,
             "max_tokens": 800,
             "messages": [{"role": "user", "content": prompt}],
         }).encode()
@@ -606,6 +613,7 @@ Keep response concise, factual, no hype. Format as JSON array."""
             headers={
                 "Content-Type": "application/json",
                 "anthropic-version": "2023-06-01",
+                "x-api-key": api_key,
             }
         )
         with urllib.request.urlopen(req, timeout=15) as r:

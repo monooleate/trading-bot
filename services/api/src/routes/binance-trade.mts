@@ -12,6 +12,7 @@
 import type { Context } from "@netlify/functions";
 import { checkAuth } from "./_auth-guard";
 import { createHmac } from "crypto";
+import { fetchWithRetry } from "@core/fetch-retry.mts";
 
 const CORS = {
   "Access-Control-Allow-Origin":  "*",
@@ -48,14 +49,19 @@ async function binanceRequest(
     ? `${BASE}${path}?${fullQs}`
     : `${BASE}${path}`;
 
-  const res = await fetch(url, {
+  // 429/5xx backoff (B48). Order placement (POST) is non-idempotent → retry
+  // ONLY on 429 (rejected pre-execution); never on 5xx/network (may have landed).
+  const res = await fetchWithRetry(url, {
     method,
     headers: {
       "X-MBX-APIKEY": apiKey,
       "Content-Type": "application/x-www-form-urlencoded",
     },
     body: method === "POST" ? fullQs : undefined,
-    signal: AbortSignal.timeout(8000),
+  }, {
+    timeoutMs: 8000,
+    retryOn5xx:          method === "GET",
+    retryOnNetworkError: method === "GET",
   });
 
   const data = await res.json() as any;
@@ -83,7 +89,7 @@ export default async function handler(req: Request, ctx: Context) {
   try {
     // ── GET: egyenleg ─────────────────────────────────────────────────
     if (req.method === "GET" && action === "balance") {
-      const data = await binanceRequest("GET", "/fapi/v2/balance");
+      const data = await binanceRequest("GET", "/fapi/v3/balance");
       const balances = (Array.isArray(data) ? data : [])
         .filter((b: any) => parseFloat(b.balance) > 0)
         .map((b: any) => ({
@@ -100,7 +106,7 @@ export default async function handler(req: Request, ctx: Context) {
       const symbol = url.searchParams.get("symbol") || "";
       const params: Record<string, string> = {};
       if (symbol) params.symbol = symbol;
-      const data = await binanceRequest("GET", "/fapi/v2/positionRisk", params);
+      const data = await binanceRequest("GET", "/fapi/v3/positionRisk", params);
       const positions = (Array.isArray(data) ? data : [])
         .filter((p: any) => parseFloat(p.positionAmt) !== 0)
         .map((p: any) => ({

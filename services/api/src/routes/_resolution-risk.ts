@@ -242,6 +242,9 @@ Respond with this exact JSON shape:
 }`;
 }
 
+// Aktív modell — env-felülírható; default a retired claude-sonnet-4-20250514 pótlása.
+const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6";
+
 async function callClaude(userPrompt: string): Promise<string> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY missing");
@@ -254,7 +257,7 @@ async function callClaude(userPrompt: string): Promise<string> {
       "x-api-key":         apiKey,
     },
     body: JSON.stringify({
-      model:      "claude-sonnet-4-20250514",
+      model:      ANTHROPIC_MODEL,
       max_tokens: 900,
       system:     SYSTEM_PROMPT,
       messages:   [{ role: "user", content: userPrompt }],

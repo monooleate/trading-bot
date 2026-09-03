@@ -210,6 +210,18 @@ A `/trade/bybit/` manual trader + a signal-combiner funding signal-ja.
 - **Költség:** Sonnet 4.6/4.7 hívásonként ~$0.003-0.01. Combiner 3-perces
   cache-szel napi ~480 hívás max → ~$2-5/nap.
 
+### `ANTHROPIC_MODEL` 🟢 OPCIONÁLIS (default van)
+
+- **Mire való:** Felülírja a Claude-hívásokban használt modell-azonosítót.
+  Azért lett bevezetve, hogy egy jövőbeli modell-kivezetés **csak
+  konfig-váltás** legyen, ne kódmódosítás (a `claude-sonnet-4-20250514`
+  2026-06-15-i retirementje mind a 3 hívóhelyet elnémította — 55. session).
+- **Hol használt:** `llm-dependency.mts`, `_resolution-risk.ts`,
+  `apex_wallet_profiler.py` (mindhárom `process.env`/`os.environ` olvasással).
+- **Default:** `claude-sonnet-4-6` (aktív; a retired Sonnet 4 hivatalos pótlása).
+- **Formátum:** érvényes aktív Anthropic model-id, pl. `claude-sonnet-4-6`,
+  `claude-haiku-4-5-20251001` (olcsóbb), `claude-opus-4-8`.
+
 ---
 
 ## 7. Telegram alerts

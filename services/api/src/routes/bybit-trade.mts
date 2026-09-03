@@ -12,6 +12,7 @@
 import type { Context } from "@netlify/functions";
 import { checkAuth } from "./_auth-guard";
 import { createHmac } from "crypto";
+import { fetchWithRetry } from "@core/fetch-retry.mts";
 
 const CORS = {
   "Access-Control-Allow-Origin":  "*",
@@ -65,11 +66,16 @@ async function bybitRequest(
     "Content-Type":       "application/json",
   };
 
-  const res = await fetch(url, {
+  // 429/5xx backoff (B48). Order create (POST) is non-idempotent → retry ONLY
+  // on 429 (rejected pre-execution); never on 5xx/network (order may have landed).
+  const res = await fetchWithRetry(url, {
     method,
     headers,
     body: method === "POST" ? bodyStr : undefined,
-    signal: AbortSignal.timeout(8000),
+  }, {
+    timeoutMs: 8000,
+    retryOn5xx:          method === "GET",
+    retryOnNetworkError: method === "GET",
   });
 
   const data = await res.json() as any;
