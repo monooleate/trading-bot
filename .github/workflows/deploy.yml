@@ -1,8 +1,10 @@
 name: Deploy
 
 # Deploys to the Hetzner box AFTER CI passes on main (or on manual dispatch).
-# SSH → git pull → docker compose up -d --build in the edgecalc project dir.
-# Validates nothing itself — CI is the gate; this only ships a green commit.
+# The runner checks out the exact commit CI validated and RSYNCs the working
+# tree to the box (no box-side `git pull`), then runs `docker compose up -d
+# --build`. rsync-from-runner avoids GitHub's anonymous-HTTPS git rate limit
+# that intermittently 401'd the box's `git pull` after a burst of deploys.
 #
 # REQUIRED repo secrets (Settings → Secrets and variables → Actions):
 #   DEPLOY_HOST     box IP/host (e.g. 91.99.218.165)
@@ -12,6 +14,10 @@ name: Deploy
 #   DEPLOY_DIR      compose/repo dir on the box (default /opt/edgecalc)
 #   DEPLOY_PORT     ssh port (default 22)
 #   DEPLOY_KNOWN_HOSTS  pinned host key line (else first-connection TOFU)
+#
+# Box-local, git-ignored state is preserved (excluded from the rsync --delete):
+#   .env / .env.save (secrets), data/ (model-cache bind mount), logs/, dist/,
+#   .git/, .claude/. Everything else mirrors the deployed commit exactly.
 #
 # Until DEPLOY_HOST is set the job SKIPS cleanly (stays green), so pushing this
 # file does not produce a red run before you finish the secret setup.
@@ -45,7 +51,15 @@ jobs:
             echo "configured=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Deploy over SSH
+      # Check out the exact commit CI validated (head_sha on workflow_run; the
+      # pushed SHA on manual dispatch).
+      - name: Checkout deployed commit
+        if: steps.chk.outputs.configured == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Rsync + rebuild over SSH
         if: steps.chk.outputs.configured == 'true'
         env:
           SSH_HOST: ${{ secrets.DEPLOY_HOST }}
@@ -68,6 +82,29 @@ jobs:
           else
             HOSTCHECK="-o StrictHostKeyChecking=accept-new"
           fi
-          echo "Deploying to $SSH_USER@$SSH_HOST:$PORT  dir=$DIR"
-          REMOTE_CMD="set -e; cd '$DIR'; echo '== git pull =='; git pull --ff-only; echo '== compose up -d --build =='; docker compose up -d --build; echo '== status =='; docker compose ps"
-          ssh $HOSTCHECK -p "$PORT" -i ~/.ssh/id_deploy "$SSH_USER@$SSH_HOST" "$REMOTE_CMD"
+          RSH="ssh $HOSTCHECK -p $PORT -i ~/.ssh/id_deploy -o BatchMode=yes"
+
+          echo "== rsync → $SSH_USER@$SSH_HOST:$DIR =="
+          # --delete keeps the box tree an exact mirror of the commit; excluded
+          # paths are protected from BOTH transfer and deletion (rsync default),
+          # so box-local secrets/data survive. .env.example is tracked → it syncs
+          # (only the literal `.env`/`.env.save` are excluded).
+          rsync -rlptz --delete \
+            --exclude='.git/' \
+            --exclude='.claude/' \
+            --exclude='.env' \
+            --exclude='.env.save' \
+            --exclude='data/' \
+            --exclude='logs/' \
+            --exclude='dist/' \
+            --exclude='node_modules/' \
+            -e "$RSH" \
+            ./ "$SSH_USER@$SSH_HOST:$DIR/"
+
+          echo "== compose up -d --build =="
+          # Safety belt: refuse to (re)build/restart if the box-local .env is
+          # missing — a misconfigured exclude must never bring the stack up
+          # without secrets. The excludes above already protect it; this is the
+          # loud alarm if that ever regresses.
+          REMOTE_CMD="set -e; cd '$DIR'; test -f .env || { echo 'FATAL: .env missing after rsync — aborting'; exit 1; }; docker compose up -d --build; echo '== status =='; docker compose ps"
+          ssh $HOSTCHECK -p "$PORT" -i ~/.ssh/id_deploy -o BatchMode=yes "$SSH_USER@$SSH_HOST" "$REMOTE_CMD"
