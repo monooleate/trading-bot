@@ -63,6 +63,7 @@ A **CLAUDE.md** a repo gyökerében az **AKTUÁLIS ÁLLAPOT** szekcióval — mi
 | `math/29-effective-trials.md` | **Effektív-trial DSR** (klaszterezett trial-szám) | a közel-duplikátum knob-tweakeket knob-halmaz-átfedésen klaszterezi → N_eff ≤ literál N a DSR-deflációhoz; ONC-proxy per-trial-hozam nélkül (B50 #3) |
 | `math/30-config-attribution.md` | **Per-trade config-címkézés + A/B** | minden ledger-rekord az aktív config-fingerprintjével stampelve → per-config Brier-skill A/B a forecaston; feloldja a valódi ONC/σ_SR-t; mérés-only, nincs migráció (B50 #4) |
 | `math/31-emos-seed.md` | **Offline EMOS seed** (weather historikus kalibráció) | Open-Meteo multi-modell past-forecast × ERA5 → historikus `(ensMean,ensStd,obs)` a weather-emos store-ba → a kalibrátor fittelt az 1. naptól; manuális `scripts/seed-emos.ts` (B50 #5, weather-ág) |
+| `math/32-offline-calibration-sports-crypto.md` | **Offline kalibráció-validáció** (sports de-vig + crypto HAR) | football-data.co.uk Pinnacle-close → Shin/power/multiplicative Brier-score; Binance-klina → HAR Corsi-fit OOS vs equal/RW; validáció-only, `scripts/eval-devig.ts` + `fit-har.ts` (B50 #5) |
 | `math/151-Trading-Strategies.pdf` | Academic reference (Kakushadze) | 151 strategies anthology |
 
 ---
