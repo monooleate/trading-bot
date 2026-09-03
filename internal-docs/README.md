@@ -66,6 +66,7 @@ A **CLAUDE.md** a repo gyökerében az **AKTUÁLIS ÁLLAPOT** szekcióval — mi
 | `math/32-offline-calibration-sports-crypto.md` | **Offline kalibráció-validáció** (sports de-vig + crypto HAR) | football-data.co.uk Pinnacle-close → Shin/power/multiplicative Brier-score; Binance-klina → HAR Corsi-fit OOS vs equal/RW; validáció-only, `scripts/eval-devig.ts` + `fit-har.ts` (B50 #5) |
 | `math/33-thompson-bandit.md` | **Diszkontált Thompson-bandit** (config-választó + felejtési faktor) | a ledger configjai közt prob-best-rangsor (Beta-poszterior, reward=beat-market, recency-diszkont); a bandit javasol; mérés-only (B50 #6 + #8) |
 | `math/34-regularization-budget.md` | **Regularizáció-budget** (holt-knob audit + plateau) | audit: 0 holt knob, de 96 dimenzió túl sok → knob-osztályozás (guardrail/tunable/fix) + `selectPlateau`/`ensembleWeights` fegyelem-eszköz (B50 #7) |
+| `math/35-ledger-coverage.md` | **Prediction-ledger lefedettség** (sports-ledger + deferred infra) | sports-ledger bekötve (bináris piac); a normalizált-tábla migráció deferred (blob_kv MÁR Postgres → B12), HL/F-arb not-applicable (perp/delta-neutral) (B50 #9) |
 | `math/151-Trading-Strategies.pdf` | Academic reference (Kakushadze) | 151 strategies anthology |
 
 ---

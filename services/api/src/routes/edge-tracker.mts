@@ -51,7 +51,7 @@ import { banditArmsFromRecords, thompsonRank, type ArmPosterior } from "@core/th
 
 // Categories that write a prediction ledger (forecasting bots). Funding-arb
 // is delta-neutral carry (not forecasting); sports is not yet wired.
-const LEDGER_CATEGORIES = ["crypto", "weather", "hyperliquid"];
+const LEDGER_CATEGORIES = ["crypto", "weather", "hyperliquid", "sports"];
 
 // Aggregate per-category ledger stats into one object (for category="all").
 function aggregateLedgerStats(label: string, parts: LedgerStats[]): LedgerStats {

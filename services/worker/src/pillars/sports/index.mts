@@ -34,6 +34,7 @@ import {
 import { resolvePendingSportsPositions } from "./paper-resolver.mts";
 import { probeProvisionalOutcome } from "../shared/provisional-outcome.mts";
 import { markRunStart, markRunFinish, getSportsRunStatus } from "./run-state.mts";
+import { appendPredictions, reconcileLedger } from "@core/prediction-ledger.mts";
 import type { SportsPosition, SportsMarket } from "./types.mts";
 import type { EntryDecisionSnapshot } from "@core/types.mts";
 
@@ -290,6 +291,17 @@ async function runSportsTrader(
   }
 
   await saveSportsSession(session);
+
+  // Prediction ledger (B50 #9): sports markets are binary Polymarket markets that
+  // resolve — so, like crypto/weather, log every scanned market's forecast (taken
+  // + skipped) + Gamma-reconcile past-endDate skipped outcomes. Unbiased proper-
+  // scoring / walk-forward substrate; fills with real Shin fair-values once the
+  // B37 odds-feed lands. Stamped with the active-config fingerprint (#4).
+  // Best-effort — never breaks the tick.
+  let sportsCfgHash = "default";
+  try { const sm: any = await import("@api/routes/trader-settings.mts"); sportsCfgHash = await sm.currentConfigFingerprint(); } catch {}
+  await appendPredictions("sports", results, markets, session.closedTrades, undefined, sportsCfgHash);
+  await reconcileLedger("sports");
 
   const result = {
     ok: true,
