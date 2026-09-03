@@ -25,7 +25,7 @@
 // filters resolved markets out. Resolved markets only appear when you
 // explicitly add `&closed=true`.
 
-import { GAMMA_API, getTraderConfig } from "../shared/config.mts";
+import { GAMMA_API, getTraderConfig, getEffectiveFillOpts } from "../shared/config.mts";
 import { log } from "../shared/logger.mts";
 import { closePosition } from "./session-manager.mts";
 import type { ClosedTrade, SessionState } from "@core/types.mts";
@@ -194,6 +194,18 @@ export async function resolvePendingPositions(
   const now = Date.now();
   const grace = 30_000; // 30s grace after endDate before we even try to query
 
+  // Settlement fee (B49 #1 / T6): when the depth-aware fill model is ON, entry
+  // slippage is already explicit in the position VWAP (costBasis), so the close
+  // charges the exit-only fee to avoid double-counting entry cost. When OFF the
+  // legacy 0.036 roundtrip proxy stands. Computed ONCE per pass (stable across
+  // positions); read here (async) rather than the per-position sync path.
+  const tc = getTraderConfig();
+  let closeFeePct = tc.roundtripFeePct;
+  try {
+    const fillOpts = await getEffectiveFillOpts();
+    if (fillOpts.enabled) closeFeePct = tc.settlementFeePctFillModel ?? 0.015;
+  } catch { /* keep roundtrip default */ }
+
   // Pre-pass: collect every conditionId that needs a live Gamma probe.
   // We Promise.all them so the wall-clock cost is one Gamma RTT instead of
   // N × RTT — critical for staying under Netlify's 10s function budget
@@ -268,11 +280,9 @@ export async function resolvePendingPositions(
 
     const proceeds = pos.shares * exitSnap;
     const pnlGross = proceeds - pos.costBasis;
-    // Apply the same roundtrip fee the decision-engine gates against, so
-    // closed-paper PnL matches what live execution would have produced.
-    // Pulls feePct from the env-default config — the runtime override
-    // isn't async-available here and the value is stable (0.036).
-    const feePct = getTraderConfig().roundtripFeePct;
+    // Fee: exit-only when the fill model is ON (entry slippage already in the
+    // VWAP costBasis), else the legacy roundtrip proxy. Computed once above.
+    const feePct = closeFeePct;
     const pnl    = applySettlementFee(pnlGross, proceeds, pos.costBasis, feePct);
     const trade: ClosedTrade = {
       market: pos.market,

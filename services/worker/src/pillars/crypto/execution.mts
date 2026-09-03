@@ -4,9 +4,23 @@ import { polygon } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
 import { getPolymarketConfig, CLOB_API } from "../shared/config.mts";
 import { log } from "../shared/logger.mts";
+import { fetchClobBook } from "../shared/clob-book.mts";
+import { simulateDepthFill, fallbackFill, isFillValid } from "@core/fill-model.mts";
 import type { MarketInfo, OrderRecord } from "@core/types.mts";
 
 let _client: any = null;
+
+// ─── Depth-aware paper fill options (model-discovery-expansion §4.A / B49 #1) ─
+// Passed from the runner (built from the effective TraderConfig). When
+// `enabled` is false the paper fill is bit-identical to the legacy full fill.
+export interface PaperFillOpts {
+  enabled: boolean;
+  participationCap: number;
+  /** Reject fills below this many shares (market too thin). Default 5. */
+  minOrderSizeShares?: number;
+  /** Adverse haircut applied to the ref price when no book is available. Default 0.02. */
+  fallbackHaircut?: number;
+}
 
 // ─── Client initialization ───────────────────────────────
 
@@ -55,6 +69,7 @@ export async function placeBuyOrder(
   sizeUSDC: number,
   paperMode: boolean,
   isNegRisk: boolean = false, // weather events are negRisk groups; crypto BTC markets are not
+  fillOpts?: PaperFillOpts,
 ): Promise<OrderRecord> {
   const tokenId =
     direction === "YES" ? market.clobTokenIds[0] : market.clobTokenIds[1];
@@ -74,22 +89,73 @@ export async function placeBuyOrder(
   };
 
   if (paperMode) {
-    // Paper mode: simulate instant fill
     record.orderId = `paper_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+    // Default (fill model OFF): legacy instant full fill at the displayed price.
+    let filledShares = sizeUSDC / price;
+    let fillPrice    = price;
+    let filledUsdc   = sizeUSDC;
+    let partial      = false;
+    let fillNote     = "legacy-full";
+
+    // Depth-aware fill (B49 #1): walk the real ask book, cap participation,
+    // book partial fills, never credit the unfillable remainder.
+    if (fillOpts?.enabled) {
+      const book = await fetchClobBook(tokenId);
+      let res =
+        book && book.asks.length > 0
+          ? simulateDepthFill(book.asks, sizeUSDC, { participationCap: fillOpts.participationCap })
+          : null;
+      if (res && res.ok) {
+        fillNote = res.partial ? "depth-partial" : "depth-full";
+      } else {
+        // No book, or book present but zero fillable depth within the cap →
+        // conservative sqrt-law/flat haircut fallback (never a free full fill).
+        res = fallbackFill(price, sizeUSDC, fillOpts.fallbackHaircut ?? 0.02);
+        fillNote = book ? "fallback-thin" : "fallback-nobook";
+      }
+
+      if (res.ok && isFillValid(res.filledShares, res.vwap, fillOpts.minOrderSizeShares ?? 5)) {
+        filledShares = res.filledShares;
+        fillPrice    = res.vwap;
+        filledUsdc   = res.filledUsdc;
+        partial      = res.partial;
+      } else {
+        // Below min order size / invalid VWAP → market too thin to trade.
+        record.status = "REJECTED";
+        log("ORDER_REJECTED", true, {
+          market: market.slug,
+          direction,
+          reason: "paper fill below min size / invalid",
+          requestedUsdc: sizeUSDC,
+          fillNote,
+        });
+        return record;
+      }
+    }
+
     record.status = "FILLED";
-    record.filledShares = sizeUSDC / price;
+    record.price = fillPrice;    // VWAP entry (legacy: displayed price)
+    record.size = filledUsdc;    // actual notional spent (legacy: full request)
+    record.filledShares = filledShares;
     record.filledAt = new Date().toISOString();
 
     log("ORDER_PLACED", true, {
       orderId: record.orderId,
       market: market.slug,
       direction,
-      price,
-      size: sizeUSDC,
+      price: fillPrice,
+      size: filledUsdc,
+      partial,
+      fillNote,
     });
     log("ORDER_FILLED", true, {
       orderId: record.orderId,
       filledShares: record.filledShares,
+      fillPrice,
+      filledUsdc,
+      partial,
+      fillNote,
     });
 
     return record;

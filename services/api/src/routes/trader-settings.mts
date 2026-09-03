@@ -113,6 +113,26 @@ const SCHEMA: Record<string, FieldSpec> = {
   // a gate túl szigorúan blokkolja, vagy ha tudatosan kockáztatod a
   // live-flippelést egy kis sample-en (pl. új bot bemelegítés).
   liveReadyOverrideEnabled: { default: 0,    min: 0,    max: 1,    label: "Override readiness gate",   step: 1,    unit: "bool",  category: "common", group: "Live readiness", help: "MASTER KAPCSOLÓ: ha ON, a readiness 7-gate-je bypass-olva van, és a PAPER_MODE=false-szel beállított live-állás közvetlenül érvénybe lép. Telegram alarm fut session-enként 1× hogy ne maradjon véletlenül bekapcsolva. Csak tudatos kockázatra használd." },
+  // ─── Robust-Sharpe readiness gates (model-discovery-expansion §4.B / B49 #3) ──
+  // Alapból inertek (0) → a PSR/MinTRL csak megjelenik (advisory); bekapcsolva
+  // elvi paper→live kaput adnak a fix „N trade" helyett. Lásd math/20-robust-sharpe.md.
+  liveReadyMinPsr:   { default: 0, min: 0, max: 0.99, label: "Min Probabilistic Sharpe", step: 0.01, unit: "frac", category: "common", group: "Live readiness", help: "PSR-kapu: P(valódi Sharpe felett 0) legalább ennyi legyen a live-hoz. 0 = kikapcsolva (csak advisory megjelenítés). 0.95 = 95%-os konfidencia hogy az edge valós (a fat-tail/kis-minta torzítást korrigálva) — bünteti a kevés fat-win-en ülő Sharpe-ot." },
+  liveReadyUseMinTrl:{ default: 0, min: 0, max: 1,    label: "Enforce MinTRL gate",       step: 1,    unit: "bool", category: "common", group: "Live readiness", help: "Ha ON: a live-hoz a lezárt trade-ek száma legalább MinTRL (a Sharpe 95%-os szignifikanciájához szükséges minimális track-record hossz) — az önkényes fix 30-trade helyett elvi küszöb. Fat-tailu longshot-botnal ez tobb szaz trade lehet; tiszta edge-nel kevesebb. OFF = advisory." },
+  // ─── Depth-aware fill model (model-discovery-expansion §4.A / B49 #1) ──
+  // Measure-first, default OFF: OFF = a legacy `sizeUSDC / price` teljes fill
+  // (bit-azonos). ON = a paper-motor lejárja a valós CLOB ask-könyvet és a
+  // látható mélység egy hányadára capeli a fillt (part-fill + VWAP entry),
+  // kiirtva a vékony/longshot piacok +157%-típusú hamis paper-PnL-jét. Crypto
+  // + weather + sports (mind a placeBuyOrder-en át).
+  fillModelEnabled:     { default: 0,   min: 0,   max: 1,   label: "Depth-aware fill model",   step: 1,    unit: "bool", category: "common", group: "Execution (paper fill)", help: "ON: a paper belépő a valós CLOB ask-könyvet lépegeti és a látható mélység hányadára capeli a fillt (VWAP entry + részleges fill). OFF (default): a régi teljes-méretű fill a kijelzett áron. Mérés-first: kapcsold ON-ra, hasonlítsd az Edge Tracker proper-score-jait, majd élesítsd." },
+  fillParticipationCap: { default: 0.20, min: 0.02, max: 1.0, label: "Fill participation cap",  step: 0.02, unit: "frac", category: "common", group: "Execution (paper fill)", help: "A látható ask-mélység hányada, amit szintenként elvihetünk (vékony-könyv / adverse-selection realizmus). 0.20 = a kijelzett méret 20%-a. Csak akkor hat, ha a fill-modell ON." },
+  // ─── Portfolio crypto-beta exposure cap (model-discovery-expansion §4.C / B49 #2) ──
+  // A crypto + HL directional bot EGYÜTTES lekötött tőkéjét (crypto costBasis +
+  // HL margin) capeli a kombinált bankroll hányadára. F-arb (delta-neutrális) +
+  // weather kizárva. Megakadályozza, hogy 6 „független" 8%-os tét egyetlen nagy
+  // korrelált BTC-pozícióvá álljon össze (barbell-kockázat). Default OFF.
+  betaCapEnabled:  { default: 0,   min: 0,    max: 1,   label: "Crypto-beta exposure cap", step: 1,    unit: "bool", category: "common", group: "Portfolio risk", help: "ON: a crypto + HL directional botok EGYÜTTES lekötött crypto-tőkéje nem lépheti túl a kombinált bankroll `fraction`-jét — a bot skippel egy új belépőt, ami átlépné. Megvédi a portfóliót attól, hogy egy BTC-mozgás egyszerre üsse a crypto longokat ÉS a HL longokat. OFF (default): nincs aggregát cap (a per-bot 8% marad)." },
+  betaCapFraction: { default: 0.25, min: 0.05, max: 1.0, label: "Crypto-beta cap fraction",  step: 0.01, unit: "frac", category: "common", group: "Portfolio risk", help: "A kombinált (crypto + HL) bankroll hányada, amennyi crypto-directional tőke egyszerre lekötve lehet. 0.25 = 25%. A discovery ~15-20%-ot javasol; 0.25 óvatosan generózus. Csak akkor hat, ha a cap ON." },
   // ─── Paper "never stop" safety valve (2026-09-01) ───────────────
   // PAPER módban felülírja az AUTOMATIKUS loss-alapú leállásokat (session
   // loss limit, HL consecutive-loss pause, calibration noise), és minden
@@ -524,6 +544,38 @@ export async function loadRuntimeOverrides(): Promise<Overrides> {
   }
 }
 
+// ─── Trials log (B49 #3 — honest trial count for the Deflated Sharpe) ────────
+// Every knob change is a "trial" against the one growing forward track record.
+// The DSR deflates a Sharpe by how many configs you evaluated, so we count them
+// here. This is a system-wide count (knobs are cross-bot); an approximate N is
+// the correct correction — see math/20-robust-sharpe.md.
+const TRIALS_STORE = "trader-trials";
+const TRIALS_KEY = "log-v1";
+const TRIALS_CAP = 1000;
+
+export async function appendTrial(changedKeys: string[]): Promise<void> {
+  if (!changedKeys.length) return;
+  try {
+    const store = getStore(TRIALS_STORE);
+    const raw = await store.get(TRIALS_KEY);
+    const log: Array<{ ts: string; keys: string[] }> = raw ? JSON.parse(raw as string) : [];
+    log.push({ ts: new Date().toISOString(), keys: changedKeys });
+    await store.set(TRIALS_KEY, JSON.stringify(log.slice(-TRIALS_CAP)));
+  } catch { /* non-fatal */ }
+}
+
+export async function countTrials(): Promise<number> {
+  try {
+    const store = getStore(TRIALS_STORE);
+    const raw = await store.get(TRIALS_KEY);
+    if (!raw) return 0;
+    const log = JSON.parse(raw as string);
+    return Array.isArray(log) ? log.length : 0;
+  } catch {
+    return 0;
+  }
+}
+
 // ─── HTTP handler ─────────────────────────────────────────────────────
 
 export default async function handler(req: Request, _ctx: Context) {
@@ -634,6 +686,15 @@ export default async function handler(req: Request, _ctx: Context) {
         status: 500, headers: CORS,
       });
     }
+    // B49 #3: log the knobs that actually changed as a "trial" for the DSR's
+    // honest trial count. A change = the submitted value differs from the prior
+    // stored value (a brand-new key counts as a change).
+    const changedKeys = Object.keys(v.overrides).filter((k) => {
+      const before = (existing as any)[k];
+      const after = (v.overrides as any)[k];
+      return typeof after === "number" && (typeof before !== "number" || !eqNum(before, after));
+    });
+    await appendTrial(changedKeys);
     return new Response(JSON.stringify({ ok: true, overrides: pruned }), { status: 200, headers: CORS });
   }
 

@@ -36,12 +36,15 @@ export function getTraderConfig(): TraderConfig {
     sessionLossLimit: parseFloat(process.env.SESSION_LOSS_LIMIT || "20"),
     minOpenInterest: 500,
     roundtripFeePct: 0.036, // 1.8% entry + 1.8% exit
+    settlementFeePctFillModel: parseFloat(process.env.SETTLEMENT_FEE_PCT_FILL_MODEL || "0.015"), // exit-only when fill model ON (entry slippage is explicit in VWAP)
     minPositionSizeUSDC:   parseFloat(process.env.MIN_POSITION_SIZE_USDC   || "0.50"),
     combinerConfidenceMin: parseFloat(process.env.COMBINER_CONFIDENCE_MIN || "0.05"),
     maxOpenPositions:      parseInt(process.env.CRYPTO_MAX_OPEN_POSITIONS  || "5", 10),
     minActiveSignals:      parseInt(process.env.CRYPTO_MIN_ACTIVE_SIGNALS  || "2", 10),
     maxEdgeCap:               parseFloat(process.env.CRYPTO_MAX_EDGE_CAP                || "0.40"),
     watchExtremeEdgeThreshold: parseFloat(process.env.CRYPTO_WATCH_EXTREME_EDGE_THRESHOLD || "0.20"),
+    fillModelEnabled:      process.env.FILL_MODEL_ENABLED === "true", // default OFF (measure-first)
+    fillParticipationCap:  parseFloat(process.env.FILL_PARTICIPATION_CAP || "0.20"),
   };
 }
 
@@ -81,9 +84,49 @@ export async function getEffectiveTraderConfig(): Promise<TraderConfig> {
       minActiveSignals:      ov.cryptoMinActiveSignals ?? env.minActiveSignals,
       maxEdgeCap:                ov.cryptoMaxEdgeCap                ?? env.maxEdgeCap,
       watchExtremeEdgeThreshold: ov.cryptoWatchExtremeEdgeThreshold ?? env.watchExtremeEdgeThreshold,
+      // fillModelEnabled is a 0/1 knob in SCHEMA → coerce to boolean; absent → env default.
+      fillModelEnabled:     ov.fillModelEnabled != null ? ov.fillModelEnabled === 1 : env.fillModelEnabled,
+      fillParticipationCap: ov.fillParticipationCap ?? env.fillParticipationCap,
     };
   } catch {
     return env;
+  }
+}
+
+// Depth-aware paper fill options (B49 #1). Single source for every
+// Polymarket-fill runner (crypto + weather). Env default OFF; the `common`
+// Blobs knobs `fillModelEnabled` (0/1) + `fillParticipationCap` override.
+export async function getEffectiveFillOpts(): Promise<{ enabled: boolean; participationCap: number }> {
+  const enabledEnv = process.env.FILL_MODEL_ENABLED === "true";
+  const capEnv = parseFloat(process.env.FILL_PARTICIPATION_CAP || "0.20");
+  try {
+    const mod: any = await import("@api/routes/trader-settings.mts");
+    const ov = await mod.loadRuntimeOverrides();
+    return {
+      enabled: ov.fillModelEnabled != null ? ov.fillModelEnabled === 1 : enabledEnv,
+      participationCap: ov.fillParticipationCap ?? capEnv,
+    };
+  } catch {
+    return { enabled: enabledEnv, participationCap: capEnv };
+  }
+}
+
+// Crypto-beta exposure cap options (B49 #2). Aggregate directional crypto
+// capital (crypto + HL) is capped at `fraction × combined bankroll`. Env default
+// OFF; the `common` Blobs knobs `betaCapEnabled` (0/1) + `betaCapFraction`
+// override. F-arb (delta-neutral) + weather are excluded from the aggregate.
+export async function getEffectiveBetaCap(): Promise<{ enabled: boolean; fraction: number }> {
+  const enabledEnv = process.env.BETA_CAP_ENABLED === "true";
+  const fracEnv = parseFloat(process.env.BETA_CAP_FRACTION || "0.25");
+  try {
+    const mod: any = await import("@api/routes/trader-settings.mts");
+    const ov = await mod.loadRuntimeOverrides();
+    return {
+      enabled: ov.betaCapEnabled != null ? ov.betaCapEnabled === 1 : enabledEnv,
+      fraction: ov.betaCapFraction ?? fracEnv,
+    };
+  } catch {
+    return { enabled: enabledEnv, fraction: fracEnv };
   }
 }
 

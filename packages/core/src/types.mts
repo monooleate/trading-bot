@@ -305,6 +305,13 @@ export interface TraderConfig {
   sessionLossLimit: number;
   minOpenInterest: number;
   roundtripFeePct: number;        // 0.036 for crypto (1.8% × 2)
+  // Settlement fee applied on close WHEN the depth-aware fill model is ON.
+  // The legacy 0.036 roundtrip bundled an implicit ENTRY-slippage proxy; with
+  // the fill model that entry slippage is now explicit in the VWAP costBasis,
+  // so charging 0.036 again double-counts it. This exit-only value (spread on
+  // early TP/SL exits + redemption gas; resolution redeems at $1) replaces it.
+  // Default 0.015. Fill model OFF → the resolver keeps using roundtripFeePct.
+  settlementFeePctFillModel?: number;
   // Minimum absolute position size. The engine no longer applies a $1
   // hard floor — under-conviction signals must now produce a sub-min
   // sizing rejection rather than being silently padded up. Set the
@@ -338,6 +345,16 @@ export interface TraderConfig {
   // unsure about its own output but reports a 30%+ edge is almost
   // certainly hallucinating. Default 0.20 = 20% gross edge.
   watchExtremeEdgeThreshold?: number;
+  // ─── Depth-aware fill model (model-discovery-expansion §4.A / B49 #1) ──
+  // When ON, the paper engine walks the real CLOB ask book and caps the
+  // fill to a fraction of visible depth per level instead of crediting the
+  // full requested size at the displayed price. Default OFF (measure-first):
+  // OFF → bit-identical to the legacy `sizeUSDC / price` full fill. Applies
+  // to every Polymarket-fill bot (crypto + weather + sports) via placeBuyOrder.
+  fillModelEnabled?: boolean;
+  // Fraction of each visible ask level we allow ourselves to take (thin-book
+  // adverse-selection realism). Default 0.20.
+  fillParticipationCap?: number;
 }
 
 export interface PolymarketConfig {

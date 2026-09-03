@@ -7,7 +7,9 @@
 
 import type { Context } from "@netlify/functions";
 import { checkAuth } from "@api/routes/_auth-guard.ts";
-import { CORS, getTraderConfig, getEffectiveTraderConfig, getEffectiveBtcExitConfig, getBtcExitConfig } from "./shared/config.mts";
+import { CORS, getTraderConfig, getEffectiveTraderConfig, getEffectiveBtcExitConfig, getBtcExitConfig, getEffectiveBetaCap } from "./shared/config.mts";
+import { loadPortfolioBetaSnapshot } from "./shared/portfolio-exposure.mts";
+import { cryptoExposureUsd, checkBetaCap } from "@core/portfolio-exposure.mts";
 
 // State-changing actions require a valid JWT cookie. Read-only `status` is
 // public so the home page + per-venue dashboards can render without
@@ -324,15 +326,17 @@ async function runCryptoTrader(
   let obUp = 1.8, obDown = 0.55;
   let btcMinPriceBand      = 0.10;
   const readyOv: Record<string, number> = {};
+  let trialsCount = 1; // B49 #3: honest trial count for the DSR (config changes)
   try {
     const mod: any = await import("@api/routes/trader-settings.mts");
     const ov = await mod.loadRuntimeOverrides();
     if (typeof ov.obImbalanceUpRatio    === "number") obUp                 = ov.obImbalanceUpRatio;
     if (typeof ov.obImbalanceDownRatio  === "number") obDown               = ov.obImbalanceDownRatio;
     if (typeof ov.btcMinPriceBand       === "number") btcMinPriceBand      = ov.btcMinPriceBand;
-    for (const k of ["liveReadyMinTrades", "liveReadyMinWinRate", "liveReadyMinIC", "liveReadyMaxCalibDev", "liveReadyMinSharpe", "liveReadyMaxDrawdownPct", "liveReadyOverrideEnabled", "bonferroniAlpha", "bonferroniGoodMultiplier", "icHalfLifeTrades"]) {
+    for (const k of ["liveReadyMinTrades", "liveReadyMinWinRate", "liveReadyMinIC", "liveReadyMaxCalibDev", "liveReadyMinSharpe", "liveReadyMaxDrawdownPct", "liveReadyOverrideEnabled", "liveReadyMinPsr", "liveReadyUseMinTrl", "bonferroniAlpha", "bonferroniGoodMultiplier", "icHalfLifeTrades"]) {
       if (typeof ov[k] === "number") readyOv[k] = ov[k];
     }
+    if (typeof mod.countTrials === "function") trialsCount = Math.max(1, await mod.countTrials());
   } catch {}
   let session = await loadSession(config.paperMode, DEFAULT_BANKROLL);
 
@@ -366,6 +370,7 @@ async function runCryptoTrader(
     category: "crypto",
     session,
     simVersionExpected: PAPER_SIM_VERSION,
+    trialsCount,
     thresholds: {
       minTrades:         readyOv.liveReadyMinTrades,
       minWinRate:        readyOv.liveReadyMinWinRate,
@@ -373,6 +378,8 @@ async function runCryptoTrader(
       maxCalibrationDev: readyOv.liveReadyMaxCalibDev,
       minSharpe:         readyOv.liveReadyMinSharpe,
       maxDrawdownPct:    readyOv.liveReadyMaxDrawdownPct,
+      minPsr:            readyOv.liveReadyMinPsr,
+      useMinTrl:         readyOv.liveReadyUseMinTrl,
     } as any,
   });
   const overrideEnabled = readyOv.liveReadyOverrideEnabled === 1;
@@ -527,6 +534,11 @@ async function runCryptoTrader(
   }
 
   let updatedSession = session;
+  // Portfolio crypto-beta exposure cap (B49 #2) — resolved once per tick. The
+  // HL side comes from the persisted snapshot; the crypto side is recomputed
+  // from the LIVE updatedSession at each entry so intra-tick opens count. OFF → no-op.
+  const betaCap  = await getEffectiveBetaCap();
+  const betaSnap = betaCap.enabled ? await loadPortfolioBetaSnapshot(config.paperMode) : null;
   const results: any[] = [];
   // Build the scan list:
   //   - top 3 by Gamma's volume24hr ranking (the bot's normal entry universe)
@@ -686,6 +698,21 @@ async function runCryptoTrader(
         kelly: decision.kellyUsed,
       });
 
+      // 4b. Portfolio crypto-beta exposure cap (B49 #2). Block a new crypto-
+      // directional entry if the aggregate committed capital across crypto + HL
+      // would exceed the cap. Crypto side = LIVE session (intra-tick aware);
+      // HL side = tick-start snapshot. F-arb + weather excluded. OFF → skipped.
+      if (betaCap.enabled && betaSnap) {
+        const currentUsd = cryptoExposureUsd(updatedSession.openPositions as any) + betaSnap.hl.exposureUsd;
+        const combined   = (updatedSession.bankrollCurrent || 0) + betaSnap.hl.bankrollUsd;
+        const capChk = checkBetaCap(currentUsd, decision.positionSizeUSDC, combined, betaCap.fraction);
+        if (!capChk.allowed) {
+          log("DECISION_SKIP", config.paperMode, { market: market.slug, reason: capChk.reason });
+          results.push({ ...marketContext, action: "skip", reason: capChk.reason });
+          continue;
+        }
+      }
+
       // 5. Execute buy
       const buyOrder = await placeBuyOrder(
         market,
@@ -693,6 +720,11 @@ async function runCryptoTrader(
         decision.entryPrice,
         decision.positionSizeUSDC,
         config.paperMode,
+        false, // crypto BTC markets are not negRisk
+        {
+          enabled: !!config.fillModelEnabled,
+          participationCap: config.fillParticipationCap ?? 0.2,
+        },
       );
 
       // 6. Handle buy lifecycle
@@ -939,9 +971,11 @@ async function getStatus(config: ReturnType<typeof getTraderConfig>, category: s
   // Live-readiness gate verdict — surfaced for every category so each
   // trader page can render a uniform "READY / NOT READY" badge.
   let readyOv: any = {};
+  let statusTrials = 1;
   try {
     const mod: any = await import("@api/routes/trader-settings.mts");
     readyOv = (await mod.loadRuntimeOverrides()) ?? {};
+    if (typeof mod.countTrials === "function") statusTrials = Math.max(1, await mod.countTrials());
   } catch {}
   const thresholds = {
     minTrades:         readyOv.liveReadyMinTrades,
@@ -950,12 +984,15 @@ async function getStatus(config: ReturnType<typeof getTraderConfig>, category: s
     maxCalibrationDev: readyOv.liveReadyMaxCalibDev,
     minSharpe:         readyOv.liveReadyMinSharpe,
     maxDrawdownPct:    readyOv.liveReadyMaxDrawdownPct,
+    minPsr:            readyOv.liveReadyMinPsr,
+    useMinTrl:         readyOv.liveReadyUseMinTrl,
   } as any;
   base.liveReadiness = computeLiveReadiness({
     category: category as any,
     session,
     simVersionExpected: category === "crypto" ? PAPER_SIM_VERSION : null,
     thresholds,
+    trialsCount: statusTrials,
   });
   // Surface override state for the UI even on the read-only status path
   // (so the badge can show "OVERRIDE" without waiting for a cron tick).

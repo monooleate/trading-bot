@@ -15,6 +15,10 @@ interface SummaryStats {
   sharpeRatio: number;
   sharpeCiLo: number;
   sharpeCiHi: number;
+  returnSkew?: number;
+  returnKurtosis?: number;
+  psr?: number;
+  minTrl?: number;
   sortinoRatio: number;
   profitFactor: number;
   expectancy: number;
@@ -363,6 +367,16 @@ function SummaryCards({ s }: { s: SummaryStats }) {
   const evGapValue = `${s.evGap >= 0 ? "+" : ""}$${s.evGap.toFixed(2)}`;
   const evGapSub = s.evGap > 0 ? "actual > model" : s.evGap < 0 ? "actual < model" : "model parity";
 
+  // Robust-Sharpe (B49 #3): PSR (fat-tail-aware significance) + MinTRL (trades
+  // needed for significance — the principled "is it ready?" number).
+  const psr = s.psr;
+  const psrColor = psr == null ? "ec-muted" : psr >= 0.95 ? "ec-pos" : psr >= 0.75 ? "ec-warn" : "ec-neg";
+  const psrValue = psr == null ? "—" : `${(psr * 100).toFixed(0)}%`;
+  const minTrl = s.minTrl;
+  const trlNever = minTrl != null && minTrl >= 999999;
+  const trlColor = minTrl == null ? "ec-muted" : trlNever ? "ec-neg" : s.totalTrades >= minTrl ? "ec-pos" : "ec-warn";
+  const trlValue = minTrl == null ? "—" : trlNever ? "∞" : `${minTrl}`;
+
   return (
     <>
       <div className="et-kpi-grid">
@@ -395,6 +409,8 @@ function SummaryCards({ s }: { s: SummaryStats }) {
               value={s.currentStreak === 0 ? "—" : `${s.currentStreak > 0 ? "+" : ""}${s.currentStreak}`}
               sub={`max ${s.longestWinStreak}W / ${s.longestLossStreak}L`}
               color={streakColor} />
+        <Card title="PSR" value={psrValue} sub="P(true SR>0)" color={psrColor} />
+        <Card title="MinTRL" value={trlValue} sub={`need vs ${s.totalTrades} trades`} color={trlColor} />
       </div>
     </>
   );

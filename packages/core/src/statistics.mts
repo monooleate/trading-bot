@@ -1,4 +1,9 @@
 import type { ClosedTrade, SignalBreakdown } from "./types.mts";
+import { skewness, kurtosis, probabilisticSharpe, minTrackRecordLength } from "./sharpe-robust.mts";
+
+// Sentinel for a non-computable MinTRL (SR ≤ 0 → the record can never become
+// significant). JSON-safe (Infinity serializes to null); the UI renders "∞".
+const MINTRL_NEVER = 999999;
 
 // ─── Math helpers ─────────────────────────────────────────
 
@@ -125,6 +130,11 @@ export interface SummaryStats {
   sharpeRatio: number;
   sharpeCiLo: number;             // 95% bootstrap CI lower (200 resamples, deterministic LCG)
   sharpeCiHi: number;             // 95% bootstrap CI upper — wide band on small N flags "not yet meaningful"
+  // Robust-Sharpe stats (B49 #3) — fat-tail / small-sample aware.
+  returnSkew: number;             // sample skewness of per-trade returns
+  returnKurtosis: number;         // sample RAW kurtosis (normal = 3)
+  psr: number;                    // Probabilistic Sharpe P(true SR > 0) ∈ [0,1] — fat-tail aware significance
+  minTrl: number;                 // Min Track Record Length: trades needed for SR significant at 95% (∞ if SR≤0)
   sortinoRatio: number;           // mean(returns) / std(negative returns) — downside-only Sharpe
   profitFactor: number;           // Σwins / |Σlosses| — capped at 999 when no losses
   expectancy: number;             // p×avgWin − q×avgLoss, in USD per trade
@@ -247,7 +257,9 @@ export function computeSummary(trades: ClosedTrade[], initialBankroll: number = 
     return {
       totalTrades: 0, wins: 0, losses: 0, winRate: 0,
       totalPnl: 0, totalPnlPct: 0, avgPnlPerTrade: 0, avgEdgeAtEntry: 0,
-      sharpeRatio: 0, sharpeCiLo: 0, sharpeCiHi: 0, sortinoRatio: 0,
+      sharpeRatio: 0, sharpeCiLo: 0, sharpeCiHi: 0,
+      returnSkew: 0, returnKurtosis: 3, psr: 0, minTrl: MINTRL_NEVER,
+      sortinoRatio: 0,
       profitFactor: 0, expectancy: 0, payoffRatio: 0,
       longestWinStreak: 0, longestLossStreak: 0, currentStreak: 0,
       evGap: 0,
@@ -274,6 +286,15 @@ export function computeSummary(trades: ClosedTrade[], initialBankroll: number = 
   const rfPerTrade = 0.05 / 365;
   const sharpeRatio = std > 0 ? (avgReturn - rfPerTrade) / std : 0;
   const [sharpeCiLo, sharpeCiHi] = bootstrapSharpeCi(returns, 200, 0.95);
+
+  // Robust-Sharpe stats (B49 #3): fat-tail / small-sample aware significance.
+  // Uses the RAW per-trade Sharpe (not the rounded display value) + sample
+  // skew/kurtosis of the same per-trade returns.
+  const returnSkew = skewness(returns);
+  const returnKurtosis = kurtosis(returns);
+  const psr = probabilisticSharpe(sharpeRatio, returns.length, returnSkew, returnKurtosis, 0);
+  const minTrlRaw = minTrackRecordLength(sharpeRatio, returnSkew, returnKurtosis, 0, 0.95);
+  const minTrl = Number.isFinite(minTrlRaw) ? Math.ceil(minTrlRaw) : MINTRL_NEVER;
 
   // Sortino: downside-only standard deviation. Uses 0 as the MAR
   // (minimum acceptable return) — i.e. the bot's own break-even, not a
@@ -358,6 +379,10 @@ export function computeSummary(trades: ClosedTrade[], initialBankroll: number = 
     sharpeRatio: Math.round(sharpeRatio * 100) / 100,
     sharpeCiLo:   Math.round(sharpeCiLo * 100) / 100,
     sharpeCiHi:   Math.round(sharpeCiHi * 100) / 100,
+    returnSkew:     Math.round(returnSkew * 1000) / 1000,
+    returnKurtosis: Math.round(returnKurtosis * 100) / 100,
+    psr:            Math.round(psr * 1000) / 1000,
+    minTrl,
     sortinoRatio: Math.round(sortinoRatio * 100) / 100,
     profitFactor: Math.round(profitFactor * 100) / 100,
     expectancy:   Math.round(expectancy * 100) / 100,

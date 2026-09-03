@@ -75,3 +75,82 @@ A user kérte a B46/B47/B48 elvégzését is (majd egy közös commitot). Eredm�
 - **B46 ⚪ NOT APPLICABLE.** A feltételezett offset-lapozás-deprecation nem áll fenn: `grep -ri "offset" services/**/*.mts` csak weather `city_offset`-et talál — egyetlen Gamma-hívás sem `offset`-lapoz; mind egyoldalas `order=volume24hr` top-N. Nincs mit keyset-re migrálni; cursor-refaktor tiszta churn lenne. Lezárva (később újranyílik, ha valódi lapozás kell).
 
 **Commit:** a P0/P1/latens fixek + B47 + B48 + a teljes doksi egy commitban.
+
+---
+
+## 57. session — Rendszer-bővítés discovery (execution / portfólió / új edge-források)
+
+A user kérése: *„discovery a netről alaposan legjobb gyakorlatok arra, ami alapján kereskedni akarok, mivel lehet még bővíteni a bot rendszert — alapos munka, vesd össze a kódommal és a kódból dolgozz."*
+
+**Módszer:** 1 read-only kód-katalógus-ágens (a teljes `services/worker/pillars` + `packages/core` + `services/api/routes` fa — a monorepo-restruktúra utáni pontos leltár) + **8 párhuzamos webes kutató-ág** (Polymarket market-making/reward-farming, CLOB order-book/fill-realizmus, negRisk-arb, UMA-resolution-edge, cross-platform-arb, crypto-signal-források, portfólió/meta-labeling, backtest/execution-szigor, + sports/odds-data/weather/politics-LLM). Primer források (arXiv, hivatalos exchange/API-docs, GitHub, peer-reviewed); minden állítás kódra + forrásra verifikálva; skeptikus alapállás (hype explicit megjelölve). **Csak kutatás + doksi — kód nem változott, nincs deploy.**
+
+**Kimenet:** új discovery-doksi [`roadmap/model-discovery-expansion.md`](../roadmap/model-discovery-expansion.md) — a [`model-discovery-forecasting.md`](../roadmap/model-discovery-forecasting.md) (B41) testvére. Míg az a predikciós/valószínűség-réteget vizsgálta (A-lépcső #1-#9 kész), ez a **maradék edge-t**: execution/portfólió/validáció/új-signal/domén.
+
+**Központi tanulság:** a rendszer signalokat halmozott, de a bizonyítékok szerint a maradék profit három NEM-signal rétegben van:
+- **(A) execution/fill-realizmus** — a paper-motor a vékony longshot-könyveket a kijelzett áron + teljes méretben tölti, holott a Polymarketen fordított favorite-longshot bias van (arXiv 2606.04217: 0,00-0,10 bucket átlaghozam −0,0023, Gini 0,970). **Két független ág egymástól függetlenül ezt tette #1-re.** Amíg ez nem valós, minden downstream statisztika fikció.
+- **(B) a mérés-only kalibráció élesítése + walk-forward** — a Platt/AdaHedge/proper-scoring MEGVAN, de nincs live-re kötve; + PSR/MinTRL/DSR a valós track-recordon (honest trial-count!) + walk-forward scoring a prediction-ledgeren (a B11 Hetzner-mentes verziója).
+- **(C) portfólió-szintű crypto-béta koncentráció** — crypto+HL+F-arb mind crypto-béta → hat „független" 8%-os tét = egy nagy korrelált BTC-pozíció (ENB valószínűleg ~2-3, nem 6). Shared-bankroll exposure-cap + ENB-monitor + vol-target/max-DD.
+
+**Egyetlen erős új korrelálatlan signal:** OI-Δ × ár (natívan multi-coin → a BTC-hardcode leváltása is). **Domén-fixek** (weather EMOS/NGR-kalibráció az underdispersion ellen; sports Shin de-vig a fabrikált fair-value helyett + the-odds-api $30/hó feed) valósak de szűk plafonúak. **Skeptikus mentések:** negRisk/Σ-arb (3,6s korrekció, likviditás-cap), Kalshi cross-arb (semantic non-fungibility → csak read-only scanner), settlement-sniping (dispute-prémium), on-chain flows (gyenge+drága), **LLM likvid piacra = csapda** (a piaci ár veri az LLM-et; ugyanaz a fabrikált-fair-value hiba, ami a sportsot megölte). **Új üzletág-jelölt:** market-making/reward-farming (subsidy-harvesting, a meglévő orderflow/VPIN toxicitás-gate-ként újrahasznosítva; live-infra kell).
+
+**Tracker:** [`sprints.md` B49](../roadmap/sprints.md#b49--rendszer-bővítés-discovery-execution--portfólió--új-edge-források--tracker) — a §5-§6 pontozott jelöltek operátor-jóváhagyásra várnak; az A-lépcső mind TS-now, a B-lépcső (auto-redeem/liq-cascade/MM) Hetzner+live-infra-blokkolt (B10).
+
+---
+
+## 58. session — B49 #1: depth-aware fill-modell (T1–T7) implementálva (default-OFF)
+
+A user: *„start with #1, the depth-aware fill model … a többivel is mehetsz a javaslataid szerint. a feladatok után dokumentálás."* A discovery #1 konvergens találata (a hamis paper-PnL a vékony/longshot piacokon — a paper belépő teljes méretben, könyv-ellenőrzés nélkül tölt, majd a fantom share-ök settlementkor $1-t kapnak).
+
+**Grounding (kódból):** [`crypto/execution.mts`](../../services/worker/src/pillars/crypto/execution.mts) `placeBuyOrder` paper-ág `filledShares = sizeUSDC/price` (teljes, cap nélkül) → [`crypto/paper-resolver.mts`](../../services/worker/src/pillars/crypto/paper-resolver.mts) `shares × outcome($1/$0)` − 3,6% lapos fee. A weather ugyanezt a `placeBuyOrder`-t hívja; a sports saját inline fill-t (`positionSizeUSDC/entryPrice`).
+
+**Implementálva (mind: `tsc` exit 0 + 28/28 teszt + build zöld, NEM deployolva, `main`):**
+- **T1 — pure fill-modell** [`packages/core/src/fill-model.mts`](../../packages/core/src/fill-model.mts): `simulateDepthFill(asks, requestedUsdc, {participationCap})` (ask-book walk, participáció-cap szintenként, VWAP entry, részleges fill, a nem-tölthető maradék eldobva); `fallbackFill` (√-law/flat haircut az adverse oldalon, ha nincs könyv — soha nem ingyen-teljes-fill); `sqrtLawImpact`; tick/min-size helperek (`defaultTickForPrice`, `snapDownToTick`, `isPriceOnTick`, `isFillValid`).
+- **T2 — tesztek** [`fill-model.test.mts`](../../packages/core/src/fill-model.test.mts): 8 csoport (teljes fill, 2-szintű VWAP, partial, 5¢-longshot $200→100 share [nem 4000], üres könyv, fallback-haircut, √-law, tick/min-size).
+- **T3 — keyless book-fetch** [`shared/clob-book.mts`](../../services/worker/src/pillars/shared/clob-book.mts): public CLOB `/book`, 5s timeout, hiba→null (a signal-combiner orderflow mintája).
+- **T4 — bekötés** `placeBuyOrder`-be új `fillOpts` param mögött; ON-nál book→`simulateDepthFill`→(thin/nincs) fallback→min-size gate; a `record.price=VWAP`, `size=filledUsdc`, `filledShares` a valós fill; min alatt → `REJECTED` (a runner „failed"). **OFF → bit-azonos legacy.** Crypto ([`pillars/index.mts`](../../services/worker/src/pillars/index.mts)) + weather ([`weather/index.mts`](../../services/worker/src/pillars/weather/index.mts)) átadja a knobokat; új shared `getEffectiveFillOpts()`.
+- **T5 — tick/min-size:** a min-order-size gate a `placeBuyOrder`-ben (`isFillValid`, default 5 share); a per-market élő `/tick-size` fetch a live-útra follow-up (jelenleg hardcode `0.01`).
+- **T6 — fee dupla-számolás fix:** a paper-resolver ON-nál **exit-only** fee-t számol (`settlementFeePctFillModel` default **0,015**), mert a belépő slippage már a VWAP costBasis-ban van; OFF → a legacy 0,036 roundtrip. A decision-engine net-edge gate-je változatlan (3,6% hurdle) → az entry-döntések ON/OFF alatt azonosak → tiszta A/B a fill-realizmusra.
+- **T7 — sports** ([`sports/index.mts`](../../services/worker/src/pillars/sports/index.mts)): a saját inline fill a book+`simulateDepthFill`-lel felülírja a `shares/avgEntry/costBasis`-t; thin→skip. (HL/F-arb kimarad — mély perpek.)
+
+**Knobok:** `fillModelEnabled` (0/1, default **0**) + `fillParticipationCap` (default **0,20**) a `trader-settings` SCHEMA-ban (category `common`, group „Execution (paper fill)"). Env: `FILL_MODEL_ENABLED`, `FILL_PARTICIPATION_CAP`, `SETTLEMENT_FEE_PCT_FILL_MODEL` → [`env-vars.md`](../current-state/env-vars.md).
+
+**Measure-first / default-OFF:** OFF = 0 regresszió. Élesítés: knob ON → prediction-ledger + proper-scoring (Edge Tracker) raw-vs-fill Brier/log-score + a < 0,10 bucket realizált hozam összehasonlítása; a várt eredmény a túl-jóváírt PnL eltűnése (NEM új edge — a longshot strukturálisan veszít, arXiv 2606.04217), a modell értéke a HŰ PnL.
+
+**Maradó (B49 alatt):** T6 fee-finomhangolás méréssel; élő per-market `/tick-size`; crypto korai TP/SL exit bid-walk (`handleSellLifecycle`); weather reconciler fee-parity → B35. Doksi: [`math/18-fill-model.md`](../math/18-fill-model.md).
+
+---
+
+## 59. session — B49 #2: crypto-beta exposure cap (portfólió-réteg) implementálva (default-OFF)
+
+A user: „go ahead with #2, the crypto-beta exposure cap". A discovery #2 strukturális találata: a per-bot 8%-os capek nem látják, hogy a **crypto + HL directional mind crypto-béta** → 6 „független" tét egyetlen korrelált BTC-pozíció (barbell). A user password-jét (fill-modell élesítés) **nem** használtam fel (credential-szabály — az operátornak kell a Settings-ben flippelnie), + a fill-modell amúgy is deploy-precondition (a box a régi kódot futtatja).
+
+**Grounding (kódból):** minden bot külön `loadSession`/`loadHlSession` + saját ¼-Kelly; nincs portfólió-réteg. HL pozíció `sizeUSDC` (notional) + `leverage`; crypto pozíció `costBasis`.
+
+**Implementálva (mind: `tsc` exit 0 + 29/29 teszt + build zöld, NEM deployolva, `main`):**
+- **Pure modul** [`packages/core/src/portfolio-exposure.mts`](../../packages/core/src/portfolio-exposure.mts): `cryptoExposureUsd` (Σ costBasis), `hlExposureUsd` (Σ sizeUSDC/leverage = **margin, nem levered notional** → a két bot commensurate egy bankroll-hányad cap alatt), `checkBetaCap` (fail-open degenerált inputon). 5-csoportos [teszt](../../packages/core/src/portfolio-exposure.test.mts) (crypto/HL exposure, under/at/over cap, fail-open, barbell-eset).
+- **Cross-bot loader** [`shared/portfolio-exposure.mts`](../../services/worker/src/pillars/shared/portfolio-exposure.mts): crypto + HL persisted session snapshot. **F-arb KIZÁRVA** (delta-neutrális → directional béta ≈ 0), weather kizárva.
+- **Config** [`shared/config.mts`](../../services/worker/src/pillars/shared/config.mts) `getEffectiveBetaCap()` + SCHEMA common knobok `betaCapEnabled` (0/1 default **0**) + `betaCapFraction` (default **0,25**, range 0,05–1,0), group „Portfolio risk". Env `BETA_CAP_ENABLED`/`BETA_CAP_FRACTION`.
+- **Bekötés:** crypto ([`pillars/index.mts`](../../services/worker/src/pillars/index.mts)) + HL ([`hyperliquid/index.mts`](../../services/worker/src/pillars/hyperliquid/index.mts)) runner belépő-előtti check. A saját bot exposure-je a **LIVE** session-ből (intra-tick opens is számítanak), a másiké a tick-eleji snapshotból; prospective = crypto costBasis / HL margin; átlépés → skip a cap-reason-nel. **OFF → no-op.**
+
+**Miért gross-capital + default OFF:** a v1 a bruttó lekötött crypto-directional tőkét capeli (nem a signed BTC-deltát — a NO@above-K nem lineáris short; a bruttó a konzervatív, „mennyi tőke van egyszerre crypto-irányra kötve" mérték, pontosan a barbell-aggodalom). Blokkoló gate → measure-first / operator opt-in. **NEM mond ellent Sprint-45-nek** (cap-réteg a per-bot bankrollok fölé, nem bankroll-újraegyesítés).
+
+**Maradó (B49):** multi-status UI crypto-beta utilization mező; signed-net exposure; a §4.C további tételei (#8 vol-target/max-DD kill-switch, #9 ENB diverzifikáció-monitor). Doksi: [`math/19-portfolio-exposure-cap.md`](../math/19-portfolio-exposure-cap.md).
+
+---
+
+## 60. session — B49 #3: robust Sharpe (PSR / MinTRL / DSR) validációs réteg (advisory + gates default-OFF)
+
+A user: „go ahead with #3 és mondjad, hogy mit csináljak amikor én jövök". A discovery #3: a rendszer forward-recordon validál; a két torzítás (kis-minta/fat-tail + config-hunting) forward-native eszközökkel korrigálható — nem kell backtest-motor.
+
+**Grounding (kódból):** `computeSummary` már ad per-trade `returns` + Sharpe + bootstrap-CI-t, de nincs PSR/skew/kurtosis; a `live-readiness` fix „30 trade" küszöböt használ; a knob-változásoknak nincs nyoma (DSR N-je).
+
+**Implementálva (mind: `tsc` exit 0 + 30/30 teszt + build zöld, NEM deployolva, `main`):**
+- **Pure modul** [`packages/core/src/sharpe-robust.mts`](../../packages/core/src/sharpe-robust.mts): `probabilisticSharpe` (PSR = Φ[(SR−SR*)·√(n−1)/√(1−skew·SR+((kurt−1)/4)·SR²)]), `minTrackRecordLength` (∞ ha SR≤benchmark), `expectedMaxSharpe` (best-of-N luck), `deflatedSharpe`, `skewness`/`kurtosis` (nyers, normál=3), `normalCdf`/`normalInv` (Acklam). 6-csoportos [teszt](../../packages/core/src/sharpe-robust.test.mts). Kurtózis-konvenció ellenőrizve: `(kurt−1)/4` nyers kurtózissal (Bailey/LdP).
+- **`computeSummary`** ([statistics.mts](../../packages/core/src/statistics.mts)) új mezők: `returnSkew`, `returnKurtosis`, `psr` (P(SR>0)), `minTrl` (95%-hoz kellő trade-szám; 999999 = ∞, JSON-biztos). A nyers per-trade Sharpe-ból (nem a kerekített display-ből).
+- **Edge Tracker UI** ([EdgeTrackerPanel.tsx](../../apps/web/src/components/EdgeTrackerPanel.tsx)): 2 új KPI-kártya (PSR, MinTRL vs a meglévő trade-szám), szín-kódolva (PSR ≥95% zöld; MinTRL zöld ha elég trade van, piros ha ∞).
+- **Live-readiness** ([live-readiness.mts](../../services/worker/src/pillars/shared/live-readiness.mts)): a summary mindig hordozza `psr`/`minTrl`/**`dsr`**/`trialsCount`; két **opt-in** kapu — `minPsr` (PSR ≥ küszöb) + `useMinTrl` (trade-szám ≥ MinTRL, az önkényes fix 30 helyett). σ_SR proxy = a bootstrap-CI félszélessége. DSR a honest-trial N-nel.
+- **Honest-trial DSR** ([trader-settings.mts](../../services/api/src/routes/trader-settings.mts)): minden knob-változás egy „trial" → `appendTrial(changedKeys)` a POST-ban (`trader-trials` store, cap 1000), `countTrials()` adja az N-t; a crypto runner + a status-út tickenként betölti és átadja a readiness-nek. Common knobok `liveReadyMinPsr` (default 0) + `liveReadyUseMinTrl` (0/1 default 0).
+
+**Miért advisory / opt-in:** a PSR/MinTRL mindig látszik (mérés), de a live-kapuk default OFF (blokkoló gate = viselkedés-változtató, + live-flip B10-blokkolt). A MinTRL a helyes „kész-e?" szám (fat-tailű longshot-botnál több száz trade). A honest N rendszer-szintű (a knobok cross-bot) — egy közelítő N a helyes korrekció.
+
+**Maradó (B49):** valódi cross-config σ_SR (a Sharpe mentése trial-határokon); per-kategória trials; HL saját status-út readiness; a **#4 walk-forward scoring a ledgeren** (a validációs réteg másik fele). Doksi: [`math/20-robust-sharpe.md`](../math/20-robust-sharpe.md).

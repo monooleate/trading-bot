@@ -16,6 +16,9 @@ import { alertError, alertLiveBlocked } from "../shared/telegram.mts";
 import { computeLiveReadiness, shouldForcePaper, type LiveReadinessReport } from "../shared/live-readiness.mts";
 import { appendPredictions } from "@core/prediction-ledger.mts";
 import { getHlConfig, getEffectiveHlConfig } from "./config.mts";
+import { getEffectiveBetaCap } from "../shared/config.mts";
+import { loadPortfolioBetaSnapshot } from "../shared/portfolio-exposure.mts";
+import { hlExposureUsd, checkBetaCap } from "@core/portfolio-exposure.mts";
 import { getHlSignalForCoin } from "./signal-source.mts";
 import { getCurrentPrice } from "./hl-client.mts";
 import { volatilityGate } from "./volatility-gate.mts";
@@ -289,6 +292,12 @@ async function runHyperliquidTraderInner(
   function notEvaluatedGate(label: string, hint?: string): import("@core/types.mts").DecisionGate {
     return { label, passed: false, actual: "not evaluated", required: "—", hint };
   }
+
+  // Portfolio crypto-beta exposure cap (B49 #2) — resolved once per tick. The
+  // crypto side comes from the persisted snapshot; the HL side is recomputed
+  // from the LIVE session at each entry so intra-tick opens count. OFF → no-op.
+  const betaCap  = await getEffectiveBetaCap();
+  const betaSnap = betaCap.enabled ? await loadPortfolioBetaSnapshot(config.paperMode) : null;
 
   for (const coin of SCAN_COINS) {
     const coinGates: import("@core/types.mts").DecisionGate[] = [];
@@ -577,6 +586,26 @@ async function runHyperliquidTraderInner(
           gates: snapGates(),
         });
         continue;
+      }
+
+      // 5b. Portfolio crypto-beta exposure cap (B49 #2). Block a new HL entry if
+      // the aggregate committed capital across crypto + HL would exceed the cap.
+      // HL side = LIVE session (intra-tick aware); crypto side = tick-start
+      // snapshot. Prospective = new position MARGIN (sizeUSDC / leverage). OFF → skip.
+      if (betaCap.enabled && betaSnap) {
+        const currentUsd = hlExposureUsd(session.openPositions as any) + betaSnap.crypto.exposureUsd;
+        const combined   = (session.bankrollCurrent || 0) + betaSnap.crypto.bankrollUsd;
+        const prospectiveMargin = sized.sizeUSDC / Math.max(sized.leverageUsed, 1);
+        const capChk = checkBetaCap(currentUsd, prospectiveMargin, combined, betaCap.fraction);
+        if (!capChk.allowed) {
+          results.push({
+            coin, action: "skip", reason: capChk.reason,
+            direction: signal.direction, edge: netEdgePre,
+            predictedProb: signal.finalProb, marketPrice: signal.marketPrice,
+            gates: snapGates(),
+          });
+          continue;
+        }
       }
 
       // 6a. Build the entry-decision snapshot before placing the order.

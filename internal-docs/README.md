@@ -48,6 +48,10 @@ A **CLAUDE.md** a repo gyökerében az **AKTUÁLIS ÁLLAPOT** szekcióval — mi
 | `math/14-hl-directional.md` | **HL directional perp bot** | 15 gate (incl. directional-consistency), ¼-Kelly + 3x lev cap, TP/SL clamps, paper funding accrual |
 | `math/15-funding-arb.md` | **Funding-rate arb bot** | 8 gate (incl. coin-capacity), atomic 2-leg open, mark-to-market accrual, asymmetric close slippage |
 | `math/16-weather-bot.md` | **Weather bot** (ensemble forecast + bucket matching) | 8 gate (incl. outcome-sum monotonicity), Gauss PDF allokáció, METAR settlement, bug audit |
+| `math/17-recommendations-engine.md` | **Coach-mode recommendations** | per-bot Apply-able javaslatok closed-trade history-ból |
+| `math/18-fill-model.md` | **Depth-aware fill model** (paper execution realizmus) | CLOB ask-book walk + participáció-cap + partial fill + √-law fallback; a longshot paper-PnL over-report fixe (B49 #1) |
+| `math/19-portfolio-exposure-cap.md` | **Crypto-beta exposure cap** (portfólió-réteg) | crypto + HL együttes lekötött tőke cap a kombinált bankroll hányadára; a barbell/korrelált-BTC kockázat fixe (B49 #2) |
+| `math/20-robust-sharpe.md` | **Robust Sharpe: PSR / MinTRL / DSR** (validációs réteg) | fat-tail/kis-minta-tudatos szignifikancia + elvi paper→live kapu + honest-trial deflation (B49 #3) |
 | `math/151-Trading-Strategies.pdf` | Academic reference (Kakushadze) | 151 strategies anthology |
 
 ---

@@ -38,6 +38,7 @@ import {
   computeSummary,
   computeCalibrationHealth,
 } from "@core/statistics.mts";
+import { deflatedSharpe } from "@core/sharpe-robust.mts";
 
 export interface LiveReadinessThresholds {
   minTrades:         number;
@@ -46,6 +47,10 @@ export interface LiveReadinessThresholds {
   maxCalibrationDev: number;       // 0..1 — average |predicted - actual| over buckets
   minSharpe:         number;
   maxDrawdownPct:    number;       // % vs start bankroll (e.g. 25 = 25%)
+  // Robust-Sharpe gates (B49 #3). Both inert at their defaults so behaviour is
+  // unchanged until the operator opts in.
+  minPsr:            number;       // PSR gate: P(true SR>0) ≥ this. 0 = disabled (advisory only).
+  useMinTrl:         number;       // 1 = enforce tradeCount ≥ MinTRL (principled "enough trades" gate); 0 = advisory only.
 }
 
 export const DEFAULT_THRESHOLDS: LiveReadinessThresholds = {
@@ -55,6 +60,8 @@ export const DEFAULT_THRESHOLDS: LiveReadinessThresholds = {
   maxCalibrationDev: 0.07,
   minSharpe:         0.5,
   maxDrawdownPct:    25,
+  minPsr:            0,   // disabled by default
+  useMinTrl:         0,   // advisory by default
 };
 
 export interface ReadinessGate {
@@ -86,6 +93,11 @@ export interface LiveReadinessReport {
     sessionStopped: boolean;
     simVersion:    number | null;
     simVersionExpected: number | null;
+    // Robust-Sharpe (B49 #3) — always surfaced, gates optional.
+    psr:           number;         // P(true SR > 0), fat-tail aware
+    minTrl:        number;         // trades needed for SR significant @95% (999999 = never)
+    dsr:           number;         // deflated Sharpe vs best-of-N-trials luck benchmark
+    trialsCount:   number;         // # config changes logged (honest N for the deflation)
   };
   reason: string;                       // one-line human-readable summary
   // Override state (set by `shouldForcePaper`, surfaced to the UI):
@@ -106,6 +118,10 @@ interface ComputeArgs {
   // doesn't qualify a new sim version. Pass null to skip this gate.
   simVersionExpected?: number | null;
   thresholds?: Partial<LiveReadinessThresholds>;
+  // Honest trial count for the Deflated Sharpe (B49 #3): the number of config
+  // changes evaluated against this forward record. Loaded by the runner from the
+  // trials log. Absent/1 → DSR == PSR (no deflation).
+  trialsCount?: number;
 }
 
 const PREDICTION_DRIVEN: Set<string> = new Set(["crypto", "weather"]);
@@ -197,6 +213,38 @@ export function computeLiveReadiness(args: ComputeArgs): LiveReadinessReport {
     applicable: true,
   });
 
+  // Robust-Sharpe (B49 #3): PSR / MinTRL / DSR. σ_SR proxy = the bootstrap CI
+  // half-width (sampling SD of the Sharpe), used to deflate by best-of-N trials.
+  const sdSharpeProxy = Math.max(0, (summary.sharpeCiHi - summary.sharpeCiLo) / (2 * 1.96));
+  const trialsCount = Math.max(1, Math.floor(args.trialsCount ?? 1));
+  const dsr = deflatedSharpe(
+    summary.sharpeRatio, summary.totalTrades,
+    summary.returnSkew, summary.returnKurtosis,
+    trialsCount, sdSharpeProxy,
+  );
+
+  // PSR gate (opt-in: T.minPsr > 0). Advisory otherwise — psr is always surfaced.
+  gates.push({
+    key:    "psr",
+    label:  "Probabilistic Sharpe (P[SR>0])",
+    actual: `${(summary.psr * 100).toFixed(1)}%`,
+    required: T.minPsr > 0 ? `≥ ${(T.minPsr * 100).toFixed(0)}%` : "advisory",
+    passed: summary.psr >= T.minPsr,
+    applicable: T.minPsr > 0 && summary.totalTrades >= 10,
+  });
+
+  // MinTRL gate (opt-in: T.useMinTrl ≥ 1) — the principled "enough trades" gate,
+  // replacing the arbitrary fixed minTrades. Fat-tailed longshot books need
+  // hundreds; a clean edge needs far fewer.
+  gates.push({
+    key:    "min-trl",
+    label:  "Track record ≥ MinTRL",
+    actual: `${summary.totalTrades} / ${summary.minTrl >= 999999 ? "∞" : summary.minTrl}`,
+    required: T.useMinTrl >= 1 ? "count ≥ MinTRL" : "advisory",
+    passed: summary.totalTrades >= summary.minTrl,
+    applicable: T.useMinTrl >= 1 && summary.totalTrades >= 10,
+  });
+
   if (simVersionExpected !== null) {
     gates.push({
       key:    "sim-version",
@@ -240,6 +288,10 @@ export function computeLiveReadiness(args: ComputeArgs): LiveReadinessReport {
       sessionStopped,
       simVersion,
       simVersionExpected,
+      psr:         summary.psr,
+      minTrl:      summary.minTrl,
+      dsr:         Math.round(dsr * 1000) / 1000,
+      trialsCount,
     },
     reason,
   };

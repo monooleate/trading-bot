@@ -12,6 +12,7 @@ import { matchBucket, marketConsensusModalTempC } from "./bucket-matcher.mts";
 import { makeWeatherDecision, getWeatherConfig, padWeatherGates } from "./decision-engine.mts";
 import type { WeatherTradeDecision, WeatherConfig } from "./decision-engine.mts";
 import { placeBuyOrder } from "../crypto/execution.mts";
+import { getEffectiveFillOpts } from "../shared/config.mts";
 import {
   loadSession,
   saveSession,
@@ -170,6 +171,9 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
   // true if the paper track record hasn't yet met validation thresholds.
   const config: WeatherConfig = { ...configIn };
   const session = await loadSession(config.paperMode, DEFAULT_BANKROLL, "weather");
+  // Depth-aware paper fill options (B49 #1) — fetched once per scan, shared by
+  // every entry below. Default OFF → legacy full fill (zero behaviour change).
+  const fillOpts = await getEffectiveFillOpts();
 
   // Live-readiness gate: weather is prediction-driven (forecast-vs-bucket
   // probability), so the IC / calibration gates apply. Closed trades are
@@ -460,6 +464,7 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
         decision.positionSizeUSDC,
         config.paperMode,
         true, // weather events are negRisk groups; CLOB routes differently
+        { enabled: fillOpts.enabled, participationCap: fillOpts.participationCap },
       );
 
       if (buyOrder.status === "FILLED") {

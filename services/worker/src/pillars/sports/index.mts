@@ -17,6 +17,9 @@ import { loadPaperNeverStop, isAutoStopReason } from "../shared/paper-never-stop
 import { alertSessionStop, alertError } from "../shared/telegram.mts";
 import { registerBot, type BotDefinition } from "../shared/bot-registry.mts";
 import { getSportsConfig, getEffectiveSportsConfig, SPORTS_DEFAULT_BANKROLL, SPORTS_SIM_VERSION } from "./config.mts";
+import { getEffectiveFillOpts } from "../shared/config.mts";
+import { fetchClobBook } from "../shared/clob-book.mts";
+import { simulateDepthFill, fallbackFill, isFillValid } from "@core/fill-model.mts";
 import { findSportsMarkets } from "./market-finder.mts";
 import { makeSportsDecision } from "./decision-engine.mts";
 import {
@@ -47,6 +50,9 @@ async function runSportsTrader(
   // Pull runtime Settings overrides every tick — Loose/Normal/Strict
   // preset propagates to the next scan without redeploy.
   const config = await getEffectiveSportsConfig();
+  // Depth-aware paper fill options (B49 #1 / T7) — fetched once per tick.
+  // Default OFF → legacy full fill at entryPrice (zero behaviour change).
+  const fillOpts = await getEffectiveFillOpts();
   // Paper "never stop" valve (2026-09-01) — resolved once per tick. Raise the
   // loss-limit to +Infinity in paper so the session-loss auto-stop never trips
   // (keeps a running sports session alive). A MANUAL stop still sticks — the
@@ -182,7 +188,28 @@ async function runSportsTrader(
       continue;
     }
 
-    const shares = decision.positionSizeUSDC / Math.max(decision.entryPrice, 0.01);
+    // Fill: legacy full fill unless the depth-aware model is ON (B49 #1 / T7).
+    let shares    = decision.positionSizeUSDC / Math.max(decision.entryPrice, 0.01);
+    let avgEntry  = decision.entryPrice;
+    let costBasis = decision.positionSizeUSDC;
+    if (fillOpts.enabled) {
+      const tokenId = decision.direction === "YES" ? m.yesTokenId : m.noTokenId;
+      const book = await fetchClobBook(tokenId);
+      let res =
+        book && book.asks.length > 0
+          ? simulateDepthFill(book.asks, decision.positionSizeUSDC, { participationCap: fillOpts.participationCap })
+          : null;
+      if (!res || !res.ok) res = fallbackFill(decision.entryPrice, decision.positionSizeUSDC, 0.02);
+      if (res.ok && isFillValid(res.filledShares, res.vwap, 5)) {
+        shares = res.filledShares; avgEntry = res.vwap; costBasis = res.filledUsdc;
+      } else {
+        results.push({
+          market: m.slug, league: m.league, action: "skip",
+          reason: "market too thin for a valid fill (fill model)", gates: decision.gates,
+        });
+        continue;
+      }
+    }
 
     // Build the EntryDecisionSnapshot the unified UI rationale popover reads.
     const predicted = decision.direction === "YES"
@@ -216,8 +243,8 @@ async function runSportsTrader(
       noTokenId:          m.noTokenId,
       direction:          decision.direction,
       shares,
-      avgEntry:           decision.entryPrice,
-      costBasis:          decision.positionSizeUSDC,
+      avgEntry,
+      costBasis,
       openedAt:           new Date().toISOString(),
       endDate:            m.endDate,
       league:             m.league,

@@ -294,6 +294,52 @@ edge-tracker storage-ba kerülnek.
 - **Default:** `http://localhost:8888` (`netlify dev` mód).
 - **Manuálisan állítani nem kell** — Netlify build-time injection.
 
+### `FILL_MODEL_ENABLED` 🟢 OPCIONÁLIS (default OFF) — B49 #1
+
+- **Mire való:** Depth-aware paper fill-modell master-kapcsolója (crypto +
+  weather + sports). Ha `"true"` → a paper belépő a valós CLOB ask-könyvet
+  lépegeti és a látható mélység hányadára capeli a fillt (VWAP entry + részleges
+  fill), kiirtva a vékony/longshot piacok +157%-típusú hamis paper-PnL-jét.
+- **Hol használt:** `packages/core/src/fill-model.mts` (matek); bekötve
+  `services/worker/src/pillars/{crypto/execution.mts, weather/index.mts, sports/index.mts}`.
+- **Default:** OFF (measure-first). A `common` Settings-knob `fillModelEnabled`
+  (0/1) Blobs-override-olja. Lásd [`math/18-fill-model.md`](../math/18-fill-model.md).
+
+### `FILL_PARTICIPATION_CAP` 🟢 OPCIONÁLIS (default 0.20)
+
+- **Mire való:** A látható ask-mélység hányada, amit szintenként elvihetünk
+  (vékony-könyv / adverse-selection realizmus). Csak akkor hat, ha a fill-modell ON.
+- **Default:** `0.20`. Settings-knob: `fillParticipationCap`.
+
+### `SETTLEMENT_FEE_PCT_FILL_MODEL` 🟢 OPCIONÁLIS (default 0.015)
+
+- **Mire való:** A settlement-fee, amit a paper-resolver felszámol, **amikor a
+  fill-modell ON** — exit-only (~1,5%), mert a belépő slippage már a VWAP-ban
+  explicit (a dupla-számolás elkerülése). OFF-nál a legacy `roundtripFeePct`
+  (0,036) marad.
+- **Hol használt:** `services/worker/src/pillars/crypto/paper-resolver.mts`
+  (`getTraderConfig().settlementFeePctFillModel`).
+- **Default:** `0.015`. Finomítás méréssel → B49 follow-up.
+
+### `BETA_CAP_ENABLED` 🟢 OPCIONÁLIS (default OFF) — B49 #2
+
+- **Mire való:** A crypto-beta exposure cap master-kapcsolója. Ha `"true"` → a
+  crypto + HL directional botok EGYÜTTES lekötött crypto-tőkéje (crypto
+  costBasis + HL margin) nem lépheti túl a kombinált bankroll `BETA_CAP_FRACTION`
+  hányadát; a bot skippel egy új belépőt, ami átlépné. F-arb (delta-neutrális) +
+  weather kizárva. Megvédi a portfóliót a barbell/korrelált-BTC kockázattól.
+- **Hol használt:** `packages/core/src/portfolio-exposure.mts` (matek);
+  `services/worker/src/pillars/{index.mts, hyperliquid/index.mts}`.
+- **Default:** OFF (measure-first). Common Settings-knob `betaCapEnabled` (0/1)
+  override-olja. Lásd [`math/19-portfolio-exposure-cap.md`](../math/19-portfolio-exposure-cap.md).
+
+### `BETA_CAP_FRACTION` 🟢 OPCIONÁLIS (default 0.25)
+
+- **Mire való:** A kombinált (crypto + HL) bankroll hányada, amennyi crypto-
+  directional tőke egyszerre lekötve lehet. Csak akkor hat, ha a cap ON.
+- **Default:** `0.25` (a discovery ~15-20%-ot javasol; 0,25 óvatosan generózus).
+  Settings-knob: `betaCapFraction`.
+
 ---
 
 ## 10. Crypto bot tunable-ok (11 db)
