@@ -47,6 +47,7 @@ import { correlationMatrix, effectiveNumberOfBets, type EnbResult } from "@core/
 import { deflatedSharpe } from "@core/sharpe-robust.mts";
 import { evaluatePromotionGate, type PromotionGateResult } from "@core/promotion-gate.mts";
 import { computeConfigAttribution, type ConfigAttributionRow } from "@core/config-fingerprint.mts";
+import { banditArmsFromRecords, thompsonRank, type ArmPosterior } from "@core/thompson.mts";
 
 // Categories that write a prediction ledger (forecasting bots). Funding-arb
 // is delta-neutral carry (not forecasting); sports is not yet wired.
@@ -388,6 +389,10 @@ export default async function handler(req: Request, _ctx: Context) {
     // B50 #4: per-config forecast-quality A/B from the config-fingerprint stamped
     // on each ledger record. Groups resolved predictions by config → Brier skill.
     let configAttribution: ConfigAttributionRow[] | null = null;
+    // B50 #6: discounted Thompson-sampling ranking over the ledger's configs —
+    // which config's forecast is probably best (posterior + prob-best), recency-
+    // discounted (#8 forgetting factor). Measurement-only: the bandit PROPOSES.
+    let banditEval: ArmPosterior[] | null = null;
     if (!isMock) {
       try {
         const cats = category === "all"
@@ -403,8 +408,18 @@ export default async function handler(req: Request, _ctx: Context) {
           walkForward = computeWalkForward(ledgerPointsFromRecords(allRecs), { blockCount: 5 });
           const attr = computeConfigAttribution(allRecs as any[]);
           configAttribution = attr.length > 0 ? attr : null;
+          // #8: unify the forgetting half-life with the icHalfLifeTrades knob
+          // (>0), else a sensible default of 75 resolved predictions.
+          let halfLifeSteps = 75;
+          try {
+            const ov: any = await (await import("./trader-settings.mts")).loadRuntimeOverrides();
+            if (typeof ov?.icHalfLifeTrades === "number" && ov.icHalfLifeTrades > 0) halfLifeSteps = ov.icHalfLifeTrades;
+          } catch { /* default */ }
+          const arms = banditArmsFromRecords(allRecs as any[]);
+          const ranked = thompsonRank(arms, { halfLifeSteps, samples: 3000 });
+          banditEval = ranked.length > 0 ? ranked : null;
         }
-      } catch { ledgerStats = null; walkForward = null; configAttribution = null; }
+      } catch { ledgerStats = null; walkForward = null; configAttribution = null; banditEval = null; }
     }
 
     // B50 #1: promotion gate — collapse the scattered advisory metrics (proper
@@ -555,6 +570,7 @@ export default async function handler(req: Request, _ctx: Context) {
         ledgerStats,
         walkForward,
         configAttribution,
+        banditEval,
         enb,
         signalIC,
         calibrationHealth,

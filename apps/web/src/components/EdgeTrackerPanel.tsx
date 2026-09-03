@@ -172,6 +172,10 @@ interface ConfigAttributionRow {
   brierModel: number; brierMarket: number; brierSkill: number;
   avgEdge: number; avgPredicted: number;
 }
+interface ArmPosterior {
+  arm: string; alpha: number; beta: number;
+  mean: number; nEff: number; nRaw: number; probBest: number;
+}
 
 interface GateCheck {
   label: string; kind: "hard" | "advisory"; passed: boolean;
@@ -197,6 +201,7 @@ interface EdgeTrackerData {
   ledgerStats?: LedgerStats | null;
   walkForward?: WalkForwardResult | null;
   configAttribution?: ConfigAttributionRow[] | null;
+  banditEval?: ArmPosterior[] | null;
   enb?: EnbResult | null;
   signalIC: SignalICResult[];
   calibrationHealth?: CalibrationHealth;
@@ -303,6 +308,7 @@ export default function EdgeTrackerPanel({ defaultCategory = "all" }: Props) {
           {data.ledgerStats && <LedgerStatsCard s={data.ledgerStats} />}
           {data.walkForward && <WalkForwardCard wf={data.walkForward} />}
           {data.configAttribution && <ConfigAttributionCard rows={data.configAttribution} />}
+          {data.banditEval && <BanditEvalCard arms={data.banditEval} />}
           {data.enb && <EnbCard e={data.enb} />}
           {data.calibrationView && <CalibrationViewCard view={data.calibrationView} />}
           <CumulativePnlChart points={data.cumulativePnl} />
@@ -827,6 +833,49 @@ function WalkForwardCard({ wf }: { wf: WalkForwardResult }) {
           ? `Model beats the market price out-of-sample (Brier skill +${(o.brierSkill * 100).toFixed(1)}%) in ${wf.blocksPositiveSkill}/${wf.nBlocks} time blocks.`
           : `Model does NOT beat the market price out-of-sample (Brier skill ${(o.brierSkill * 100).toFixed(1)}%) — on this record the price is the better forecast.`}
         {clusterWarn ? ` ⚠ ${(wf.maxDayShare * 100).toFixed(0)}% of predictions resolved on one day — correlated; treat blocks with caution.` : ""}
+      </div>
+    </div>
+  );
+}
+
+// ─── Thompson bandit (model-discovery-training §3.C / #6 + #8, B50) ──
+// Ranks the ledger's configs by the posterior probability each is best (Thompson
+// sampling), reward = model beat the market, recency-discounted. The bandit
+// PROPOSES; applying the winner (champion-challenger) is a gated follow-up.
+function BanditEvalCard({ arms }: { arms: ArmPosterior[] }) {
+  if (!arms || arms.length === 0) return null;
+  const top = arms[0];
+  const decided = arms.length > 1 && top.probBest >= 0.9;
+  return (
+    <div className="et-chart">
+      <div className="et-chart-header">
+        <h3>Config bandit (Thompson)</h3>
+        <span className="et-ps-n">{arms.length} config{arms.length > 1 ? "s" : ""} · reward = beat market</span>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 4 }}>
+        {arms.map((a) => {
+          const col = a.probBest >= 0.5 ? COLORS.actual : COLORS.muted;
+          return (
+            <div key={a.arm} title={`α=${a.alpha.toFixed(2)} β=${a.beta.toFixed(2)} · effective n=${a.nEff.toFixed(1)} (raw ${a.nRaw})`}
+                 style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11 }}>
+              <span style={{ width: 92, color: "var(--text)", fontFamily: "var(--mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {a.arm === "unlabeled" ? "—" : a.arm}
+              </span>
+              <span style={{ flex: 1, height: 8, background: "var(--surface2)", borderRadius: 2, overflow: "hidden" }}>
+                <span style={{ display: "block", height: "100%", width: `${(a.probBest * 100).toFixed(0)}%`, background: col }} />
+              </span>
+              <span style={{ width: 48, textAlign: "right", color: col, fontFamily: "var(--mono)" }}>{(a.probBest * 100).toFixed(0)}%</span>
+              <span style={{ width: 96, textAlign: "right", color: COLORS.muted, fontFamily: "var(--mono)" }}>
+                win {(a.mean * 100).toFixed(0)}% · n{a.nEff.toFixed(0)}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      <div className="et-ps-msg">
+        {decided
+          ? `Bandit favours «${top.arm === "unlabeled" ? "—" : top.arm}» (${(top.probBest * 100).toFixed(0)}% prob-best). Recency-discounted; the bandit proposes — apply only via a measured champion-challenger promotion.`
+          : `No config is clearly best yet (top ${(top.probBest * 100).toFixed(0)}% prob-best) — keep gathering config-labelled predictions. Fills forward from #4 stamping.`}
       </div>
     </div>
   );
