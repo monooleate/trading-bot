@@ -44,6 +44,8 @@ import {
   type WalkForwardResult,
 } from "@core/walk-forward.mts";
 import { correlationMatrix, effectiveNumberOfBets, type EnbResult } from "@core/enb.mts";
+import { deflatedSharpe } from "@core/sharpe-robust.mts";
+import { evaluatePromotionGate, type PromotionGateResult } from "@core/promotion-gate.mts";
 
 // Categories that write a prediction ledger (forecasting bots). Funding-arb
 // is delta-neutral carry (not forecasting); sports is not yet wired.
@@ -399,6 +401,39 @@ export default async function handler(req: Request, _ctx: Context) {
       } catch { ledgerStats = null; walkForward = null; }
     }
 
+    // B50 #1: promotion gate — collapse the scattered advisory metrics (proper
+    // scores, walk-forward Brier-skill vs market, PSR/MinTRL/DSR) into ONE
+    // pre-registered PROMOTE / HOLD / INSUFFICIENT_DATA verdict, judged PRIMARILY
+    // on proper score (calibration + beats-the-market OOS) with the Sharpe/DSR
+    // side as secondary confirmation. Measurement-only — NO live behaviour change;
+    // it makes the "is this config promotable?" bar explicit instead of eyeballed
+    // PnL. Reuses summary/properScores/walkForward already computed above.
+    let promotionGate: PromotionGateResult | null = null;
+    try {
+      const nTrials = await (await import("./trader-settings.mts")).countTrials();
+      // σ_SR proxy from the bootstrap CI half-width (same approach live-readiness
+      // uses); deflatedSharpe falls back internally if this collapses to 0.
+      const sdProxy = (summary.sharpeCiHi - summary.sharpeCiLo) / (2 * 1.959963985);
+      const dsr = deflatedSharpe(
+        summary.sharpeRatio, summary.totalTrades,
+        summary.returnSkew, summary.returnKurtosis, nTrials, sdProxy,
+      );
+      promotionGate = evaluatePromotionGate({
+        scoredN:         properScores.n,
+        brierSkillScore: properScores.brierSkillScore,
+        logSkillScore:   properScores.logSkillScore,
+        wfBrierSkill:    walkForward?.overall.brierSkill ?? NaN,
+        wfConsistency:   walkForward?.consistency ?? 0,
+        wfMaxDayShare:   walkForward?.maxDayShare ?? 1,
+        wfNResolved:     walkForward?.nResolved ?? 0,
+        psr:             summary.psr,
+        dsr:             Number.isFinite(dsr) ? dsr : 0,
+        minTrl:          summary.minTrl >= 999999 ? Infinity : summary.minTrl,
+        tradeN:          summary.totalTrades,
+        nTrials,
+      });
+    } catch { promotionGate = null; }
+
     // B49 #9: Effective Number of Bets across ALL bots (measurement-only). Build
     // per-bot daily-PnL series aligned to a common date union, correlate, ENB.
     // Reveals whether the 6 bots are really independent edges or ~2-3 crypto-beta.
@@ -505,6 +540,7 @@ export default async function handler(req: Request, _ctx: Context) {
         cumulativePnl,
         calibration,
         properScores,
+        promotionGate,
         calibrationEval,
         onlineWeightsEval,
         ledgerStats,

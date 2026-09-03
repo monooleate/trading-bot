@@ -342,6 +342,36 @@ edge-tracker storage-ba kerülnek.
 
 ---
 
+### `RECORD_OI` 🟢 OPCIONÁLIS (default OFF) — B50 #2
+
+- **Mire való:** log-forward recorder — bekapcsolja a Binance open-interest
+  snapshotolást (BTC/ETH/SOL) a worker-tickben. A Binance API csak ~30 napot
+  őriz → a #5 OI-Δ signal historikus kalibrációjához a forward-log kell.
+  **Minden nem-logolt nap véglegesen elveszett tréning-adat.**
+- **Default:** OFF. `"true"`/`"1"` → ON. Mérés-only, 0 trading-hatás (best-effort
+  külső fetch + írás a `market-recorder` KV-store-ba).
+
+### `RECORDER_OI_COINS` / `RECORDER_OI_INTERVAL_SEC` / `RECORDER_OI_CAP` 🟢 OPCIONÁLIS
+
+- **Default:** `BTC,ETH,SOL` / `900` (15 perc, coarser mint a tick → a cap több
+  napot fed) / `5000` snapshot/coin (~52 nap 15-perces mintán → veri a 30-napos
+  API-retenciót).
+
+### `RECORD_CLOB_BOOK` 🟢 OPCIONÁLIS (default OFF) — B50 #2
+
+- **Mire való:** log-forward recorder — a nyitott crypto+weather pozíciók
+  Polymarket `/book` mélységét snapshotolja minden tickben. A Polymarketnek
+  **nincs historikus book-endpointja** → a #1 depth-aware fill-modell + Kyle-λ/
+  VPIN egyetlen forrása a forward-log.
+- **Default:** OFF. `"true"`/`"1"` → ON. Mérés-only, 0 trading-hatás.
+
+### `RECORDER_BOOK_CAP` 🟢 OPCIONÁLIS (default 5000)
+
+- **Mire való:** a `clob-book` rolling-stream cap (összes token együtt). ~10
+  nyitott piac × tickenként → ~500 tick ≈ 25h gördülő könyv-history.
+
+---
+
 ## 10. Crypto bot tunable-ok (11 db)
 
 A crypto bot kereskedési paraméterei. Mind override-olható a Settings

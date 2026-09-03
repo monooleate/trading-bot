@@ -16,7 +16,7 @@ csak hivatkozás vagy 1-soros összefoglaló legyen.
 | **Implementáció-státusz** (P1.x, Cn., plan-on kívül megvalósult) | [`master-plan.md`](./master-plan.md) | `new-strategies.md` §8-ban van az "extra-roadmap" lista, de hivatalos status tracker a master-plan |
 | **Sprint-szintű operatív feladatok** (active / next / backlog táblák, owner, acceptance criteria, time-boxed) | [`sprints.md`](./sprints.md) | A `master-plan.md` státusz-tracker (✅/⚠️/❌), NEM sprint-tracker |
 | **Stratégia-katalógus** (#1-#37 ötlet specifikációja) | [`new-strategies.md`](./new-strategies.md) | A `master-plan.md` csak hivatkozik rájuk |
-| **Research discovery** (forrásolt survey + pontozott ajánlás, jóváhagyásra váró jelöltek) | [`model-discovery-forecasting.md`](./model-discovery-forecasting.md) (predikciós réteg, B41) + [`model-discovery-expansion.md`](./model-discovery-expansion.md) (execution/portfólió/új-signal/domén, B49) | A jelöltek státusza NEM itt trackelt — a promotált tételek `sprints.md` B-tétel / `new-strategies.md` #N |
+| **Research discovery** (forrásolt survey + pontozott ajánlás, jóváhagyásra váró jelöltek) | [`model-discovery-forecasting.md`](./model-discovery-forecasting.md) (predikciós réteg, B41) + [`model-discovery-expansion.md`](./model-discovery-expansion.md) (execution/portfólió/új-signal/domén, B49) + [`model-discovery-training.md`](./model-discovery-training.md) (training/paraméter-optimalizáció + adatforrások, B50) | A jelöltek státusza NEM itt trackelt — a promotált tételek `sprints.md` B-tétel / `new-strategies.md` #N |
 | **VPS action plan** (EdgeCalc-specifikus 7-fázisos lépéssor) | [`hetzner-migration.md`](./hetzner-migration.md) | A `migration-strangler-fig.md` az absztrakt 9-fázis, NEM action plan |
 | **VPS fizikai layout** (OS-hardening, Postgres-séma, DR, budget) | [`hetzner-infrastructure.md`](./hetzner-infrastructure.md) | A runtime/process/deploy Docker-first → `hetzner-docker-setup.md` |
 | **Docker deployment** (konténerek, docker-compose, Dockerfile-ok, ML model-service, repo+szerver könyvtárfa) | [`hetzner-docker-setup.md`](./hetzner-docker-setup.md) | Az OS-hardening + séma + DR onnan: `hetzner-infrastructure.md` |
@@ -144,6 +144,7 @@ mappára:
 ## Kapcsolódó
 
 - **[`model-discovery-forecasting.md`](./model-discovery-forecasting.md)** — research discovery (2026-09-01): forrásolt survey + pontozott ajánlás a botok predikciós/kalibrációs rétegének fejlesztésére (open-source modellek + elmélet + gyakorlati megvalósítás). A §7 jelölt-tételei operátor-jóváhagyás után promotálhatók `new-strategies.md` / `sprints.md`-be.
+- **[`model-discovery-training.md`](./model-discovery-training.md)** — research discovery (2026-09-03, B50): hogyan „traineljük" a ~96-knobos botot elvi módon, valós historikus adaton, túlillesztés nélkül. A célfüggvény PnL→proper-score váltása, offline kalibráció nagy-N adaton, online adaptív réteg (Thompson-sampling), + a 6-doménes adatforrás-mátrix (backfill vs log-forward). RL alfára = csapda. A §6 jelöltek jóváhagyásra várnak.
 - **`../current-state/`** — a "honnan indulunk" snapshot (architecture, env-vars, deploy, settings, trading-status, auto-claim)
 - **`../math/`** — algoritmus + 4 bot implementation reference (13-crypto / 14-hl / 15-funding-arb / 16-weather)
 - **`../changelog/`** — session-by-session implementációs history

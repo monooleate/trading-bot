@@ -167,6 +167,17 @@ interface EnbResult {
   n: number; enb: number; topFactorShare: number; eigenvalues: number[]; labels?: string[];
 }
 
+interface GateCheck {
+  label: string; kind: "hard" | "advisory"; passed: boolean;
+  actual: string; required: string; hint: string;
+}
+interface PromotionGate {
+  decision: "PROMOTE" | "HOLD" | "INSUFFICIENT_DATA";
+  checks: GateCheck[];
+  hardPassed: number; hardTotal: number;
+  headline: string; detail: string;
+}
+
 interface EdgeTrackerData {
   ok: boolean;
   isMock: boolean;
@@ -174,6 +185,7 @@ interface EdgeTrackerData {
   cumulativePnl: CumulativePoint[];
   calibration: CalibrationBucket[];
   properScores?: ProperScores;
+  promotionGate?: PromotionGate | null;
   calibrationEval?: CalibrationEval;
   onlineWeightsEval?: OnlineWeightsEval;
   ledgerStats?: LedgerStats | null;
@@ -277,6 +289,7 @@ export default function EdgeTrackerPanel({ defaultCategory = "all" }: Props) {
           )}
 
           <SummaryCards s={data.summary} />
+          {data.promotionGate && <PromotionGateCard g={data.promotionGate} />}
           {data.properScores && <ProperScoresCard ps={data.properScores} />}
           {data.calibrationEval && <CalibrationEvalCard ce={data.calibrationEval} />}
           {data.onlineWeightsEval && <OnlineWeightsCard ow={data.onlineWeightsEval} />}
@@ -811,6 +824,51 @@ function WalkForwardCard({ wf }: { wf: WalkForwardResult }) {
   );
 }
 
+// ─── Promotion gate (model-discovery-training §3 / #1, B50) ──
+// Collapses proper-score + walk-forward + PSR/DSR/MinTRL into ONE pre-registered
+// PROMOTE / HOLD / INSUFFICIENT_DATA verdict. Hard gates (proper score, beats the
+// market) decide; PSR/DSR/MinTRL are advisory confirmation. Measurement-only —
+// it makes the "is this config promotable?" bar explicit, changes nothing live.
+function PromotionGateCard({ g }: { g: PromotionGate }) {
+  const tone = g.decision === "PROMOTE" ? COLORS.actual
+             : g.decision === "HOLD" ? COLORS.warn
+             : COLORS.muted;
+  const icon = (passed: boolean) => (passed ? "✓" : "✗");
+  const rows = [...g.checks].sort((a, b) =>
+    (a.kind === b.kind ? 0 : a.kind === "hard" ? -1 : 1));
+  return (
+    <div className="et-chart">
+      <div className="et-chart-header">
+        <h3>Promotion gate (proper-score)</h3>
+        <span className="et-pg-badge" style={{ color: tone, borderColor: tone }}>
+          {g.headline} · {g.hardPassed}/{g.hardTotal} hard
+        </span>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 4 }}>
+        {rows.map((c, i) => {
+          const col = c.passed ? COLORS.actual : (c.kind === "hard" ? COLORS.loss : COLORS.warn);
+          return (
+            <div key={i} title={c.hint}
+                 style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11,
+                          opacity: c.kind === "advisory" ? 0.72 : 1 }}>
+              <span style={{ width: 16, color: col, fontFamily: "var(--mono)", textAlign: "center" }}>{icon(c.passed)}</span>
+              <span style={{ flex: 1, color: "var(--text)" }}>
+                {c.label}
+                {c.kind === "advisory" && (
+                  <span style={{ color: COLORS.muted, fontSize: 9, marginLeft: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>advisory</span>
+                )}
+              </span>
+              <span style={{ width: 130, textAlign: "right", color: col, fontFamily: "var(--mono)" }}>{c.actual}</span>
+              <span style={{ width: 92, textAlign: "right", color: COLORS.muted, fontFamily: "var(--mono)" }}>{c.required}</span>
+            </div>
+          );
+        })}
+      </div>
+      <div className="et-ps-msg" style={{ borderLeft: `2px solid ${tone}`, paddingLeft: 8 }}>{g.detail}</div>
+    </div>
+  );
+}
+
 // ─── Proper-scoring harness (log-score + Brier-Murphy) ──
 // Model-discovery §7 #1. Scores the forecast probability itself on a
 // strictly-proper metric, so combiner/calibration changes can be judged
@@ -1311,6 +1369,7 @@ const styles = `
 .et-ps-kpis { margin-bottom: 12px; }
 .et-ps-msg { font-family: var(--mono); font-size: 10px; color: var(--muted); margin-top: 8px; line-height: 1.5; }
 .et-ps-empty { font-family: var(--mono); font-size: 10px; color: var(--muted); padding: 24px 8px; text-align: center; }
+.et-pg-badge { font-family: var(--mono); font-size: 10px; font-weight: 600; padding: 2px 8px; border: 1px solid; border-radius: 4px; letter-spacing: 0.5px; }
 
 .et-ow-rows { display: flex; flex-direction: column; gap: 5px; margin: 4px 0; }
 .et-ow-row { display: grid; grid-template-columns: 90px 1fr 34px; align-items: center; gap: 8px; }

@@ -58,6 +58,8 @@ A **CLAUDE.md** a repo gyökerében az **AKTUÁLIS ÁLLAPOT** szekcióval — mi
 | `math/24-sports-devig.md` | **Sports de-vig (Shin)** — fabrikált fair-value leváltása | multiplicative/power/**Shin** de-vig; a Shin a legjobb FLB-kalibráció; a live odds-feed a maradó adat-task (B49 #7 = B37) |
 | `math/25-risk-overlay.md` | **Risk overlays: vol-target + drawdown kill-switch** | a ¼-Kelly tetején: méret-skálázás cél/realizált vol szerint + peak-equity DD-stop; default-OFF (B49 #8) |
 | `math/26-enb.md` | **Effective Number of Bets** (diverzifikáció-monitor) | per-bot hozam-korreláció → sajátérték-entrópia ENB; hány független tét valójában a 6 bot; mérés-only (B49 #9) |
+| `math/27-promotion-gate.md` | **Promotion gate** (proper-score promóciós kapu) | a proper-score/walk-forward/DSR mérést egy előre-regisztrált PROMOTE/HOLD/INSUFFICIENT verdikté; proper-score hard, Sharpe/DSR advisory; mérés-only (B50 #1) |
+| `math/28-market-recorder.md` | **Log-forward market-data recorderek** | a nem-visszatölthető adat (Binance OI 30-nap, PM book-mélység) forward-logolása a #5/#1 kalibrációjához; default-OFF env-gated, mérés-only (B50 #2) |
 | `math/151-Trading-Strategies.pdf` | Academic reference (Kakushadze) | 151 strategies anthology |
 
 ---

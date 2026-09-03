@@ -48,12 +48,16 @@ async function main() {
   console.log(`[worker] pillars=${pillars.join(",")} interval=${intervalMs / 1000}s`);
 
   const { startScheduler } = await import("./scheduler.ts");
+  const { runRecorders } = await import("./recorders/index.mts");
   const bodies = pillars.flatMap(payloadsFor);
   const handle = startScheduler(async () => {
     const startedAt = Date.now();
     for (const b of bodies) {
       try { await invoke(b); } catch (e) { console.error("[worker] invoke failed:", e); }
     }
+    // B50 #2: log-forward market-data recorders (default-OFF, env-gated). Runs
+    // AFTER the pillars so it never delays a trade decision; fully best-effort.
+    try { await runRecorders(startedAt); } catch (e) { console.error("[worker] recorders failed:", e); }
     console.log(`[worker] tick done in ${((Date.now() - startedAt) / 1000).toFixed(1)}s`);
   }, intervalMs);
 
