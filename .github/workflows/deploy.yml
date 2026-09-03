@@ -1,0 +1,71 @@
+name: Deploy
+
+# Deploys to the Hetzner box AFTER CI passes on main (or on manual dispatch).
+# SSH → git pull → docker compose up -d --build in the edgecalc project dir.
+# Validates nothing itself — CI is the gate; this only ships a green commit.
+#
+# REQUIRED repo secrets (Settings → Secrets and variables → Actions):
+#   DEPLOY_HOST     box IP/host (e.g. 91.99.218.165)
+#   DEPLOY_USER     ssh user on the box (must be in the `docker` group)
+#   DEPLOY_SSH_KEY  the PRIVATE key (full file incl. BEGIN/END lines)
+# OPTIONAL:
+#   DEPLOY_DIR      compose/repo dir on the box (default /opt/edgecalc)
+#   DEPLOY_PORT     ssh port (default 22)
+#   DEPLOY_KNOWN_HOSTS  pinned host key line (else first-connection TOFU)
+#
+# Until DEPLOY_HOST is set the job SKIPS cleanly (stays green), so pushing this
+# file does not produce a red run before you finish the secret setup.
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # Only when CI succeeded (dispatch runs unconditionally).
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check secrets configured
+        id: chk
+        run: |
+          if [ -z "${{ secrets.DEPLOY_HOST }}" ]; then
+            echo "Deploy secrets not set — skipping (add DEPLOY_HOST/USER/SSH_KEY to enable)."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Deploy over SSH
+        if: steps.chk.outputs.configured == 'true'
+        env:
+          SSH_HOST: ${{ secrets.DEPLOY_HOST }}
+          SSH_USER: ${{ secrets.DEPLOY_USER }}
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          SSH_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_DIR: ${{ secrets.DEPLOY_DIR }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          PORT="${SSH_PORT:-22}"
+          DIR="${DEPLOY_DIR:-/opt/edgecalc}"
+          if [ -n "${KNOWN_HOSTS:-}" ]; then
+            printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+            chmod 644 ~/.ssh/known_hosts
+            HOSTCHECK="-o StrictHostKeyChecking=yes"
+          else
+            HOSTCHECK="-o StrictHostKeyChecking=accept-new"
+          fi
+          echo "Deploying to $SSH_USER@$SSH_HOST:$PORT  dir=$DIR"
+          REMOTE_CMD="set -e; cd '$DIR'; echo '== git pull =='; git pull --ff-only; echo '== compose up -d --build =='; docker compose up -d --build; echo '== status =='; docker compose ps"
+          ssh $HOSTCHECK -p "$PORT" -i ~/.ssh/id_deploy "$SSH_USER@$SSH_HOST" "$REMOTE_CMD"
