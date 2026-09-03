@@ -6,6 +6,7 @@
 // Run: npx tsx packages/core/src/devig-eval.test.mts
 
 import { parseFootballData, scoreDevigMethods, type DevigRecord } from "./devig-eval.mts";
+import { devigMultiplicative, devigPower, devigShin } from "./devig.mts";
 
 interface Failure { test: string; message: string; }
 const failures: Failure[] = [];
@@ -55,6 +56,30 @@ function expect(cond: boolean, test: string, message: string) {
   expect(rows.every((r) => Number.isFinite(r.brier) && Number.isFinite(r.logLoss)), t, "finite scores");
   // sorted ascending by Brier (best first)
   expect(rows[0].brier <= rows[rows.length - 1].brier, t, "sorted by Brier asc");
+  // The methods must actually DIFFER — otherwise this suite would pass even if
+  // devigShin silently returned the multiplicative result (the module's whole
+  // reason to exist is the favorite-longshot correction). Pin at least two
+  // distinct calibrations across the three methods.
+  const distinctBriers = new Set(rows.map((r) => r.brier.toFixed(6)));
+  expect(distinctBriers.size >= 2, t, `methods must produce distinct calibrations, got ${JSON.stringify(rows.map((r) => r.brier))}`);
+}
+
+// ── 3b. de-vig methods correct the favorite-longshot bias directionally ──────
+{
+  const t = "flb-direction";
+  // Fair-longshot odds: heavy favorite + true longshot. Shin/power should pull
+  // the longshot implied prob DOWN and the favorite UP vs plain multiplicative.
+  const odds = [1.5, 4.0, 7.0];
+  const mult = devigMultiplicative(odds);
+  const pow = devigPower(odds);
+  const shin = devigShin(odds);
+  const sum1 = (p: number[]) => Math.abs(p.reduce((a, b) => a + b, 0) - 1) < 1e-6;
+  expect(sum1(mult) && sum1(pow) && sum1(shin), t, "all methods sum to 1");
+  // longshot (index 2) shrinks, favorite (index 0) grows under FLB correction
+  expect(shin[2] < mult[2] && pow[2] < mult[2], t, `longshot pulled down: mult=${mult[2].toFixed(4)} pow=${pow[2].toFixed(4)} shin=${shin[2].toFixed(4)}`);
+  expect(shin[0] > mult[0] && pow[0] > mult[0], t, `favorite pulled up: mult=${mult[0].toFixed(4)} pow=${pow[0].toFixed(4)} shin=${shin[0].toFixed(4)}`);
+  // shin ≠ multiplicative (the regression the plain scoring test can't catch)
+  expect(Math.abs(shin[2] - mult[2]) > 1e-4, t, "shin materially differs from multiplicative");
 }
 
 // ── 4. 2-way records work too (binary market) ────────────────────────────────

@@ -110,5 +110,8 @@ export function scoreDevigMethods(
     }
     rows.push({ method, n, brier: n ? r4(brierSum / n) : NaN, logLoss: n ? r4(logSum / n) : NaN });
   }
-  return rows.sort((a, b) => (a.brier || Infinity) - (b.brier || Infinity));
+  // Push NaN scores (n=0 methods) to the end; a legitimate Brier of 0 must
+  // sort FIRST, so guard on finiteness rather than truthiness (`0 || Infinity`).
+  const key = (x: number) => (Number.isFinite(x) ? x : Infinity);
+  return rows.sort((a, b) => key(a.brier) - key(b.brier));
 }

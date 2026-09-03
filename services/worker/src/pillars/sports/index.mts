@@ -143,12 +143,21 @@ async function runSportsTrader(
   // ─── 3. Evaluate each market ─────────────────────────────────────
   const results: any[] = [];
   for (const m of markets) {
+    // Direction-agnostic model P(YES) for the prediction ledger (B50 #9). This
+    // is the 0.5-pull heuristic the entry snapshot uses, BEFORE the direction
+    // inversion — i.e. the market's YES-probability, not P(chosen side). Logged
+    // (with marketPrice + endDate) on EVERY row (taken + skipped) so the ledger
+    // reconcile can resolve skipped markets and proper-scoring is unbiased, not
+    // taken-only. Matches crypto's `marketContext.predictedProb`.
+    const yesProb = Math.max(0, Math.min(1, 0.5 + (m.yesPrice - 0.5) * 0.55));
+
     // Skip markets where we already hold a position (uniqueness gate).
     const alreadyOpen = session.openPositions.some((p) => p.conditionId === m.conditionId);
     if (alreadyOpen) {
       results.push({
         market: m.slug, league: m.league, action: "skip",
         reason: "already-open",
+        predictedProb: yesProb, marketPrice: m.yesPrice, endDate: m.endDate,
       });
       continue;
     }
@@ -167,13 +176,16 @@ async function runSportsTrader(
 
     if (!decision.shouldTrade) {
       results.push({
-        market:   m.slug,
-        league:   m.league,
-        question: m.question,
-        action:   "skip",
-        reason:   decision.reason,
-        yesPrice: m.yesPrice,
-        gates:    decision.gates,
+        market:        m.slug,
+        league:        m.league,
+        question:      m.question,
+        action:        "skip",
+        reason:        decision.reason,
+        yesPrice:      m.yesPrice,
+        predictedProb: yesProb,
+        marketPrice:   m.yesPrice,
+        endDate:       m.endDate,
+        gates:         decision.gates,
       });
       continue;
     }
@@ -184,6 +196,7 @@ async function runSportsTrader(
       results.push({
         market: m.slug, league: m.league, action: "skip",
         reason: "live mode not yet wired for sports — paper only",
+        predictedProb: yesProb, marketPrice: m.yesPrice, endDate: m.endDate,
         gates:  decision.gates,
       });
       continue;
@@ -206,7 +219,9 @@ async function runSportsTrader(
       } else {
         results.push({
           market: m.slug, league: m.league, action: "skip",
-          reason: "market too thin for a valid fill (fill model)", gates: decision.gates,
+          reason: "market too thin for a valid fill (fill model)",
+          predictedProb: yesProb, marketPrice: m.yesPrice, endDate: m.endDate,
+          gates: decision.gates,
         });
         continue;
       }
@@ -276,7 +291,12 @@ async function runSportsTrader(
       size:          decision.positionSizeUSDC,
       entry:         decision.entryPrice,
       edge:          decision.edge,
-      predictedProb: predicted,
+      // Ledger contract: predictedProb is model P(YES), direction-agnostic (so
+      // Gamma's YES-resolution scores it correctly). `predicted` above is
+      // P(chosen side) — wrong for NO trades — so log `yesProb` instead.
+      predictedProb: yesProb,
+      marketPrice:   m.yesPrice,
+      endDate:       m.endDate,
       gates:         decision.gates,
     });
   }

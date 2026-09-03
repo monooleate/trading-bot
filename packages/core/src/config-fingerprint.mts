@@ -34,9 +34,21 @@ export function hash32(s: string): string {
  * key=value pairs are sorted so the hash is order-independent. Pure.
  */
 export function configFingerprint(overrides: Record<string, unknown> | null | undefined): string {
+  // Accept a finite number OR a non-empty numeric string, and key on the parsed
+  // number, so a knob that round-trips as "1" from an uncoerced form field
+  // hashes the SAME as its number 1 — never silently dropped (which would
+  // collide two genuinely different configs). Booleans / null / objects stay
+  // excluded (unchanged). Today every SCHEMA knob is already a finite number, so
+  // this is a no-op on current data while removing the latent format-drift
+  // footgun.
+  const asNum = (v: unknown): number =>
+    typeof v === "number" ? v
+    : (typeof v === "string" && v.trim() !== "") ? Number(v)
+    : NaN;
   const entries = Object.entries(overrides ?? {})
-    .filter(([, v]) => typeof v === "number" && Number.isFinite(v as number))
-    .map(([k, v]) => `${k}=${v}`)
+    .map(([k, v]) => [k, asNum(v)] as const)
+    .filter(([, n]) => Number.isFinite(n))
+    .map(([k, n]) => `${k}=${n}`)
     .sort();
   return entries.length === 0 ? "default" : hash32(entries.join("|"));
 }

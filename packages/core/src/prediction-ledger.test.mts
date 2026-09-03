@@ -188,6 +188,40 @@ function expect(cond: boolean, test: string, message: string) {
   expect(filled[0].outcome === 1, t, `HL outcome filled by coin, got ${filled[0].outcome}`);
 }
 
+// ── sports ledger contract (B50 #9 fix): skip rows carry P(YES)+endDate ─────
+// Regression guard for the audit finding that sports scan rows lacked
+// predictedProb (→ dropped) and endDate (→ reconcile permanently inert). A
+// sports skip row shaped as sports/index.mts now emits it must survive
+// buildIncoming AND be reconcile-eligible (endDate present, conditionId mapped,
+// predictedProb = model P(YES), direction-agnostic).
+{
+  const t = "sports-ledger";
+  const yesProb = Math.max(0, Math.min(1, 0.5 + (0.30 - 0.5) * 0.55)); // yesPrice 0.30 → 0.39
+  const inc = buildIncoming(
+    [
+      { market: "lakers-vs-celtics", league: "NBA", action: "skip", reason: "Net edge too low",
+        predictedProb: yesProb, marketPrice: 0.30, endDate: "2026-02-01T00:00:00Z" },
+      { market: "psg-vs-city", league: "UCL", action: "traded", direction: "NO",
+        predictedProb: 0.61, marketPrice: 0.55, endDate: "2026-02-02T00:00:00Z", edge: 0.06 },
+    ],
+    [
+      { slug: "lakers-vs-celtics", conditionId: "0xSPORTS1" },
+      { slug: "psg-vs-city", conditionId: "0xSPORTS2" },
+    ],
+    "2026-01-15T00:00:00Z",
+  );
+  expect(inc.length === 2, t, `both sports rows survive (skip NOT dropped), got ${inc.length}`);
+  const skip = inc.find((i) => i.slug === "lakers-vs-celtics")!;
+  expect(skip.taken === false, t, "sports skip → taken=false");
+  expect(skip.endDate === "2026-02-01T00:00:00Z", t, `skip endDate present (reconcile-eligible), got ${skip.endDate}`);
+  expect(skip.conditionId === "0xSPORTS1", t, `skip conditionId mapped, got ${skip.conditionId}`);
+  expect(Number.isFinite(skip.predictedProb) && skip.predictedProb > 0 && skip.predictedProb < 1, t, `skip predictedProb is finite P(YES), got ${skip.predictedProb}`);
+  // Reconcile filter mirror: outcome null + conditionId + past-endDate ⇒ eligible.
+  const rec = upsertRecords([], inc, "sports").find((r) => r.slug === "lakers-vs-celtics")!;
+  const eligible = rec.outcome === null && !!rec.conditionId && !!rec.endDate && new Date(rec.endDate).getTime() < Date.now();
+  expect(eligible, t, "sports skip record is reconcile-eligible after a past endDate");
+}
+
 // ─── CLI report ───────────────────────────────────────────────────────────
 const isMain = (() => {
   try {

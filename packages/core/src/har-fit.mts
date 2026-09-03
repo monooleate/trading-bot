@@ -112,13 +112,17 @@ export interface HarForecastEval {
 export function evaluateHarForecast(
   rv: number[], opts: { trainFrac?: number } = {},
 ): HarForecastEval {
-  const trainFrac = opts.trainFrac ?? 0.7;
+  // Clamp so a caller passing >=1 (or a tiny/NaN value) can't collapse the OOS
+  // window: split must leave at least one held-out point, else n=0 → NaN MSEs
+  // silently masquerade as a result instead of the `empty` sentinel.
+  const rawFrac = opts.trainFrac ?? 0.7;
+  const trainFrac = Number.isFinite(rawFrac) ? Math.min(0.95, Math.max(0.1, rawFrac)) : 0.7;
   const clean = (rv ?? []).filter((v) => Number.isFinite(v) && v >= 0);
   const N = clean.length;
   const empty: HarForecastEval = { n: 0, fittedMse: NaN, equalMse: NaN, rwMse: NaN, fittedBeatsEqual: false, fittedBeatsRw: false };
   if (N < 22 + 40) return empty;
 
-  const split = Math.max(22 + 10, Math.floor(N * trainFrac));
+  const split = Math.min(N - 1, Math.max(22 + 10, Math.floor(N * trainFrac)));
   const fit = fitHarWeights(clean.slice(0, split), { minRows: 10 });
   if (!fit.fitted) return empty;
 

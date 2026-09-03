@@ -23,7 +23,12 @@ A roadmap #9 három dolgot csomagolt össze; a kód-valóság szerint eltérően
 
 **Állapot-megjegyzés:** a sports jelenleg **leállítva** (a fabrikált fair-value + B37 odds-feed-hiány miatt) → a runner a stopped-guardnál korán kilép, tehát a ledger **a sports újraindulásáig (B37 után) nem tölt.** De az infrastruktúra kész, és a taken-trade-ek predikcióit rögzíti, amint a bot fut. Post-B37 valós Shin-fair-value-kat logol.
 
-**Ismert korlát (follow-up):** a fő edge-skip ág (`!decision.shouldTrade`) jelenleg **nem hordoz `predictedProb`-ot** (a `predicted` a skip után áll elő, a `decision` nem exponálja), így a sports-ledger egyelőre **taken-heavy** (a skipped-but-evaluated piacok nem mind kerülnek be → részleges unbiasedness). A teljes unbiased skip-loggoláshoz a decision-engine-nek ki kell adnia a `predicted`-et; kis follow-up, B37-hez kötve.
+**Audit-fix (2026-09-03, 78. session):** a bekötés eredeti verziója **két latens hibát** hordozott, amit az audit feltárt és javított — a sports-ledger a fix előtt gyakorlatilag inert volt:
+- **`endDate` hiányzott minden result-row-ról** → a `reconcileLedger` pending-szűrője (`r.endDate && …`) **soha** nem talált jelöltet → a skipped-market Gamma-reconcile **strukturálisan sosem futott** (holt `reconcileLedger("sports")` hívás). **Fix:** `endDate: m.endDate` minden row-on (traded + skip).
+- **A skip-rowok nem hordoztak `predictedProb`-ot** → `buildIncoming` **eldobta** őket → a skipped piacok be sem kerültek → a ledger nemcsak „taken-heavy", hanem **taken-only** volt. **Fix:** minden skip-row kap `predictedProb: yesProb`-ot (a direction-agnosztikus model P(YES) = a 0.5-pull heurisztika a direction-inverzió **előtt**), + `marketPrice: m.yesPrice`.
+- **Bónusz-korrekció:** a *traded* row `predictedProb`-ja `predicted` (= **P(chosen side)**) volt, ami NO-trade-eknél **hibás** a ledger-kontraktushoz (`predictedProb = model P(YES)`, direction-agnosztikus) képest → a Gamma YES-rezolúció ellen rossz Brier-t számolt volna. **Fix:** a traded row is a `yesProb`-ot logolja (mint a crypto `marketContext.predictedProb: signal.finalProb`). Zero UI-hatás (a `SportsTrader` nem olvassa a result-row `predictedProb`-ot).
+
+A sports-ledger mostantól **valóban unbiased** (taken + skipped), és a reconcile funkcionális. Regressziós pin: [`prediction-ledger.test.mts`](../../packages/core/src/prediction-ledger.test.mts) „sports-ledger" blokk. A fabrikált fair-value **minősége** külön ügy → **B37** (valós Pinnacle Shin de-vig).
 
 ---
 
