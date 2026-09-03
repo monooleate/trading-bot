@@ -18,6 +18,7 @@ import { getStore } from "@netlify/blobs";
 import { checkAuth } from "./_auth-guard.ts";
 import { CORS, getTraderConfig, getBtcExitConfig } from "@worker/pillars/shared/config.mts";
 import { effectiveTrialCount } from "@core/trial-cluster.mts";
+import { configFingerprint } from "@core/config-fingerprint.mts";
 
 const STORE_NAME = "trader-settings";
 const KEY = "runtime-overrides-v1";
@@ -605,6 +606,19 @@ export async function effectiveTrials(threshold = 0.5): Promise<{ literal: numbe
   const literal = log.length;
   const effective = literal === 0 ? 0 : effectiveTrialCount(log, threshold);
   return { literal, effective };
+}
+
+/**
+ * B50 #4: a stable fingerprint of the currently-active config (saved overrides),
+ * for stamping each prediction-ledger record so forecast quality can be A/B'd by
+ * config. Best-effort — "default" on any failure. Runners call this once per tick.
+ */
+export async function currentConfigFingerprint(): Promise<string> {
+  try {
+    return configFingerprint((await loadRuntimeOverrides()) ?? {});
+  } catch {
+    return "default";
+  }
 }
 
 // ─── HTTP handler ─────────────────────────────────────────────────────

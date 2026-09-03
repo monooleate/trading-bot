@@ -46,6 +46,7 @@ import {
 import { correlationMatrix, effectiveNumberOfBets, type EnbResult } from "@core/enb.mts";
 import { deflatedSharpe } from "@core/sharpe-robust.mts";
 import { evaluatePromotionGate, type PromotionGateResult } from "@core/promotion-gate.mts";
+import { computeConfigAttribution, type ConfigAttributionRow } from "@core/config-fingerprint.mts";
 
 // Categories that write a prediction ledger (forecasting bots). Funding-arb
 // is delta-neutral carry (not forecasting); sports is not yet wired.
@@ -384,6 +385,9 @@ export default async function handler(req: Request, _ctx: Context) {
     // B49 #4: walk-forward scoring over the ledger — model P(YES) vs the market
     // baseline, per chronological block. Reuses the records loaded for stats.
     let walkForward: WalkForwardResult | null = null;
+    // B50 #4: per-config forecast-quality A/B from the config-fingerprint stamped
+    // on each ledger record. Groups resolved predictions by config → Brier skill.
+    let configAttribution: ConfigAttributionRow[] | null = null;
     if (!isMock) {
       try {
         const cats = category === "all"
@@ -395,10 +399,12 @@ export default async function handler(req: Request, _ctx: Context) {
           );
           const parts = loaded.map(({ c, recs }) => computeLedgerStats(c, recs));
           ledgerStats = cats.length === 1 ? parts[0] : aggregateLedgerStats("all", parts);
-          const points = loaded.flatMap(({ recs }) => ledgerPointsFromRecords(recs));
-          walkForward = computeWalkForward(points, { blockCount: 5 });
+          const allRecs = loaded.flatMap(({ recs }) => recs);
+          walkForward = computeWalkForward(ledgerPointsFromRecords(allRecs), { blockCount: 5 });
+          const attr = computeConfigAttribution(allRecs as any[]);
+          configAttribution = attr.length > 0 ? attr : null;
         }
-      } catch { ledgerStats = null; walkForward = null; }
+      } catch { ledgerStats = null; walkForward = null; configAttribution = null; }
     }
 
     // B50 #1: promotion gate — collapse the scattered advisory metrics (proper
@@ -548,6 +554,7 @@ export default async function handler(req: Request, _ctx: Context) {
         onlineWeightsEval,
         ledgerStats,
         walkForward,
+        configAttribution,
         enb,
         signalIC,
         calibrationHealth,

@@ -864,7 +864,11 @@ async function runCryptoTrader(
   // forecast (taken + skipped) + fill outcomes for taken markets from
   // closedTrades, then reconcile a budgeted slice of past-endDate skipped
   // markets against Gamma. Best-effort, non-throwing — never breaks a tick.
-  await appendPredictions("crypto", results, scanList, updatedSession.closedTrades);
+  // B50 #4: stamp each logged prediction with the active-config fingerprint so
+  // forecast quality can be A/B'd by config later (best-effort → "default").
+  let cryptoCfgHash = "default";
+  try { const sm: any = await import("@api/routes/trader-settings.mts"); cryptoCfgHash = await sm.currentConfigFingerprint(); } catch {}
+  await appendPredictions("crypto", results, scanList, updatedSession.closedTrades, undefined, cryptoCfgHash);
   await reconcileLedger("crypto");
 
   return await finish({

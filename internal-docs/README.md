@@ -61,6 +61,7 @@ A **CLAUDE.md** a repo gyökerében az **AKTUÁLIS ÁLLAPOT** szekcióval — mi
 | `math/27-promotion-gate.md` | **Promotion gate** (proper-score promóciós kapu) | a proper-score/walk-forward/DSR mérést egy előre-regisztrált PROMOTE/HOLD/INSUFFICIENT verdikté; proper-score hard, Sharpe/DSR advisory; mérés-only (B50 #1) |
 | `math/28-market-recorder.md` | **Log-forward market-data recorderek** | a nem-visszatölthető adat (Binance OI 30-nap, PM book-mélység) forward-logolása a #5/#1 kalibrációjához; default-OFF env-gated, mérés-only (B50 #2) |
 | `math/29-effective-trials.md` | **Effektív-trial DSR** (klaszterezett trial-szám) | a közel-duplikátum knob-tweakeket knob-halmaz-átfedésen klaszterezi → N_eff ≤ literál N a DSR-deflációhoz; ONC-proxy per-trial-hozam nélkül (B50 #3) |
+| `math/30-config-attribution.md` | **Per-trade config-címkézés + A/B** | minden ledger-rekord az aktív config-fingerprintjével stampelve → per-config Brier-skill A/B a forecaston; feloldja a valódi ONC/σ_SR-t; mérés-only, nincs migráció (B50 #4) |
 | `math/151-Trading-Strategies.pdf` | Academic reference (Kakushadze) | 151 strategies anthology |
 
 ---

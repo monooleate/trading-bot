@@ -48,6 +48,7 @@ export interface PredictionRecord {
   scans: number;                      // # ticks this market was logged
   outcome: number | null;             // YES-resolution 0/1 once resolved, else null
   resolvedAt: string | null;
+  configHash?: string | null;         // B50 #4: fingerprint of the active config at the latest scan
 }
 
 // Shape of the incoming per-market prediction (derived from a bot's scan
@@ -65,6 +66,7 @@ export interface IncomingPrediction {
   lastAction: string;
   skipReason: string | null;
   signalBreakdown: Record<string, number | null> | null;
+  configHash?: string | null;
 }
 
 const isYesLike = (d: unknown): boolean => d === "YES" || d === "LONG";
@@ -84,6 +86,7 @@ export function buildIncoming(
   results: any[],
   markets: any[],
   ts: string,
+  configHash: string = "default",
 ): IncomingPrediction[] {
   const condBySlug = new Map<string, string>();
   for (const m of markets ?? []) {
@@ -110,6 +113,7 @@ export function buildIncoming(
       lastAction: action,
       skipReason: action === "skip" || action === "failed" ? (r.reason ?? null) : null,
       signalBreakdown: r.signalBreakdown ?? null,
+      configHash,
     });
   }
   return out;
@@ -150,6 +154,7 @@ export function upsertRecords(
         scans: 1,
         outcome: null,
         resolvedAt: null,
+        configHash: inc.configHash ?? null,
       });
     } else {
       prev.ts = inc.ts;
@@ -163,6 +168,7 @@ export function upsertRecords(
       prev.lastAction = inc.lastAction;
       prev.skipReason = inc.skipReason;
       if (inc.signalBreakdown) prev.signalBreakdown = inc.signalBreakdown;
+      if (inc.configHash) prev.configHash = inc.configHash;   // latest scan's config wins
       prev.scans += 1;
     }
   }
@@ -263,10 +269,11 @@ export async function appendPredictions(
   markets: any[],
   closedTrades: any[] = [],
   cap: number = DEFAULT_CAP,
+  configHash: string = "default",
 ): Promise<void> {
   try {
     const now = new Date().toISOString();
-    const incoming = buildIncoming(results, markets, now);
+    const incoming = buildIncoming(results, markets, now, configHash);
     if (incoming.length === 0 && (closedTrades?.length ?? 0) === 0) return;
     const existing = await loadLedger(category);
     let next = upsertRecords(existing, incoming, category);

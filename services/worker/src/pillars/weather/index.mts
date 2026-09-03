@@ -631,7 +631,10 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
   // forecast (taken + skipped) keyed by the matched bucket's conditionId,
   // then Gamma-reconcile past-endDate ones. markets=[] so each row's own
   // (per-bucket) conditionId is used, not an event-level one. Best-effort.
-  await appendPredictions("weather", results, [], updatedSession.closedTrades);
+  // B50 #4: stamp each logged prediction with the active-config fingerprint.
+  let weatherCfgHash = "default";
+  try { const sm: any = await import("@api/routes/trader-settings.mts"); weatherCfgHash = await sm.currentConfigFingerprint(); } catch {}
+  await appendPredictions("weather", results, [], updatedSession.closedTrades, undefined, weatherCfgHash);
   await reconcileLedger("weather");
 
   return {

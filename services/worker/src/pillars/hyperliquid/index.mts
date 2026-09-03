@@ -721,7 +721,10 @@ async function runHyperliquidTraderInner(
   // — the ledger tolerates both). No Gamma reconcile: HL is a perp, not a
   // Polymarket market, so skipped-coin outcomes await a future price-based
   // reconcile (up/down over the horizon). Best-effort, non-throwing.
-  await appendPredictions("hyperliquid", results, [], session.closedTrades);
+  // B50 #4: stamp each logged prediction with the active-config fingerprint.
+  let hlCfgHash = "default";
+  try { const sm: any = await import("@api/routes/trader-settings.mts"); hlCfgHash = await sm.currentConfigFingerprint(); } catch {}
+  await appendPredictions("hyperliquid", results, [], session.closedTrades, undefined, hlCfgHash);
 
   // Persist per-signal realized IC for the signal-combiner's optional
   // blending path. Cheap; runs every tick so the Edge Tracker UI can

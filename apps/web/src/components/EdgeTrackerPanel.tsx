@@ -167,6 +167,12 @@ interface EnbResult {
   n: number; enb: number; topFactorShare: number; eigenvalues: number[]; labels?: string[];
 }
 
+interface ConfigAttributionRow {
+  configHash: string; n: number;
+  brierModel: number; brierMarket: number; brierSkill: number;
+  avgEdge: number; avgPredicted: number;
+}
+
 interface GateCheck {
   label: string; kind: "hard" | "advisory"; passed: boolean;
   actual: string; required: string; hint: string;
@@ -190,6 +196,7 @@ interface EdgeTrackerData {
   onlineWeightsEval?: OnlineWeightsEval;
   ledgerStats?: LedgerStats | null;
   walkForward?: WalkForwardResult | null;
+  configAttribution?: ConfigAttributionRow[] | null;
   enb?: EnbResult | null;
   signalIC: SignalICResult[];
   calibrationHealth?: CalibrationHealth;
@@ -295,6 +302,7 @@ export default function EdgeTrackerPanel({ defaultCategory = "all" }: Props) {
           {data.onlineWeightsEval && <OnlineWeightsCard ow={data.onlineWeightsEval} />}
           {data.ledgerStats && <LedgerStatsCard s={data.ledgerStats} />}
           {data.walkForward && <WalkForwardCard wf={data.walkForward} />}
+          {data.configAttribution && <ConfigAttributionCard rows={data.configAttribution} />}
           {data.enb && <EnbCard e={data.enb} />}
           {data.calibrationView && <CalibrationViewCard view={data.calibrationView} />}
           <CumulativePnlChart points={data.cumulativePnl} />
@@ -819,6 +827,48 @@ function WalkForwardCard({ wf }: { wf: WalkForwardResult }) {
           ? `Model beats the market price out-of-sample (Brier skill +${(o.brierSkill * 100).toFixed(1)}%) in ${wf.blocksPositiveSkill}/${wf.nBlocks} time blocks.`
           : `Model does NOT beat the market price out-of-sample (Brier skill ${(o.brierSkill * 100).toFixed(1)}%) — on this record the price is the better forecast.`}
         {clusterWarn ? ` ⚠ ${(wf.maxDayShare * 100).toFixed(0)}% of predictions resolved on one day — correlated; treat blocks with caution.` : ""}
+      </div>
+    </div>
+  );
+}
+
+// ─── Config attribution (model-discovery-training §2.C / #4, B50) ──
+// Per-config forecast quality from the fingerprint stamped on each ledger record.
+// Groups resolved predictions by config → Brier skill vs the market price, so a
+// knob change can be A/B'd on the FORECAST (not noisy PnL). Fills forward from
+// deploy; pre-#4 records show as "unlabeled".
+function ConfigAttributionCard({ rows }: { rows: ConfigAttributionRow[] }) {
+  if (!rows || rows.length === 0) return null;
+  return (
+    <div className="et-chart">
+      <div className="et-chart-header">
+        <h3>Config A/B (forecast quality)</h3>
+        <span className="et-ps-n">{rows.length} config{rows.length > 1 ? "s" : ""} · Brier skill vs market</span>
+      </div>
+      <div className="tbl-scroll">
+        <table className="et-cfg-tbl">
+          <thead>
+            <tr><th>Config</th><th>n</th><th>Brier skill</th><th>Brier (model)</th><th>market</th><th>avg edge</th></tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const col = r.brierSkill > 0 ? COLORS.actual : COLORS.loss;
+              return (
+                <tr key={r.configHash}>
+                  <td style={{ fontFamily: "var(--mono)" }}>{r.configHash === "unlabeled" ? "—" : r.configHash}</td>
+                  <td>{r.n}</td>
+                  <td style={{ color: col, fontFamily: "var(--mono)" }}>{(r.brierSkill * 100).toFixed(1)}%</td>
+                  <td style={{ fontFamily: "var(--mono)" }}>{r.brierModel.toFixed(3)}</td>
+                  <td style={{ fontFamily: "var(--mono)", color: COLORS.muted }}>{r.brierMarket.toFixed(3)}</td>
+                  <td style={{ fontFamily: "var(--mono)", color: COLORS.muted }}>{r.avgEdge.toFixed(3)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div className="et-ps-msg">
+        Each config = a fingerprint of the saved overrides active when the forecast fired. Compare Brier skill across configs to promote a knob change on forecast quality — not PnL. Small-n rows are indicative only.
       </div>
     </div>
   );
@@ -1370,6 +1420,11 @@ const styles = `
 .et-ps-msg { font-family: var(--mono); font-size: 10px; color: var(--muted); margin-top: 8px; line-height: 1.5; }
 .et-ps-empty { font-family: var(--mono); font-size: 10px; color: var(--muted); padding: 24px 8px; text-align: center; }
 .et-pg-badge { font-family: var(--mono); font-size: 10px; font-weight: 600; padding: 2px 8px; border: 1px solid; border-radius: 4px; letter-spacing: 0.5px; }
+.et-cfg-tbl { width: 100%; border-collapse: collapse; font-size: 11px; }
+.et-cfg-tbl th { text-align: right; color: var(--muted); font-weight: 500; padding: 4px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.et-cfg-tbl th:first-child { text-align: left; }
+.et-cfg-tbl td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--surface2); white-space: nowrap; }
+.et-cfg-tbl td:first-child { text-align: left; }
 
 .et-ow-rows { display: flex; flex-direction: column; gap: 5px; margin: 4px 0; }
 .et-ow-row { display: grid; grid-template-columns: 90px 1fr 34px; align-items: center; gap: 8px; }
