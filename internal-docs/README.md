@@ -56,6 +56,8 @@ A **CLAUDE.md** a repo gyökerében az **AKTUÁLIS ÁLLAPOT** szekcióval — mi
 | `math/22-oi-delta.md` | **OI-Δ × price signal** (leverage-flow, 9. combiner-signal) | open-interest-változás × ármozgás kvadráns; korrelálatlan az orderflow-val, multi-coin, default-OFF (B49 #5) |
 | `math/23-emos.md` | **EMOS/NGR ensemble kalibráció** (weather underdispersion-fix) | CRPS-fit per-állomás N(μ,σ); METAR-alapú unbiased residual-log + refit; a jó-irány/rossz-sizing gyökér-fix (B49 #6) |
 | `math/24-sports-devig.md` | **Sports de-vig (Shin)** — fabrikált fair-value leváltása | multiplicative/power/**Shin** de-vig; a Shin a legjobb FLB-kalibráció; a live odds-feed a maradó adat-task (B49 #7 = B37) |
+| `math/25-risk-overlay.md` | **Risk overlays: vol-target + drawdown kill-switch** | a ¼-Kelly tetején: méret-skálázás cél/realizált vol szerint + peak-equity DD-stop; default-OFF (B49 #8) |
+| `math/26-enb.md` | **Effective Number of Bets** (diverzifikáció-monitor) | per-bot hozam-korreláció → sajátérték-entrópia ENB; hány független tét valójában a 6 bot; mérés-only (B49 #9) |
 | `math/151-Trading-Strategies.pdf` | Academic reference (Kakushadze) | 151 strategies anthology |
 
 ---

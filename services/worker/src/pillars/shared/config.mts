@@ -130,6 +130,29 @@ export async function getEffectiveBetaCap(): Promise<{ enabled: boolean; fractio
   }
 }
 
+// Portfolio risk overlays (B49 #8): vol-target + drawdown kill-switch. Env
+// defaults OFF; `common` Blobs knobs override. Read once per tick by the runner.
+export async function getEffectiveRiskOverlay(): Promise<{
+  volTargetEnabled: boolean; volTargetVol: number; ddKillEnabled: boolean; maxDdFraction: number;
+}> {
+  const base = {
+    volTargetEnabled: process.env.RISK_VOL_TARGET_ENABLED === "true",
+    volTargetVol: parseFloat(process.env.RISK_VOL_TARGET || "0.10"),
+    ddKillEnabled: process.env.RISK_DD_KILL_ENABLED === "true",
+    maxDdFraction: parseFloat(process.env.RISK_MAX_DD_FRACTION || "0.25"),
+  };
+  try {
+    const mod: any = await import("@api/routes/trader-settings.mts");
+    const ov = await mod.loadRuntimeOverrides();
+    return {
+      volTargetEnabled: ov.riskVolTargetEnabled != null ? ov.riskVolTargetEnabled === 1 : base.volTargetEnabled,
+      volTargetVol: ov.riskVolTarget ?? base.volTargetVol,
+      ddKillEnabled: ov.riskDdKillEnabled != null ? ov.riskDdKillEnabled === 1 : base.ddKillEnabled,
+      maxDdFraction: ov.riskMaxDdFraction ?? base.maxDdFraction,
+    };
+  } catch { return base; }
+}
+
 export async function getEffectiveBtcExitConfig() {
   const base = getBtcExitConfig();
   try {

@@ -223,3 +223,15 @@ A user: „aztán mehetsz az 5-ös csomagra" → sorban #7. A sports „fair val
 **Maradó (B49/B37/B44):** odds-feed + event-matching; CLV-KPI; NO-oldali leg-mismatch + fee-parity; freshness-gate. Doksi: [`math/24-sports-devig.md`](../math/24-sports-devig.md).
 
 **B49 A-lépcső: #1–#7 ✅ (a #7 matek-kész, odds-feed-gated); hátra #8 vol-target/max-DD, #9 ENB monitor.**
+
+### 65-66. session — B49 #8 (risk overlays) + #9 (ENB monitor) → az A-lépcső TELJES
+
+A user: „aztán mehetsz az 5-ös csomagra" → sorban a maradék. Két portfólió-szintű tétel.
+
+**#8 — risk overlays (vol-target + DD kill-switch), default-OFF.** Új pure modul [`packages/core/src/risk-overlay.mts`](../../packages/core/src/risk-overlay.mts) (`realisedVol`, `volTargetMultiplier` [clamp cél/realizált-vol], `drawdownKill` [peak-to-current, fail-open]) + 4-csoportos teszt. Bekötve a crypto runnerbe: a DD-kill (peak a closed-trade equity-görbéből) halt-olja az új belépőt; a vol-target skálázza a `sizeUSDC`-t (a beta-cap/#1-fill/entry-snapshot/alert konzisztensen a skálázott méretet kapja). Knobok `riskVolTargetEnabled`/`riskVolTarget`/`riskDdKillEnabled`/`riskMaxDdFraction` (common). OFF → bit-azonos. A DD-kill a B33 (peak-equity stop) elvi változata. Doksi: [`math/25-risk-overlay.md`](../math/25-risk-overlay.md).
+
+**#9 — ENB diverzifikáció-monitor, mérés-only.** Új pure modul [`packages/core/src/enb.mts`](../../packages/core/src/enb.mts) (`correlationMatrix` + `jacobiEigenvalues` + `effectiveNumberOfBets` = sajátérték-entrópia effektív rang) + 7-csoportos teszt (barbell: 4 bot de ENB≈2). Bekötve az [`edge-tracker.mts`](../../services/api/src/routes/edge-tracker.mts)-be: minden bot napi-PnL sorozata → korreláció → ENB (`enb` mező) + `EnbCard` (ENB/N, diverzifikáció %, top-faktor %, koncentráció-warning). Megmondja, hány **független** tét valójában a 6 bot (a crypto-béta koncentráció mérőszáma → igazolja a #2 capet). 0 trading-hatás. Doksi: [`math/26-enb.md`](../math/26-enb.md).
+
+`tsc` exit 0 + **35/35 teszt** + build zöld.
+
+**🎉 B49 A-lépcső (#1–#9) TELJES:** #1 depth-aware fill · #2 crypto-béta cap · #3 PSR/MinTRL/DSR · #4 walk-forward scoring · #5 OI-Δ signal · #6 weather EMOS · #7 sports Shin de-vig · #8 vol-target/DD-kill · #9 ENB monitor. Mind pure-core + teszt + bekötés + doksi (math/18–26), default-OFF/mérés-first. **Maradó a méréshez:** a knobok élesítése + adat-gyűjtés (fill/beta/OI ON → Edge Tracker realized-IC/proper-score/walk-forward/ENB összevetés); sports odds-feed (B37); a B-lépcső Hetzner/live-precondition.

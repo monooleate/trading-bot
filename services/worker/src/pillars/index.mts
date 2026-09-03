@@ -7,9 +7,10 @@
 
 import type { Context } from "@netlify/functions";
 import { checkAuth } from "@api/routes/_auth-guard.ts";
-import { CORS, getTraderConfig, getEffectiveTraderConfig, getEffectiveBtcExitConfig, getBtcExitConfig, getEffectiveBetaCap } from "./shared/config.mts";
+import { CORS, getTraderConfig, getEffectiveTraderConfig, getEffectiveBtcExitConfig, getBtcExitConfig, getEffectiveBetaCap, getEffectiveRiskOverlay } from "./shared/config.mts";
 import { loadPortfolioBetaSnapshot } from "./shared/portfolio-exposure.mts";
 import { cryptoExposureUsd, checkBetaCap } from "@core/portfolio-exposure.mts";
+import { realisedVol, volTargetMultiplier, drawdownKill } from "@core/risk-overlay.mts";
 
 // State-changing actions require a valid JWT cookie. Read-only `status` is
 // public so the home page + per-venue dashboards can render without
@@ -539,6 +540,8 @@ async function runCryptoTrader(
   // from the LIVE updatedSession at each entry so intra-tick opens count. OFF → no-op.
   const betaCap  = await getEffectiveBetaCap();
   const betaSnap = betaCap.enabled ? await loadPortfolioBetaSnapshot(config.paperMode) : null;
+  // Portfolio risk overlays (B49 #8) — vol-target + drawdown kill-switch. OFF → no-op.
+  const riskOverlay = await getEffectiveRiskOverlay();
   const results: any[] = [];
   // Build the scan list:
   //   - top 3 by Gamma's volume24hr ranking (the bot's normal entry universe)
@@ -698,6 +701,28 @@ async function runCryptoTrader(
         kelly: decision.kellyUsed,
       });
 
+      // 4a. Portfolio risk overlays (B49 #8), both default-OFF:
+      //  • Drawdown kill-switch — halt NEW entries once peak-to-current equity
+      //    drops past the limit (peak from the closed-trade equity curve).
+      //  • Vol-target — scale the ¼-Kelly size by target/realised return vol.
+      if (riskOverlay.ddKillEnabled) {
+        const start = updatedSession.bankrollStart || 0;
+        let eq = start, peak = start;
+        for (const t of updatedSession.closedTrades ?? []) { eq += (t.pnl || 0); if (eq > peak) peak = eq; }
+        const dd = drawdownKill(peak, updatedSession.bankrollCurrent || eq, riskOverlay.maxDdFraction);
+        if (dd.kill) {
+          const reason = `Drawdown kill-switch: ${(dd.ddFraction * 100).toFixed(1)}% ≥ ${(riskOverlay.maxDdFraction * 100).toFixed(0)}% peak-to-current`;
+          log("DECISION_SKIP", config.paperMode, { market: market.slug, reason });
+          results.push({ ...marketContext, action: "skip", reason });
+          continue;
+        }
+      }
+      let sizeUSDC = decision.positionSizeUSDC;
+      if (riskOverlay.volTargetEnabled) {
+        const rv = realisedVol((updatedSession.closedTrades ?? []).slice(-30).map((t: any) => (t.pnlPct || 0) / 100));
+        sizeUSDC = Math.round(decision.positionSizeUSDC * volTargetMultiplier(rv, riskOverlay.volTargetVol) * 100) / 100;
+      }
+
       // 4b. Portfolio crypto-beta exposure cap (B49 #2). Block a new crypto-
       // directional entry if the aggregate committed capital across crypto + HL
       // would exceed the cap. Crypto side = LIVE session (intra-tick aware);
@@ -705,7 +730,7 @@ async function runCryptoTrader(
       if (betaCap.enabled && betaSnap) {
         const currentUsd = cryptoExposureUsd(updatedSession.openPositions as any) + betaSnap.hl.exposureUsd;
         const combined   = (updatedSession.bankrollCurrent || 0) + betaSnap.hl.bankrollUsd;
-        const capChk = checkBetaCap(currentUsd, decision.positionSizeUSDC, combined, betaCap.fraction);
+        const capChk = checkBetaCap(currentUsd, sizeUSDC, combined, betaCap.fraction);
         if (!capChk.allowed) {
           log("DECISION_SKIP", config.paperMode, { market: market.slug, reason: capChk.reason });
           results.push({ ...marketContext, action: "skip", reason: capChk.reason });
@@ -713,12 +738,12 @@ async function runCryptoTrader(
         }
       }
 
-      // 5. Execute buy
+      // 5. Execute buy (size = ¼-Kelly after the vol-target overlay)
       const buyOrder = await placeBuyOrder(
         market,
         decision.direction,
         decision.entryPrice,
-        decision.positionSizeUSDC,
+        sizeUSDC,
         config.paperMode,
         false, // crypto BTC markets are not negRisk
         {
@@ -750,7 +775,7 @@ async function runCryptoTrader(
         kellyRaw:         signal.kellyFraction,
         kellyCapped:      decision.kellyUsed,
         kellyCap:         config.maxKellyFraction,
-        positionSizeUSDC: decision.positionSizeUSDC,
+        positionSizeUSDC: sizeUSDC,
         entryPrice:       decision.entryPrice,
         activeSignals:    signal.activeSignals,
         signalBreakdown:  signal.signalBreakdown,
@@ -790,8 +815,8 @@ async function runCryptoTrader(
         market.title,
         decision.direction,
         decision.entryPrice,
-        decision.positionSizeUSDC,
-        updatedSession.bankrollCurrent + decision.positionSizeUSDC,
+        sizeUSDC,
+        updatedSession.bankrollCurrent + sizeUSDC,
         decision.edge,
         decision.kellyUsed,
         signalArrows,
@@ -808,7 +833,7 @@ async function runCryptoTrader(
         ...marketContext,
         action: "position_opened",
         entry: decision.entryPrice,
-        size: decision.positionSizeUSDC,
+        size: sizeUSDC,
         paperMode: config.paperMode,
       });
     } catch (err: any) {

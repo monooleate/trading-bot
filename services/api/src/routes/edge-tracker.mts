@@ -43,6 +43,7 @@ import {
   ledgerPointsFromRecords,
   type WalkForwardResult,
 } from "@core/walk-forward.mts";
+import { correlationMatrix, effectiveNumberOfBets, type EnbResult } from "@core/enb.mts";
 
 // Categories that write a prediction ledger (forecasting bots). Funding-arb
 // is delta-neutral carry (not forecasting); sports is not yet wired.
@@ -392,6 +393,35 @@ export default async function handler(req: Request, _ctx: Context) {
         }
       } catch { ledgerStats = null; walkForward = null; }
     }
+
+    // B49 #9: Effective Number of Bets across ALL bots (measurement-only). Build
+    // per-bot daily-PnL series aligned to a common date union, correlate, ENB.
+    // Reveals whether the 6 bots are really independent edges or ~2-3 crypto-beta.
+    let enb: (EnbResult & { labels?: string[] }) | null = null;
+    if (!isMock) {
+      try {
+        const perBot = await Promise.all(
+          STORE_SPECS.map((s) => loadTradesFromStore(s.store, s.paperKey, s.category).then((ts) => ({ cat: s.category, ts }))),
+        );
+        const dayKey = (iso?: string) => (iso || "").slice(0, 10);
+        const dateSet = new Set<string>();
+        for (const b of perBot) for (const t of b.ts) { const d = dayKey(t.closedAt); if (d) dateSet.add(d); }
+        const dates = [...dateSet].sort();
+        if (dates.length >= 2) {
+          const idx = new Map(dates.map((d, i) => [d, i]));
+          const active = perBot
+            .map((b) => {
+              const v = new Array(dates.length).fill(0);
+              for (const t of b.ts) { const i = idx.get(dayKey(t.closedAt)); if (i != null) v[i] += (t.pnl || 0); }
+              return { cat: b.cat, v };
+            })
+            .filter((x) => x.v.some((y) => y !== 0));
+          if (active.length >= 2) {
+            enb = { ...effectiveNumberOfBets(correlationMatrix(active.map((a) => a.v))), labels: active.map((a) => a.cat) };
+          }
+        }
+      } catch { enb = null; }
+    }
     // Load Tier 1 Settings overrides (Bonferroni + collinearity threshold).
     // Defaults preserve the original Tier 1 hardcoded behaviour.
     const tier1Overrides = await loadTier1Overrides();
@@ -468,6 +498,7 @@ export default async function handler(req: Request, _ctx: Context) {
         onlineWeightsEval,
         ledgerStats,
         walkForward,
+        enb,
         signalIC,
         calibrationHealth,
         collinearity,

@@ -163,6 +163,10 @@ interface WalkForwardResult {
   blocksPositiveSkill: number; consistency: number; effectiveDays: number; maxDayShare: number; detail?: string;
 }
 
+interface EnbResult {
+  n: number; enb: number; topFactorShare: number; eigenvalues: number[]; labels?: string[];
+}
+
 interface EdgeTrackerData {
   ok: boolean;
   isMock: boolean;
@@ -174,6 +178,7 @@ interface EdgeTrackerData {
   onlineWeightsEval?: OnlineWeightsEval;
   ledgerStats?: LedgerStats | null;
   walkForward?: WalkForwardResult | null;
+  enb?: EnbResult | null;
   signalIC: SignalICResult[];
   calibrationHealth?: CalibrationHealth;
   edgeDecay: { points: EdgeDecayPoint[]; slope: number; hasDecay: boolean };
@@ -277,6 +282,7 @@ export default function EdgeTrackerPanel({ defaultCategory = "all" }: Props) {
           {data.onlineWeightsEval && <OnlineWeightsCard ow={data.onlineWeightsEval} />}
           {data.ledgerStats && <LedgerStatsCard s={data.ledgerStats} />}
           {data.walkForward && <WalkForwardCard wf={data.walkForward} />}
+          {data.enb && <EnbCard e={data.enb} />}
           {data.calibrationView && <CalibrationViewCard view={data.calibrationView} />}
           <CumulativePnlChart points={data.cumulativePnl} />
           <UnderwaterDrawdownChart points={data.cumulativePnl} maxDDDuration={data.summary.maxDrawdownDuration} />
@@ -706,6 +712,41 @@ function LedgerStatsCard({ s }: { s: LedgerStats }) {
         {s.total === 0
           ? "No predictions logged yet — the ledger fills once the bots run a deployed scan tick."
           : `${s.resolved} of ${s.total} predictions resolved; ${s.skippedResolved} are markets the bot did NOT trade (the selection-bias-free labels for future calibration).`}
+      </div>
+    </div>
+  );
+}
+
+// ─── Effective Number of Bets (diversification monitor) ─
+// Model-discovery-expansion §4.C / B49 #9. How many INDEPENDENT bets does the
+// book really hold? ENB≈N → diversified; ENB→1 → one hidden factor (crypto-beta).
+function EnbCard({ e }: { e: EnbResult }) {
+  if (!e || e.n < 2) {
+    return (
+      <div className="et-chart">
+        <div className="et-chart-header"><h3>Effective Number of Bets (diversification)</h3></div>
+        <div className="et-ps-empty">Need ≥2 bots with resolved trades on ≥2 common days — fills as trades accumulate.</div>
+      </div>
+    );
+  }
+  const ratio = e.enb / e.n;
+  const enbColor = ratio >= 0.7 ? COLORS.actual : ratio >= 0.45 ? COLORS.warn : COLORS.loss;
+  const concentrated = ratio < 0.6;
+  return (
+    <div className="et-chart">
+      <div className="et-chart-header">
+        <h3>Effective Number of Bets (diversification)</h3>
+        <span className="et-ps-n">{e.labels ? e.labels.join(" · ") : `${e.n} bots`}</span>
+      </div>
+      <div className="et-kpi-grid et-ps-kpis">
+        <Card title="ENB" value={e.enb.toFixed(2)} sub={`of ${e.n} bots`} color={enbColor} />
+        <Card title="Diversification" value={`${(ratio * 100).toFixed(0)}%`} sub="ENB / N" color={enbColor} />
+        <Card title="Top factor" value={`${(e.topFactorShare * 100).toFixed(0)}%`} sub="variance in PC1" color={concentrated ? COLORS.warn : COLORS.muted} />
+      </div>
+      <div className="et-ps-msg">
+        {concentrated
+          ? `⚠ Only ~${e.enb.toFixed(1)} independent bets out of ${e.n} — the book is concentrated (${(e.topFactorShare * 100).toFixed(0)}% of variance in one factor, likely crypto-beta). A single move hits several "independent" bots together.`
+          : `~${e.enb.toFixed(1)} independent bets out of ${e.n} — reasonably diversified.`}
       </div>
     </div>
   );
