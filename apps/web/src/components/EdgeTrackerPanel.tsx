@@ -152,6 +152,17 @@ interface LedgerStats {
   newestTs: string | null;
 }
 
+interface WfBlock {
+  index: number; n: number; startTs: string; endTs: string;
+  brierModel: number; brierMarket: number; brierSkill: number;
+  logLossModel: number; logLossMarket: number; avgPredicted: number; avgOutcome: number;
+}
+interface WalkForwardResult {
+  nResolved: number; nBlocks: number; blocks: WfBlock[];
+  overall: { brierModel: number; brierMarket: number; brierSkill: number; logLossModel: number; logLossMarket: number };
+  blocksPositiveSkill: number; consistency: number; effectiveDays: number; maxDayShare: number; detail?: string;
+}
+
 interface EdgeTrackerData {
   ok: boolean;
   isMock: boolean;
@@ -162,6 +173,7 @@ interface EdgeTrackerData {
   calibrationEval?: CalibrationEval;
   onlineWeightsEval?: OnlineWeightsEval;
   ledgerStats?: LedgerStats | null;
+  walkForward?: WalkForwardResult | null;
   signalIC: SignalICResult[];
   calibrationHealth?: CalibrationHealth;
   edgeDecay: { points: EdgeDecayPoint[]; slope: number; hasDecay: boolean };
@@ -264,6 +276,7 @@ export default function EdgeTrackerPanel({ defaultCategory = "all" }: Props) {
           {data.calibrationEval && <CalibrationEvalCard ce={data.calibrationEval} />}
           {data.onlineWeightsEval && <OnlineWeightsCard ow={data.onlineWeightsEval} />}
           {data.ledgerStats && <LedgerStatsCard s={data.ledgerStats} />}
+          {data.walkForward && <WalkForwardCard wf={data.walkForward} />}
           {data.calibrationView && <CalibrationViewCard view={data.calibrationView} />}
           <CumulativePnlChart points={data.cumulativePnl} />
           <UnderwaterDrawdownChart points={data.cumulativePnl} maxDDDuration={data.summary.maxDrawdownDuration} />
@@ -693,6 +706,65 @@ function LedgerStatsCard({ s }: { s: LedgerStats }) {
         {s.total === 0
           ? "No predictions logged yet — the ledger fills once the bots run a deployed scan tick."
           : `${s.resolved} of ${s.total} predictions resolved; ${s.skippedResolved} are markets the bot did NOT trade (the selection-bias-free labels for future calibration).`}
+      </div>
+    </div>
+  );
+}
+
+// ─── Walk-forward scoring vs market (out-of-sample) ─────
+// Model-discovery-expansion §4.B / B49 #4. Sorts resolved ledger predictions by
+// resolution time, splits into chronological blocks, and scores model P(YES) vs
+// the market-price baseline per block. Brier skill > 0 ⇒ the model beats the
+// price out-of-sample; consistency across blocks ⇒ not one lucky window.
+function WalkForwardCard({ wf }: { wf: WalkForwardResult }) {
+  if (!wf || wf.nResolved < 2 || wf.nBlocks === 0) {
+    return (
+      <div className="et-chart">
+        <div className="et-chart-header"><h3>Walk-forward vs market (out-of-sample)</h3></div>
+        <div className="et-ps-empty">Need ≥2 resolved predictions in the ledger — fills as scanned markets resolve.</div>
+      </div>
+    );
+  }
+  const o = wf.overall;
+  const skillColor = o.brierSkill > 0 ? COLORS.actual : COLORS.loss;
+  const consColor = wf.consistency >= 0.6 ? COLORS.actual : wf.consistency >= 0.4 ? COLORS.warn : COLORS.loss;
+  const clusterWarn = wf.maxDayShare > 0.5;
+  return (
+    <div className="et-chart">
+      <div className="et-chart-header">
+        <h3>Walk-forward vs market (out-of-sample)</h3>
+        <span className="et-ps-n">{wf.nResolved} resolved · {wf.nBlocks} blocks</span>
+      </div>
+      <div className="et-kpi-grid et-ps-kpis">
+        <Card title="Brier skill" value={`${(o.brierSkill * 100).toFixed(1)}%`} sub="vs market price" color={skillColor} />
+        <Card title="Consistency" value={`${wf.blocksPositiveSkill}/${wf.nBlocks}`} sub="blocks beat market" color={consColor} />
+        <Card title="Brier (model)" value={o.brierModel.toFixed(3)} sub={`market ${o.brierMarket.toFixed(3)}`} color={COLORS.muted} />
+        <Card title="Indep. days" value={String(wf.effectiveDays)} sub={`max cluster ${(wf.maxDayShare * 100).toFixed(0)}%`} color={clusterWarn ? COLORS.warn : COLORS.muted} />
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 10 }}>
+        {wf.blocks.map((b) => {
+          const c = b.brierSkill > 0 ? COLORS.actual : COLORS.loss;
+          const w = Math.min(100, Math.abs(b.brierSkill) * 100);
+          return (
+            <div key={b.index} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11 }}>
+              <span style={{ width: 130, color: COLORS.muted, fontFamily: "var(--mono)" }}>
+                {b.startTs.slice(5, 10)}→{b.endTs.slice(5, 10)} n={b.n}
+              </span>
+              <span style={{ flex: 1, height: 8, background: "var(--surface2)", borderRadius: 2, overflow: "hidden" }}>
+                <span style={{ display: "block", height: "100%", width: `${w}%`, background: c }} />
+              </span>
+              <span style={{ width: 46, textAlign: "right", color: c, fontFamily: "var(--mono)" }}>
+                {(b.brierSkill * 100).toFixed(0)}%
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      <div className="et-ps-msg">
+        {o.brierSkill > 0
+          ? `Model beats the market price out-of-sample (Brier skill +${(o.brierSkill * 100).toFixed(1)}%) in ${wf.blocksPositiveSkill}/${wf.nBlocks} time blocks.`
+          : `Model does NOT beat the market price out-of-sample (Brier skill ${(o.brierSkill * 100).toFixed(1)}%) — on this record the price is the better forecast.`}
+        {clusterWarn ? ` ⚠ ${(wf.maxDayShare * 100).toFixed(0)}% of predictions resolved on one day — correlated; treat blocks with caution.` : ""}
       </div>
     </div>
   );

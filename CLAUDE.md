@@ -376,9 +376,13 @@ netlify deploy --prod --dir=dist
 
 ## AKTUÁLIS ÁLLAPOT (2026-09-03)
 
-**Élő deploy:** **`https://trade.jmeszaros.dev`** — a Hetzner `analytics` Docker co-host (workers+api+model), **ÉL paper módban** (2026-09-02, Phase 5 kész). A régi `mj-trading.netlify.app` Netlify-build a `main`-en törött (a monorepo-restruktúra óta), a Netlify **nyugdíjazásra vár** (a user törli — Phase 6 — de előbb a Phase 4 adat-export döntés). Paper mode végig.
+**Élő deploy:** **`https://trade.jmeszaros.dev`** — a Hetzner `analytics` Docker co-host (workers+api+model), **ÉL paper módban** (2026-09-02, Phase 5 kész). **Deploy módja (2026-09-03 rögzítve):** a box NEM auto-deployol (a régi Netlify „push→deploy" nyugdíjazva) → kézi SSH: `ssh analytics` → `cd /opt/edgecalc && git pull --ff-only && docker compose up -d --build`. A **B49 #1–#3 + discovery + CI/deploy workflow-k DEPLOYOLVA** (2026-09-03, commit `51885a4`), a knobok default-OFF (0 viselkedés-változás). Memória: `hetzner-box-deploy`. A régi `mj-trading.netlify.app` Netlify-build a `main`-en törött (a monorepo-restruktúra óta), a Netlify **nyugdíjazásra vár** (a user törli — Phase 6 — de előbb a Phase 4 adat-export döntés). Paper mode végig.
 
-### Legutóbbi munka (60. session, 2026-09-03) — B49 #3: robust Sharpe (PSR / MinTRL / DSR) validációs réteg
+### Legutóbbi munka (61. session, 2026-09-03) — B49 #4: walk-forward scoring a ledgeren (model vs market, OOS)
+
+A user: „menj tovább a #4-el". A #3 párja — a validációs réteg másik fele; a kérdés: a bot valószínűségei verik-e a **piaci árat** out-of-sample, konzisztensen? **Implementálva** (`tsc` exit 0 + **31/31 teszt** + build zöld, **mérés-only**, 0 live-változás): új pure modul [`packages/core/src/walk-forward.mts`](packages/core/src/walk-forward.mts) (`computeWalkForward`: rezolúciós-idő szerint rendez → kronológiai blokkok → **Brier skill vs piaci ár** + log-loss + konzisztencia + korrelációs caveat) + 7-csoportos teszt. Bekötve az [`edge-tracker.mts`](services/api/src/routes/edge-tracker.mts) `walkForward` response-mezőbe + új **`WalkForwardCard`** az Edge Trackeren. Scoring-only → nincs leakage; a **B11 Hetzner-mentes verziója.** Nincs új knob/env. Doksi: [math/21-walk-forward.md](internal-docs/math/21-walk-forward.md). **B49 A-lépcső: #1-#4 ✅; hátra #5-#9.**
+
+### Korábbi munka (60. session, 2026-09-03) — B49 #3: robust Sharpe (PSR / MinTRL / DSR) validációs réteg
 
 A user: „go ahead with #3 és mondjad, hogy mit csináljak amikor én jövök". A discovery #3: a rendszer forward-recordon validál; a kis-minta/fat-tail + config-hunting torzítás forward-native eszközökkel korrigálható (nincs backtest-motor).
 

@@ -38,6 +38,11 @@ import {
   computeLedgerStats,
   type LedgerStats,
 } from "@core/prediction-ledger.mts";
+import {
+  computeWalkForward,
+  ledgerPointsFromRecords,
+  type WalkForwardResult,
+} from "@core/walk-forward.mts";
 
 // Categories that write a prediction ledger (forecasting bots). Funding-arb
 // is delta-neutral carry (not forecasting); sports is not yet wired.
@@ -368,18 +373,24 @@ export default async function handler(req: Request, _ctx: Context) {
     // growing — total logged, resolved, and crucially skipped-resolved (the
     // markets the bot did NOT take but we still labeled). Skipped for mock.
     let ledgerStats: LedgerStats | null = null;
+    // B49 #4: walk-forward scoring over the ledger — model P(YES) vs the market
+    // baseline, per chronological block. Reuses the records loaded for stats.
+    let walkForward: WalkForwardResult | null = null;
     if (!isMock) {
       try {
         const cats = category === "all"
           ? LEDGER_CATEGORIES
           : (LEDGER_CATEGORIES.includes(category) ? [category] : []);
         if (cats.length > 0) {
-          const parts = await Promise.all(
-            cats.map((c) => loadLedger(c).then((recs) => computeLedgerStats(c, recs))),
+          const loaded = await Promise.all(
+            cats.map((c) => loadLedger(c).then((recs) => ({ c, recs }))),
           );
+          const parts = loaded.map(({ c, recs }) => computeLedgerStats(c, recs));
           ledgerStats = cats.length === 1 ? parts[0] : aggregateLedgerStats("all", parts);
+          const points = loaded.flatMap(({ recs }) => ledgerPointsFromRecords(recs));
+          walkForward = computeWalkForward(points, { blockCount: 5 });
         }
-      } catch { ledgerStats = null; }
+      } catch { ledgerStats = null; walkForward = null; }
     }
     // Load Tier 1 Settings overrides (Bonferroni + collinearity threshold).
     // Defaults preserve the original Tier 1 hardcoded behaviour.
@@ -456,6 +467,7 @@ export default async function handler(req: Request, _ctx: Context) {
         calibrationEval,
         onlineWeightsEval,
         ledgerStats,
+        walkForward,
         signalIC,
         calibrationHealth,
         collinearity,

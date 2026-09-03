@@ -154,3 +154,26 @@ A user: „go ahead with #3 és mondjad, hogy mit csináljak amikor én jövök"
 **Miért advisory / opt-in:** a PSR/MinTRL mindig látszik (mérés), de a live-kapuk default OFF (blokkoló gate = viselkedés-változtató, + live-flip B10-blokkolt). A MinTRL a helyes „kész-e?" szám (fat-tailű longshot-botnál több száz trade). A honest N rendszer-szintű (a knobok cross-bot) — egy közelítő N a helyes korrekció.
 
 **Maradó (B49):** valódi cross-config σ_SR (a Sharpe mentése trial-határokon); per-kategória trials; HL saját status-út readiness; a **#4 walk-forward scoring a ledgeren** (a validációs réteg másik fele). Doksi: [`math/20-robust-sharpe.md`](../math/20-robust-sharpe.md).
+
+### Deploy + CI/CD (2026-09-03, ugyanaznap)
+
+- **A B49 #1–#3 + a discovery DEPLOYOLVA a Hetzner boxra** (`trade.jmeszaros.dev`, paper). A box NEM auto-deployol (a régi „push→deploy" a **Netlify** volt, ami a main-en törött) → **kézi deploy SSH-n**: `ssh analytics` (root@91.99.218.165, `analytics_ed25519` kulcs) → `cd /opt/edgecalc && git pull --ff-only && docker compose up -d --build`. A box `83c76bf`→`51885a4`-re fast-forwardolt; api+workers újraépítve+újraindítva, model healthy. Verifikálva: mind az 5 új knob él a live schema-ban (`fillModelEnabled`/`fillParticipationCap`/`betaCapEnabled`/`liveReadyMinPsr`/`liveReadyUseMinTrl`), a knobok **default-OFF** → 0 viselkedés-változás. Memória: `hetzner-box-deploy`.
+- **Új CI/CD:** [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) — tsc + 30/30 teszt + build minden push/PR-en (első futás zöld); megelőzi a B19-osztályú néma deploy-gap-et. [`.github/workflows/deploy.yml`](../../.github/workflows/deploy.yml) — SSH auto-deploy (workflow_run CI-siker után) — **ÉL (2026-09-03)**: `DEPLOY_HOST`/`DEPLOY_USER=root`/`DEPLOY_KNOWN_HOSTS`/`DEPLOY_SSH_KEY` secretek beállítva + a `edgecalc_deploy.pub` felvéve a box root `authorized_keys`-ébe → **end-to-end verifikálva** egy sikeres `workflow_dispatch` futással (SSH → git pull → compose up → success). **Mostantól: push main-re → CI zöld → a box magától deployol.** A kézi `ssh analytics` deploy fallbackként megmarad.
+- **Operátor-teendő a méréshez:** Settings (bejelentkezve) → *Execution (paper fill)* → `fillModelEnabled=1`, opcionálisan *Portfolio risk* → `betaCapEnabled=1`. A PSR/MinTRL magától látszik az Edge Trackeren.
+
+### 61. session — B49 #4: walk-forward scoring a prediction-ledgeren (model vs market, OOS, mérés-only)
+
+A user: „menj tovább a #4-el". A #3 párja — a validációs réteg másik fele. A kérdés: a bot valószínűségei verik-e a **piaci árat** out-of-sample, konzisztensen az időben? (Ha nem, az edge illúzió — a leakage-aware kutatás szerint a puszta ár veri az LLM-et a likvid piacokon.)
+
+**Grounding:** a prediction-ledger a helyes szubsztrátum — minden szkennelt piac P(YES)-ét logolja (taken+skipped, torzításmentes) `outcome` (0/1) + `resolvedAt`-tal; a `marketPrice` a baseline.
+
+**Implementálva (mind zöld, NEM deployolva a doksi-írásakor):**
+- **Pure modul** [`packages/core/src/walk-forward.mts`](../../packages/core/src/walk-forward.mts): `ledgerPointsFromRecords` (feloldott rekordok kiszűrése; `Number(null)===0` csapda kivédve) + `computeWalkForward` (rezolúciós-idő szerint rendez → kronológiai blokkok → blokkonként+poololva **Brier skill vs piaci ár** + log-loss + konzisztencia [hány blokk veri a piacot] + korrelációs caveat `effectiveDays`/`maxDayShare`). Scoring-only → nincs train/test leakage. 7-csoportos [teszt](../../packages/core/src/walk-forward.test.mts).
+- **Bekötés:** [`edge-tracker.mts`](../../services/api/src/routes/edge-tracker.mts) `walkForward` mező (a ledgerStats-hoz amúgy is betöltött rekordokból; `category=all`-nál poololt) + új **`WalkForwardCard`** az [`EdgeTrackerPanel.tsx`](../../apps/web/src/components/EdgeTrackerPanel.tsx)-en (overall Brier skill + per-blokk skill-sávok + caveat).
+- **Nincs új knob/env/live-döntés** — tisztán diagnosztika. A **B11 (walk-forward backtest) Hetzner-mentes, backtest-motor-mentes verziója.**
+
+**Hogyan olvasd:** Brier skill > 0 + magas konzisztencia → a bot valószínűségei valóban jobbak a piaci árnál OOS (valid stratégia-mag); skill ≤ 0 → a piac a jobb előrejelző (a profit nem a predikcióból jön); magas `maxDayShare` → korrelált nap dominál, óvatosan.
+
+**Maradó (B49):** purge/embargo korrelált klaszterekre; anchored-fit walk-forward a #2 Platt-kalibrációval; per-kategória UI-bontás. Doksi: [`math/21-walk-forward.md`](../math/21-walk-forward.md).
+
+**B49 A-lépcső állás:** #1 ✅ · #2 ✅ · #3 ✅ · #4 ✅ — hátra: #5 OI-Δ signal, #6 weather EMOS, #7 sports Shin de-vig, #8 vol-target/max-DD, #9 ENB monitor.

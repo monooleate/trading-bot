@@ -52,6 +52,7 @@ A **CLAUDE.md** a repo gyökerében az **AKTUÁLIS ÁLLAPOT** szekcióval — mi
 | `math/18-fill-model.md` | **Depth-aware fill model** (paper execution realizmus) | CLOB ask-book walk + participáció-cap + partial fill + √-law fallback; a longshot paper-PnL over-report fixe (B49 #1) |
 | `math/19-portfolio-exposure-cap.md` | **Crypto-beta exposure cap** (portfólió-réteg) | crypto + HL együttes lekötött tőke cap a kombinált bankroll hányadára; a barbell/korrelált-BTC kockázat fixe (B49 #2) |
 | `math/20-robust-sharpe.md` | **Robust Sharpe: PSR / MinTRL / DSR** (validációs réteg) | fat-tail/kis-minta-tudatos szignifikancia + elvi paper→live kapu + honest-trial deflation (B49 #3) |
+| `math/21-walk-forward.md` | **Walk-forward scoring a ledgeren** (model vs market, OOS) | idő-rendezett blokkok, Brier skill vs piaci ár, konzisztencia; a B11 Hetzner-mentes verziója (B49 #4) |
 | `math/151-Trading-Strategies.pdf` | Academic reference (Kakushadze) | 151 strategies anthology |
 
 ---
