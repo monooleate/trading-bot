@@ -1,0 +1,41 @@
+name: CI
+
+# Green/red gate on every push to main and every PR: typecheck + the full test
+# suite + the web build. Catches the class of breakage that once shipped a broken
+# bundle for two weeks (sprints.md B19) BEFORE the box pulls the commit.
+# This workflow validates only — it does NOT deploy (the box has its own pull).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel an in-progress run when a newer commit lands on the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install (root — apps/web shares this install)
+        run: npm ci
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Tests
+        run: node scripts/run-tests.mjs
+
+      - name: Build (apps/web)
+        run: npm run build
