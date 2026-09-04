@@ -139,6 +139,7 @@ function emptyBreakdown(): SignalBreakdown {
     momentum:       null,
     contrarian:     null,
     pairs_spread:   null,
+    oi_delta:       null,  // B49 #5 — populated only when oiDeltaEnabled=1
     forecast_edge:  null,  // weather-only synthetic signal
   };
 }
@@ -156,6 +157,7 @@ function extractBreakdown(rawSignals: any): SignalBreakdown {
     momentum:       rawSignals.momentum       ?? null,
     contrarian:     rawSignals.contrarian     ?? null,
     pairs_spread:   rawSignals.pairs_spread   ?? null,
+    oi_delta:       rawSignals.oi_delta       ?? null,   // B49 #5 — track for per-signal IC when enabled
     forecast_edge:  null,                                // weather-only
   };
 }
