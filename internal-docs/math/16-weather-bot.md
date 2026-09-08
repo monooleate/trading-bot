@@ -104,6 +104,51 @@ A Polymarket napi-max hőmérsékleti piacai **negRisk események**: egy `(váro
 
 A fenti 4-forrásos pipeline a paper trade-eken validáltan működik (2 closed trade real Polymarket resolution-on, 2026-05-10..13). Az alábbiak **NICE-TO-HAVE** upgrade-ek, amelyek **nem precondition** a live élesítéshez — a mai pipeline elég a sub-$1 000 weather trading-hez.
 
+#### (d) Multi-model Open-Meteo ensemble — **ELÉRHETŐ MA, keyless** (2026-09-08-i felmérés) ⭐
+
+> Ez az opció **felváltja az (a)-t és a (c)-t** mint következő lépcső: ugyanaz az `ensemble-api.open-meteo.com/v1/ensemble`
+> endpoint, amit a bot ma is hív, azóta **több független ensemble-rendszert** szolgál — köztük a teljes 51-tagú
+> ECMWF IFS-ENS-t (az (a) fő célja) **kulcs nélkül**. Feladat-tracking: [`sprints.md` **B52**](../roadmap/sprints.md).
+
+**Ma használt:** `models=gfs_seamless` → 31 tag, **egyetlen modellcsalád**.
+
+**Elérhető (mind élő-verifikálva 2026-09-08, ugyanaz az endpoint, egyetlen kérésben vesszővel felsorolva):**
+
+| `models=` érték | Rendszer | Tagok | Natív lépés | Megjegyzés |
+|---|---|---|---|---|
+| `gfs_seamless` / `gfs025` | NCEP GEFS | 31 | 3 h | a bot mai forrása |
+| `ecmwf_ifs025` | ECMWF IFS-ENS | **51** | 3 h | = az (a) opció célja, kulcs nélkül |
+| `ecmwf_aifs025` | ECMWF **AIFS**-ENS (AI) | 51 | 6 h | ML-alapú ECMWF |
+| `google_weathernext2_ensemble` | **Google DeepMind WeatherNext 2** (AI) | **64** | 6 h | 12 óránként (00/12 UTC) |
+| `icon_eu` / `icon_d2_eps` | DWD ICON-EU-EPS / D2-EPS | 40 / 20 | 1 h | EU, 13 km / 2 km |
+| `gem_global`, `ukmo_global_ensemble_20km`, `bom_access_global_ensemble` | CMC / UKMO / BOM | 21 / 18 / 18 | 3 h | |
+
+A 4 globális együtt: **197 tag egyetlen HTTP-hívásban** (`temperature_2m_member01_ncep_gefs_seamless` alakú kulcsokkal —
+a mai `/^temperature_2m(_member\d+)?$/` parser és a `MAX_MEMBERS=31` cap emiatt módosítandó).
+
+**Miért számít (mért, a bot saját állomásain, T+0/T+1 daily-max, 2026-09-08):**
+
+| Állomás | nap | GEFS-only (ma) | Multi-model (197) | σ-arány |
+|---|---|---|---|---|
+| RJTT Tokyo | T+0 | μ 32.3 σ **0.49** | μ **29.3** σ **1.58** | **×3.2** |
+| VHHH Hong Kong | T+1 | μ 31.9 σ 0.43 | μ 30.3 σ 1.07 | ×2.5 |
+| KORD Chicago | T+0 | μ 29.8 σ 0.70 | μ 27.9 σ 1.64 | ×2.3 |
+| EGLC London | T+0 | μ 18.8 σ 0.89 | μ 18.1 σ 0.63 | ×0.7 |
+
+A GEFS-only σ Ázsiában/USA-ban **2–3×-osan alulbecsli** a valós bizonytalanságot pont a bot lead-time-ján, és a μ
+akár **3.0–3.7 °C**-kal elcsúszik (Tokyo). Európában a multi-model σ *szűkebb* → nem uniform tágítás, hanem **helyesebb**
+σ. Ez a §8 Kelly-méretezés bemenete, tehát közvetlenül a dokumentált „jó irány (IC +0.393), rossz sizing" patológiára hat
+(§4.3 + B49 #6 EMOS ugyanezt a underdispersion-t *kalibrációval* célozza — ez a forrásnál).
+
+**Korlátok (mérés-first, nem flip-first):**
+- A WeatherNext 2 és az AIFS natívan **6-órás** → az API hourly-ra interpolál ⇒ a napi **max** csúcsa simulhat (hideg-bias).
+  Az AI-modellek dokumentáltan hideg-biasosak hőhullám-csúcsokon ([arXiv 2504.21195](https://arxiv.org/abs/2504.21195)) —
+  a max-hőmérséklet-bucket pont ilyen. A §4.4 bias-korrekció + DEB + EMOS ezt korrigálni tudja, de csak mérés után.
+- **Nincs offline backfill:** a `historical-forecast-api` a `google_weathernext2_ensemble`-re csak ~2026-09-04-től ad
+  értéket (előtte `null`), az `ecmwf_aifs025` ensemble-nek nincs archívuma ⇒ **log-forward** kell (B50 #2 doktrína).
+- **Open-Meteo free tier: non-commercial + 10 000 hívás/nap**, és a hívás-súly a változószámmal nő (>10 változó →
+  törtrészes többszörös) — 197 tag ≈ 197 „változó". A lenti „+4× headroom" megjegyzés **csak az 1-modelles hívásra igaz**.
+
 #### (a) ECMWF közvetlen API — teljes 51-tagú ensemble
 
 - **Endpoint:** [`api.ecmwf.int`](https://api.ecmwf.int) (ECMWF Web API + MARS), saját kulcs.
@@ -112,7 +157,7 @@ A fenti 4-forrásos pipeline a paper trade-eken validáltan működik (2 closed 
 - **Implementáció:** új modul `ecmwf-ensemble.mts` az `ensemble-forecast.mts` mintájára, és a `forecast-engine.mts` `Promise.all`-jában 5. fetch.
 - **Becsült edge-növekedés:** +2–4% IC tail-bucket-eken (a kontinentális európai városokon szisztematikusan jobb: Madrid, Milan, Munich, Paris, Ankara).
 - **Új env:** `ECMWF_API_KEY` + `ECMWF_API_EMAIL` (sajátkulcs-tárolás Netlify env-ben).
-- **Verdict:** **legnagyobb edge-impact / mérsékelt komplexitás.** Akadémiai kulcsra érdemes várni; addig az Open-Meteo deterministic IFS marad.
+- **Verdict (2026-09-08 frissítve):** ⚠ **tárgytalan a következő lépcsőre** — a fenti **(d)** opció ugyanezt az 51-tagú IFS-ENS-t adja **kulcs nélkül**, a bot már használt endpointján. A közvetlen MARS-hozzáférés csak akkor merül fel újra, ha a live-skála kinövi az Open-Meteo tiert.
 
 #### (b) NOAA GFS GRIB2 közvetlen — bypass Open-Meteo aggregátort
 
@@ -139,9 +184,9 @@ A fenti 4-forrásos pipeline a paper trade-eken validáltan működik (2 closed 
 
 #### Prioritási sorrend (ha valamikor erőforrás lesz rá)
 
-1. **(a) ECMWF közvetlen** — legnagyobb edge-impact, akadémiai kulcs ingyenes, ~3 nap implementáció.
-2. **(b) NOAA GFS GRIB2** — csak C1 (Hetzner) után, mert Netlify-on a parser overhead = freshness-nyereség.
-3. **(c) Kereskedelmi szolgáltató** — csak skálázódás után ($5k+/hó volume) vagy multi-day market-bővülés esetén.
+1. **(d) Multi-model Open-Meteo ensemble** — ma elérhető, keyless, 0 extra HTTP-hívás; log-forward → mérés → flip. **→ [B52](../roadmap/sprints.md)**
+2. **(b) NOAA GFS GRIB2** — a Hetzner-box óta feasible (nincs 10s function-timeout); freshness-nyereség, marginális.
+3. **(a) ECMWF közvetlen / (c) kereskedelmi szolgáltató** — csak ha a live-skála kinövi az Open-Meteo non-commercial tiert.
 
 **Tracking:** master-plan.md `🟢 NICE-TO-HAVE` 13. tétel hivatkozik vissza erre a szekcióra.
 
@@ -202,6 +247,17 @@ A 31-tagú ensemble jobb **signal-to-noise** mert:
 2. A perturbed tagok közötti `σ` jobb proxy a tényleges modell-bizonytalanságra mint a két determinisztikus modell közötti spread
 
 A legtöbb városra `σ ≈ 0.5–1.5°C`, ami `confidence ≈ 0.62–0.88`.
+
+> **⚠ 2026-09-08 (B52 #1) — a 2. pont csak félig igaz.** Egy ensemble szórása a
+> modell SAJÁT perturbációinak szórása: a kezdetifeltétel-érzékenységet méri, a
+> **strukturális** modellhibát (rács, konvekció-parametrizáció, határréteg) nem —
+> azt az összes tag együtt hordozza. Élő mérés (RJTT Tokyo, 2026-09-09 célnap):
+> GEFS μ 33.97 **σ 1.02**, miközben az ECMWF AIFS-ENS 28.78-at mond — 5.2 °C-kal
+> lejjebb. A 4-rendszeres keverék σ-ja 2.21 (ebből 2.05 a modellek közötti tag).
+> Ez a túl szűk σ az, ami a Kellyt túlméretezi (IC +0.393 = jó irány,
+> payoffRatio 0.44 = rossz méret). A [`math/37`](./37-multi-model-ensemble.md)
+> log-forward recordere (default-ON, mérés-only) gyűjti a fej-fej bizonyítékot;
+> a `weatherUseMultiModel` flip default-OFF, amíg a CRPS-skill nem igazolja.
 
 ### 4.4 Bias-korrekció (city offset opcionális)
 

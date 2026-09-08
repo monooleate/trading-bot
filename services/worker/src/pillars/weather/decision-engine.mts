@@ -19,6 +19,14 @@ export interface WeatherConfig {
   forecastDays: number;       // 0 = auto-compute from target date
   useEnsemble: boolean;       // default true since 2026-05-11
   useEmos: boolean;           // B49 #6: apply fitted per-station EMOS calibration (default false)
+  // B52 #1 (2026-09-08): multi-system ensemble.
+  //  · multiModelRecord — log-forward the per-system μ/σ for the head-to-head.
+  //    ZERO trading effect; default ON, matching the EMOS pattern ("apply
+  //    default-OFF, log always-on"), because the comparison is NOT backfillable.
+  //  · useMultiModel — let the pooled mixture DRIVE μ/σ. Default OFF; flip only
+  //    after the recorder has scored it.
+  multiModelRecord: boolean;
+  useMultiModel: boolean;
   // Cron-driven background runs from the scheduled wrapper.
   cronEnabled: boolean;       // default false (manual-only)
   // Skip trades where the bot's prediction disagrees with the market's
@@ -103,6 +111,10 @@ export function getWeatherConfig(): WeatherConfig {
     // to gather data; the calibration is applied only when this is on AND the
     // station has ≥20 resolved residuals.
     useEmos:         process.env.WEATHER_USE_EMOS === "true",
+    // B52 #1: recorder ON unless explicitly disabled (measurement only, throttled);
+    // the trading flip stays OFF until the recorded head-to-head justifies it.
+    multiModelRecord: process.env.WEATHER_MULTIMODEL_RECORD === "false" ? false : true,
+    useMultiModel:    process.env.WEATHER_USE_MULTIMODEL === "true",
     // Default ON (2026-05-14d): paper mode-ban biztonságos, math validálva.
     // A 4 bot közül csak ennek volt explicit cron-gate-je — most aszimmetria
     // megszűnt, mind a 4 default-ban tüzel. Csak `WEATHER_CRON_ENABLED=false`
@@ -149,6 +161,10 @@ export async function getEffectiveWeatherConfig(): Promise<WeatherConfig> {
         ? ov.weatherUseEnsemble >= 0.5 : env.useEnsemble,
       useEmos:         ov.weatherUseEmos !== undefined
         ? ov.weatherUseEmos >= 0.5 : env.useEmos,
+      multiModelRecord: ov.weatherMultiModelRecord !== undefined
+        ? ov.weatherMultiModelRecord >= 0.5 : env.multiModelRecord,
+      useMultiModel:   ov.weatherUseMultiModel !== undefined
+        ? ov.weatherUseMultiModel >= 0.5 : env.useMultiModel,
       cronEnabled:     ov.weatherCronEnabled !== undefined
         ? ov.weatherCronEnabled >= 0.5 : env.cronEnabled,
       marketDisagreeMaxC: ov.weatherMarketDisagreeMaxC ?? env.marketDisagreeMaxC,

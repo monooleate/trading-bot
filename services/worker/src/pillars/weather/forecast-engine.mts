@@ -3,8 +3,10 @@ import { getSeason } from "./station-config.mts";
 import { correctForecast } from "./metar-simulator.mts";
 import {
   fetchEnsemble,
+  fetchMultiModelEnsemble,
   ensembleEnabled,
   type EnsembleResult,
+  type MultiModelEnsembleResult,
 } from "./ensemble-forecast.mts";
 import { getDebWeights, type DebWeights } from "./deb.mts";
 
@@ -28,6 +30,10 @@ export interface ForecastResult {
   // 31-member GFS ensemble distribution, only populated when USE_ENSEMBLE=true
   // and the Open-Meteo ensemble API responded successfully.
   ensembleDetail?: EnsembleResult | null;
+  // B52 #1: multi-system ensemble (GEFS + IFS-ENS + AIFS-ENS + WeatherNext 2),
+  // populated only when the caller asked for it (recorder tick or the trading
+  // knob). Null otherwise — no fetch is issued.
+  multiModelDetail?: MultiModelEnsembleResult | null;
   // Model weights used for this forecast (either fixed defaults or DEB-adjusted).
   modelWeightsUsed?: DebWeights;
 }
@@ -218,6 +224,16 @@ export interface ForecastOptions {
   forecastDays?: number;
   // Override the USE_ENSEMBLE env flag.
   useEnsemble?: boolean;
+  // B52 #1: fetch the multi-system ensemble and attach it as `multiModelDetail`.
+  // Costs one extra (small, ~0.2 s) request; the recorder sets this on its
+  // throttled ticks. Default false → not fetched at all.
+  wantMultiModel?: boolean;
+  // B52: let the multi-system mixture DRIVE μ/σ instead of the GEFS-only
+  // ensemble. Default false → the legacy path runs bit-identically. Implies
+  // `wantMultiModel`.
+  useMultiModel?: boolean;
+  // Model ids for the multi-model fetch (defaults to WEATHER_ENSEMBLE_MODELS).
+  multiModels?: string[];
 }
 
 function autoForecastDays(targetDate: string): number {
@@ -238,13 +254,19 @@ export async function getForecast(
 
   const fcDays   = opts.forecastDays ?? autoForecastDays(targetDate);
   const wantEns  = opts.useEnsemble ?? ensembleEnabled();
+  // B52 #1: the multi-model fetch is opt-in per call. Using it for μ/σ implies
+  // fetching it; asking for it without using it is the recorder's path.
+  const wantMulti = opts.useMultiModel === true || opts.wantMultiModel === true;
 
-  // Parallel fetch: GFS + ECMWF + NOAA always; ensemble only if enabled.
-  const [gfsResult, ecmwfResult, noaaResult, ensembleResult] = await Promise.all([
+  // Parallel fetch: GFS + ECMWF + NOAA always; ensembles only if asked for.
+  const [gfsResult, ecmwfResult, noaaResult, ensembleResult, multiResult] = await Promise.all([
     fetchOpenMeteo(station, "gfs_seamless", targetDate, fcDays),
     fetchOpenMeteo(station, "ecmwf_ifs025", targetDate, fcDays),
     fetchNOAA(station, targetDate),
     wantEns ? fetchEnsemble(station, targetDate) : Promise.resolve(null),
+    wantMulti
+      ? fetchMultiModelEnsemble(station, targetDate, opts.multiModels)
+      : Promise.resolve(null),
   ]);
 
   const gfsMax     = gfsResult?.maxTemp ?? null;
@@ -267,9 +289,19 @@ export async function getForecast(
   let confidence   = base.confidence;
   let modelUsed    = base.modelUsed;
 
+  // B52: when the multi-system mixture is switched ON and usable, it supersedes
+  // the single-family ensemble for both μ and σ — its σ carries the inter-model
+  // term that one family structurally cannot see. Default OFF, so the `else if`
+  // below stays the live path and the legacy behaviour is bit-identical.
+  if (opts.useMultiModel === true && multiResult && multiResult.memberCount >= 5) {
+    ensembleMaxC = multiResult.dailyMaxMean;
+    const sd = multiResult.dailyMaxStdDev;
+    confidence = Math.max(0.30, Math.min(0.95, 1.0 - sd / 4.0));
+    modelUsed = `MULTI(${multiResult.perModel.length}x/${multiResult.memberCount})+${base.modelUsed}`;
+  }
   // If the 31-member GFS ensemble is available, prefer its distribution
   // (higher signal-to-noise than the fixed 2- or 3-model blend).
-  if (ensembleResult && ensembleResult.memberCount >= 5) {
+  else if (ensembleResult && ensembleResult.memberCount >= 5) {
     ensembleMaxC = ensembleResult.dailyMaxMean;
     // Unanimity proxy: tighter stddev → higher confidence
     // stddev <= 0.5°C → 0.95 ; stddev >= 3°C → 0.30
@@ -299,6 +331,7 @@ export async function getForecast(
     modelUsed,
     fetchedAt: new Date().toISOString(),
     ensembleDetail: ensembleResult,
+    multiModelDetail: multiResult,
     modelWeightsUsed: debWeights,
   };
 }

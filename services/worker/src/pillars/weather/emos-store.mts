@@ -136,6 +136,25 @@ export async function injectSeedResiduals(
   }
 }
 
+/**
+ * Resolved (date → observed daily max °C) pairs for a station. Exported for the
+ * B52 multi-model recorder so it can label its snapshots WITHOUT issuing a
+ * second round of METAR fetches — `reconcileEmosObs` already did that work.
+ * Best-effort: returns {} on any read error.
+ */
+export async function loadResolvedObs(station: string): Promise<Record<string, number>> {
+  try {
+    const s = await load(station);
+    const out: Record<string, number> = {};
+    for (const r of s.residuals) {
+      if (typeof r.obs === "number" && Number.isFinite(r.obs)) out[r.date] = r.obs;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
 /** Load the fitted EMOS params for a station, or null if none/insufficient data. */
 export async function loadStationEmosParams(station: string): Promise<EmosFit | null> {
   try {

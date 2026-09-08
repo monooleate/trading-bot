@@ -9,6 +9,12 @@
 // to the original GFS+ECMWF combination — this module never throws.
 
 import type { StationConfig } from "./station-config.mts";
+import {
+  modelStatsForDate,
+  parseModelList,
+  DEFAULT_ENSEMBLE_MODELS,
+  type MultiModelStats,
+} from "@core/multi-model-ensemble.mts";
 
 const TIMEOUT  = 9000;
 const MAX_MEMBERS = 31;
@@ -28,7 +34,7 @@ export interface EnsembleResult {
   // |membersAbove/total - 0.5| × 2  → 1.0 unanimous, 0.0 coin-flip
   // Not pre-computed — call ensembleConfidence() on demand.
   rawDailyMaxMembers: number[];  // convenience: plain array of daily maxes
-  source:         "open-meteo-ensemble";
+  source:         "open-meteo-ensemble" | "open-meteo-multi-model";
   fetchedAt:      string;
 }
 
@@ -140,4 +146,80 @@ export async function fetchEnsemble(
 // ─── Config helper ────────────────────────────────────────────────────────
 export function ensembleEnabled(): boolean {
   return (process.env.USE_ENSEMBLE || "").toLowerCase() === "true";
+}
+
+// ─── B52 #1: multi-model ensemble ─────────────────────────────────────────
+//
+// Same endpoint, same key-free access — Open-Meteo serves several independent
+// ensemble systems and accepts them comma-separated in ONE request (measured
+// 2026-09-08: 197 members, ~30 KB, ~0.2 s). The bot has always asked for a
+// single family (`gfs_seamless`), which measurably under-states σ by 2–3× at
+// the T+0/T+1 lead times it trades. See @core/multi-model-ensemble.mts for the
+// pooling rationale and packages/core/src/multi-model-ensemble.test.mts for the
+// pinned maths.
+//
+// Uses `daily=temperature_2m_max` rather than deriving the max from `hourly`:
+// verified numerically identical on all four models (Open-Meteo aggregates the
+// same interpolated hourly series), at a fraction of the payload.
+
+export interface MultiModelEnsembleResult extends EnsembleResult {
+  /** Per-system breakdown — the whole point of the record. */
+  perModel: MultiModelStats["perModel"];
+  /** Population stddev of the per-model means: the uncertainty a single family cannot see. */
+  interModelSpread: number;
+  /** Model ids as REQUESTED (the response tags are Open-Meteo's internal domain names). */
+  requested: string[];
+}
+
+/** Model list for the multi-model fetch: `WEATHER_ENSEMBLE_MODELS` or the four verified systems. */
+export function multiModelList(): string[] {
+  return parseModelList(process.env.WEATHER_ENSEMBLE_MODELS, DEFAULT_ENSEMBLE_MODELS);
+}
+
+/**
+ * Fetch several ensemble systems in one request and reduce them to the
+ * equal-weight-per-model mixture for `targetDate`.
+ *
+ * Shaped as an `EnsembleResult` so every existing consumer (σ, μ, member list)
+ * works unchanged, plus the per-model breakdown. Returns null on any failure —
+ * never throws, exactly like `fetchEnsemble`.
+ */
+export async function fetchMultiModelEnsemble(
+  station: StationConfig,
+  targetDate: string,               // YYYY-MM-DD in station.tz
+  models: string[] = multiModelList(),
+  forecastDays = 7,
+): Promise<MultiModelEnsembleResult | null> {
+  if (!models || models.length === 0) return null;
+  const url =
+    `https://ensemble-api.open-meteo.com/v1/ensemble` +
+    `?latitude=${station.lat}&longitude=${station.lon}` +
+    `&daily=temperature_2m_max` +
+    `&models=${encodeURIComponent(models.join(","))}` +
+    `&timezone=${encodeURIComponent(station.tz)}` +
+    `&forecast_days=${forecastDays}`;
+
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT) });
+    if (!res.ok) return null;
+    const data = await res.json() as any;
+    const stats = modelStatsForDate(data?.daily, "temperature_2m_max", targetDate);
+    if (!stats) return null;
+
+    return {
+      dailyMaxMean:   stats.pooled.mean,
+      dailyMaxStdDev: stats.pooled.sd,
+      // Member indices are meaningless across systems; kept for shape-compat.
+      members:        stats.members.map((v, i) => ({ memberIndex: i, dailyMaxC: v })),
+      memberCount:    stats.pooled.n,
+      rawDailyMaxMembers: stats.members,
+      source:         "open-meteo-multi-model",
+      fetchedAt:      new Date().toISOString(),
+      perModel:       stats.perModel,
+      interModelSpread: stats.interModelSpread,
+      requested:      models,
+    };
+  } catch {
+    return null;
+  }
 }

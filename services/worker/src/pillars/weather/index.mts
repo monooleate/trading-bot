@@ -10,6 +10,7 @@ import { getForecast } from "./forecast-engine.mts";
 import { detectModelLag } from "./model-lag-detector.mts";
 import { matchBucket, marketConsensusModalTempC } from "./bucket-matcher.mts";
 import { logForecast, loadStationEmosParams, reconcileEmosObs } from "./emos-store.mts";
+import { isRecordDue, recordSnapshot, fillObsFromEmos } from "./multi-model-store.mts";
 import { emosApply } from "@core/emos.mts";
 import { makeWeatherDecision, getWeatherConfig, padWeatherGates } from "./decision-engine.mts";
 import type { WeatherTradeDecision, WeatherConfig } from "./decision-engine.mts";
@@ -259,6 +260,10 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
   // fan-out (audit P2). logForecast stays inline — it's a cheap per-(icao,date)
   // upsert.
   const reconciledStations = new Set<string>();
+  // B52 #1: one multi-model snapshot per (station, date) per tick at most —
+  // the store throttles across ticks, this stops a re-fetch when several
+  // markets of the same city+date sit in the same scan window.
+  const multiModelSeen = new Set<string>();
 
   // 3. Process each market
   const weatherMaxOpen = config.maxOpenPositions ?? 5;
@@ -333,11 +338,24 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
         continue;
       }
 
+      // B52 #1: decide BEFORE the forecast whether this tick also pulls the
+      // multi-system ensemble, so one fetch serves both consumers (recorder and
+      // — once flipped on — the trading path). Throttled per (station, date):
+      // the systems refresh every 6–12 h, so the default 3 h cadence loses
+      // nothing. Any store error → false → the legacy single-family path.
+      const multiKey = `${station.icao}|${market.date}`;
+      let wantMultiModel = false;
+      if (config.multiModelRecord && !config.useMultiModel && !multiModelSeen.has(multiKey)) {
+        wantMultiModel = await isRecordDue(station.icao, market.date).catch(() => false);
+      }
+
       // 4. Get forecast (pass through pipeline knobs from effective config)
       const forecast = await getForecast(market.city, station, market.date, {
         applyCityOffset: config.applyCityOffset,
         forecastDays:    config.forecastDays > 0 ? config.forecastDays : undefined,
         useEnsemble:     config.useEnsemble,
+        useMultiModel:   config.useMultiModel,
+        wantMultiModel,
       });
 
       log("SIGNAL", config.paperMode, {
@@ -378,6 +396,27 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
       if (!reconciledStations.has(station.icao)) {
         reconciledStations.add(station.icao);
         await reconcileEmosObs(station.icao, station.tz).catch(() => ({ filled: 0 }));
+        // B52 #1: label past snapshots from the residuals the line above just
+        // filled — no second METAR round-trip.
+        if (config.multiModelRecord) {
+          await fillObsFromEmos(station.icao).catch(() => ({ filled: 0 }));
+        }
+      }
+      // B52 #1: record what every system said vs what the bot actually used.
+      // Measurement only — nothing downstream reads this store.
+      if (config.multiModelRecord && forecast.multiModelDetail && !multiModelSeen.has(multiKey)) {
+        multiModelSeen.add(multiKey);
+        const mm = forecast.multiModelDetail;
+        await recordSnapshot(station.icao, {
+          ts: Date.now(),
+          date: market.date,
+          perModel: mm.perModel,
+          pooledMean: mm.dailyMaxMean,
+          pooledSd: mm.dailyMaxStdDev,
+          interModelSpread: mm.interModelSpread,
+          baseMean: forecast.ensembleDetail?.dailyMaxMean ?? null,
+          baseSd: forecast.ensembleDetail?.dailyMaxStdDev ?? null,
+        }).catch(() => {});
       }
       let emosMu = forecast.predictedMaxC;
       let sigma = rawSigma;

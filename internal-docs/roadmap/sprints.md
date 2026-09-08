@@ -224,7 +224,10 @@ function combine(signals, icMap, marketKind) {
 - **Precondition:** Operátor döntés a 3 opcióból (ECMWF közvetlen / NOAA GFS GRIB2 / kereskedelmi)
 - **Becslés:** (a) 3 nap akadémiai kulcsra való várás után, (b) Hetzner-függő, (c) skála-függő
 - **Doksi:** [`../math/16-weather-bot.md` §3.B](../math/16-weather-bot.md#3b-opcionális-adatforrás-upgrade-ek-jövőbeli-fejlesztés)
-- **Sprint-szintű terv:** sprint 38-39 után, prioritás (a) ECMWF közvetlen — ha az akadémiai kulcs megjön
+- **Sprint-szintű terv:** ⚠ **Felváltva → B52** (2026-09-08): az Open-Meteo ensemble API azóta keyless
+  módon szolgálja az ECMWF IFS-ENS-t (51), az ECMWF AIFS-ENS-t (51) és a Google WeatherNext 2-t (64) is,
+  egyetlen kérésben — az (a)/(b)/(c) opciók (akadémiai kulcs / saját GRIB2-pull / fizetős szolgáltató)
+  ezzel tárgytalanok a következő lépcsőre. Ez a tétel csak a B52 után, live-skálán merül fel újra.
 
 ### B5 — LP Refresh Window execution (P3.3)
 
@@ -581,6 +584,41 @@ A 2026-09-03 teljes audit (5 bot + infra + security) implementált fixei: [chang
   - **Gates** [`cross-position-gates.mts`](../../services/worker/src/pillars/shared/cross-position-gates.mts): `parseBtcAboveSlug` delegál (K USD + coin-scoped closingKey); a decision-engine monotonicity/overlap display `$X` formátumra (K már USD).
 - **BTC-viselkedés bit-azonos** (minden fetch default BTC, a BTC slug-ok ugyanúgy parse-olnak) → 0 regresszió a meglévő BTC-trade-ekre. Az ETH/SOL a deploy után élesedik (a `CRYPTO_COINS` env szűkíthető `BTC`-re, ha kell). Új env: `CRYPTO_COINS` ([env-vars.md](../current-state/env-vars.md)). Doksi: [`math/36-multi-coin.md`](../math/36-multi-coin.md).
 - **Follow-up (Backlog):** ETH/SOL Deribit-IV (#7) tesztelése ETH-chainen; per-coin realized-IC (a calibration jelenleg kategória-szintű, nem coin-szintű) → ha az ETH-edge eltér a BTC-től, coin-particionált IC kellhet; SOL-markets megjelenésekor a scan automatikusan felveszi.
+
+### B52 — Weather multi-model ensemble (GEFS-only → GEFS + IFS-ENS + AIFS-ENS + WeatherNext 2) — **1. lépcső ✅ IMPLEMENTED 2026-09-08 (82. session)**, 2-4. lépcső nyitva
+
+- **Trigger (82. session, 2026-09-08):** a user kérdése — „be tudnánk integrálni weather api-kat vagy modelleket? elvileg a Gemini is pontosított a modelljén". **Élő API-felmérés + offline mérés** (kód NEM változott ebben a sessionben).
+- **A dokumentált weather-patológia** (`2026-07-23`): `forecast_edge` **IC +0.393** (az irány JÓ), de **payoffRatio 0.44** — „jó irány, rossz sizing". A B49 #6 EMOS/NGR ezt az **ensemble-underdispersion**t célozza *kalibrációval*. **Ez a tétel a forrásnál javítja ugyanazt.**
+- **A tény, amit a bot ma használ:** [`ensemble-forecast.mts`](../../services/worker/src/pillars/weather/ensemble-forecast.mts) `models=gfs_seamless` — **egyetlen modellcsalád**, 31 tag, `MAX_MEMBERS=31` cap. A deterministic ág ([`forecast-engine.mts`](../../services/worker/src/pillars/weather/forecast-engine.mts)) GFS+ECMWF-IFS+NOAA, DEB-súlyozva.
+- **Élő-verifikált (2026-09-08, keyless, ugyanaz az `ensemble-api.open-meteo.com/v1/ensemble` endpoint):** `models=gfs_seamless,ecmwf_ifs025,ecmwf_aifs025,google_weathernext2_ensemble` **egyetlen kérésben 197 tagot** ad (31+51+51+64), a kulcsok modell-szuffixummal (`temperature_2m_member01_ncep_gefs_seamless`). Nincs +1 HTTP-hívás/piac. További elérhető: `icon_eu` (40), `gem_global` (21), `ukmo_global_ensemble_20km` (18), `bom_access_global_ensemble` (18), `icon_d2_eps` (20, EU 2 km).
+- **A mért indok (T+0/T+1 daily-max, a bot saját állomásain, 2026-09-08):**
+
+  | Állomás | nap | GEFS-only (ma) | Multi-model (197) | σ-arány |
+  |---|---|---|---|---|
+  | RJTT Tokyo | T+0 | μ 32.3 σ **0.49** | μ **29.3** σ **1.58** | **×3.2** |
+  | RJTT Tokyo | T+1 | μ 34.0 σ 1.00 | μ **30.3** σ 1.96 | ×2.0 |
+  | VHHH Hong Kong | T+1 | μ 31.9 σ **0.43** | μ 30.3 σ 1.07 | ×2.5 |
+  | KORD Chicago | T+0 | μ 29.8 σ 0.70 | μ 27.9 σ 1.64 | ×2.3 |
+  | EGLC London | T+0 | μ 18.8 σ 0.89 | μ 18.1 σ 0.63 | ×0.7 |
+
+  A GEFS-only σ **2–3×-osan alulbecsli** a valós bizonytalanságot Ázsiában/USA-ban pont a bot lead-time-ján (T+2-re a hatás elhal), és a **μ akár 3.0–3.7 °C-kal** elcsúszik (Tokyo). Európában a multi-model σ *szűkebb* → nem uniform tágítás, hanem **helyesebb** σ. Ez pontosan a Kelly-túlméretezés gyökér-oka.
+- **Kód-hatás (kicsi):** `models` string + a member-parser regex (`/^temperature_2m(_member\d+)?$/` → modell-szuffix-tűrő) + `MAX_MEMBERS` cap feloldása + per-modell tagolás az `EnsembleResult`-ban (a `deb.mts` per-modell hibáját már így is tudja súlyozni). A `bucket-matcher` és a B49 #6 EMOS változatlanul fogyaszt (μ, σ).
+- **Kockázatok / amit MÉRNI kell, mielőtt default-ON:**
+  - **A WeatherNext 2 és az AIFS-ENS natívan 6-órás** (az API hourly-ra interpolál) → a napi **max** csúcsa simulhat ⇒ hideg-bias. Az AI-modellek dokumentáltan **hideg-biasosak hőhullám-csúcsokon** (arXiv 2504.21195) — a max-hőmérséklet-bucketek pont ilyenek. **A meglévő EMOS (a+b·μ) + DEB ezt korrigálni tudja**, de csak mérés után.
+  - **Nincs offline backfill:** a `historical-forecast-api` a `google_weathernext2_ensemble`-t csak **~2026-09-04-től** adja (előtte `null`), az `ecmwf_aifs025` ensemble-nek nincs archívuma. ⇒ **B50 #2-doktrína: log-forward MOST.** A [`emos-store.mts`](../../services/worker/src/pillars/weather/emos-store.mts) `logForecast` már minden scannelt állomást naplóz METAR-reconcile-lal → **elég a per-modell μ/σ-t is belerakni**, és 2-3 hét múlva a DEB/EMOS bizonyítékkal választ.
+  - **Open-Meteo free tier = non-commercial + 10 000 hívás/nap**, és a hívás-súly nő a változószámmal (>10 változó → törtrészes többszörös). 197 tag ≈ 197 „változó" → a jelenlegi ~6 piac/tick × 20 tick/óra mellett ez **újraszámolandó**; élesedés (B10) előtt fizetős tier vagy saját GRIB-pull kell.
+- **Lépcsők:**
+  - **(1) ✅ Log-forward recorder + a flip-knob bekötve — IMPLEMENTED 2026-09-08** (`tsc` 0 + **48/48 teszt** + build zöld, `main`). Részletek: [`math/37-multi-model-ensemble.md`](../math/37-multi-model-ensemble.md).
+    - **Pure core:** [`packages/core/src/multi-model-ensemble.mts`](../../packages/core/src/multi-model-ensemble.mts) — `parseModelList`, `splitEnsembleKeys` (a modell-taget a **válasz-kulcsból** olvassa, mert az Open-Meteo a belső domain-nevet adja vissza: `gfs_seamless` → `ncep_gefs_seamless`), `modelStatsForDate` (**modellenként egyenlő súlyú** keverék: σ² = modellen belüli variancia átlaga + a modell-átlagok varianciája — tagonkénti súly a 64-tagú WN2-nek kétszeres szavazatot adna a 31-tagú GEFS fölött) + [47 pinelt állítás](../../packages/core/src/multi-model-ensemble.test.mts).
+    - **Fetch:** [`ensemble-forecast.mts`](../../services/worker/src/pillars/weather/ensemble-forecast.mts) `fetchMultiModelEnsemble` — `daily=temperature_2m_max` (numerikusan azonos a hourly-ből derivált maxszal, töredék payload), 1 kérés / 197 tag / ~30 KB / **~0,2 s**, `EnsembleResult`-alakban (minden meglévő fogyasztó változatlanul működik) + `perModel` bontás.
+    - **Store:** [`multi-model-store.mts`](../../services/worker/src/pillars/weather/multi-model-store.mts) — (állomás, céldátum) párra **~3 órás** throttle (`dueForSnapshot`, ugyanaz a primitív, mint a B50 #2 recordereknél), gördülő 400 snapshot/állomás. Rögzíti a per-rendszer μ/σ-t **ÉS azt, amit a bot azon a tickben ténylegesen használt** (`baseMean`/`baseSd`) → azonos pillanatban vett fej-fej összehasonlítás. Az `obs` az **EMOS-store-ból** másolódik (`loadResolvedObs`) → **nincs második METAR-kör**. [13 integrációs assert valós Postgres (PGlite) ellen](../../services/worker/src/pillars/weather/multi-model-store.test.mts).
+    - **Read-out:** [`scripts/eval-multimodel.ts`](../../scripts/eval-multimodel.ts) + [`packages/core/src/multi-model-eval.mts`](../../packages/core/src/multi-model-eval.mts) (+[31 assert](../../packages/core/src/multi-model-eval.test.mts)) — CRPS-skill + **var-ratio** (`mean(hiba²)/mean(σ²)`: >1 = underdispersed) + ±1σ/±2σ coverage, per állomás és összesítve, explicit PROMOTE/HOLD verdikttel. A teszt pineli a lényeget: *azonos pont-hiba mellett a becsületes σ jobb CRPS-t kap* — egy változat rosszabb MAE-vel is nyerhet.
+    - **Knobok:** `weatherMultiModelRecord` (default **1** — csak logol; azért ON, mert a összehasonlítás **nem** backfillelhető: a WN2 historikus archívum csak ~2026-09-04-től él, az AIFS-ENS-nek nincs) + `weatherUseMultiModel` (default **0** — a flip). Env: `WEATHER_MULTIMODEL_RECORD`, `WEATHER_ENSEMBLE_MODELS`, `WEATHER_MULTIMODEL_INTERVAL_MIN`, `WEATHER_USE_MULTIMODEL` ([env-vars.md §13](../current-state/env-vars.md)).
+    - **0 trading-hatás, élőben verifikálva** 4 állomáson: a recorder bekapcsolt fetch-csel a `predictedMaxC`/`confidence`/`modelUsed` **bit-azonos** a recorder nélküli hívással. Élő mérés Tokióra (2026-09-09 célnap): GEFS μ 33.97 σ 1.02 · IFS-ENS 30.80 · AIFS-ENS 28.78 · WN2 29.16 → keverék μ 30.68 **σ 2.21** (inter-modell 2.05). A GEFS **5.2 °C**-kal az AIFS fölött ül, miközben ±1.02 °C-ot állít magáról.
+  - **(2) ⏳ Deploy + 2-3 hét adatgyűjtés**, majd `bun scripts/eval-multimodel.ts`.
+  - **(3) ⏳ Flip** (`weatherUseMultiModel=1`) — **csak** ≥30 címkézett snapshot + pozitív CRPS-skill mellett. ⚠ Kevesebb trade lesz: a szélesebb σ lejjebb viszi a confidence-t (`1 − σ/4`), így a `weatherConfidenceMin` (0.65) több piacot blokkol — ez a szándék (Tokió a fenti példában kiesne: conf 0.745 → 0.448).
+  - **(4) ⏳ Regionális nagyfelbontás** — EU-ra `icon_eu`/`icon_d2_eps`, US-ra `ncep_nbm_conus`/`gfs_hrrr`. A `WEATHER_ENSEMBLE_MODELS` már fogadná, de nem minden állomásra érvényesek → per-régió lista kell.
+- **Kapcsolat:** felváltja a régi **B4** (a) ECMWF-kulcs / (b) GFS GRIB2 / (c) kereskedelmi opciókat egy keyless, ma elérhető (d) úttal. Kötődik: **B15** (weather σ kalibráció), **B35** (`weatherKellyScale`), **B40** (invert re-audit), **B49 #6** (EMOS), **B50 #2** (log-forward recorder).
 
 ---
 

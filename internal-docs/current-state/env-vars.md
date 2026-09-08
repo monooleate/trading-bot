@@ -439,7 +439,7 @@ Delta-neutral funding rate arbitrage HL perp + Binance spot között.
 
 ---
 
-## 13. Weather bot tunable-ok (9 db)
+## 13. Weather bot tunable-ok (13 db)
 
 A weather bot Open-Meteo + ECMWF + GFS + NOAA ensemble forecast →
 Polymarket negRisk weather buckets.
@@ -454,10 +454,15 @@ Polymarket negRisk weather buckets.
 | `WEATHER_FORECAST_DAYS` | `0` | Open-Meteo forecast napok (0 = today only). |
 | `WEATHER_APPLY_CITY_OFFSET` | `false` | Ha `"true"` → city offset applied (legacy bug compatibility). Default: OFF. |
 | `WEATHER_CRON_ENABLED` | `false` | `"true"` → weather bot cron */5 min aktív. |
-| `USE_ENSEMBLE` | `false` | `"true"` → multi-model ensemble (GFS+ECMWF+NOAA). |
+| `USE_ENSEMBLE` | `false` | `"true"` → 31-tagú GEFS ensemble (a σ-forrás). A kódban a default valójában **ON** (`=== "false"` kapcsolja csak ki). |
+| `WEATHER_MULTIMODEL_RECORD` | `true` | **B52 #1** — log-forward recorder. `"false"` kapcsolja ki. ~3 óránként (állomás+dátum) lekéri a 4 független ensemble-rendszert és eltárolja a per-modell μ/σ-t a bot által használt GEFS-only μ/σ mellé. **Nulla trading-hatás.** Azért default-ON, mert az összehasonlítás NEM visszatölthető (WeatherNext 2 historikus archívum csak ~2026-09-04-től, AIFS-ENS-nek nincs). |
+| `WEATHER_ENSEMBLE_MODELS` | `gfs_seamless,ecmwf_ifs025,ecmwf_aifs025,google_weathernext2_ensemble` | A multi-model fetch modell-listája (vesszővel). Mind a 4 EGYETLEN Open-Meteo kérésben jön (197 tag, ~30 KB, ~0,2 s) → 0 extra HTTP-hívás. |
+| `WEATHER_MULTIMODEL_INTERVAL_MIN` | `180` | A recorder cadence percben, (állomás, céldátum) párra. A rendszerek 6–12 óránként frissülnek → 3 óra semmit nem veszít, és laposan tartja az Open-Meteo hívás-budgetet. |
+| `WEATHER_USE_MULTIMODEL` | `false` | **B52** — `"true"` → a 4-rendszeres, modellenként egyenlő súlyú keverék hajtja a μ-t ÉS a σ-t a bucket-matcher előtt. Default OFF = a mai GEFS-only viselkedés **bit-azonos**. Csak a recorder head-to-head pozitív eredménye után (`scripts/eval-multimodel.ts`). ⚠ Bekapcsolva **kevesebb** trade lesz: a szélesebb σ lejjebb viszi a confidence-t (1 − σ/4), így a `WEATHER_CONFIDENCE_MIN` kapu több piacot blokkol — ez szándékos. |
 
-**Forrásfájlok:** `auto-trader/weather/decision-engine.mts:54-64`,
-`auto-trader/weather/ensemble-forecast.mts:142`
+**Forrásfájlok:** [`weather/decision-engine.mts`](../../services/worker/src/pillars/weather/decision-engine.mts),
+[`weather/ensemble-forecast.mts`](../../services/worker/src/pillars/weather/ensemble-forecast.mts),
+[`weather/multi-model-store.mts`](../../services/worker/src/pillars/weather/multi-model-store.mts)
 
 ---
 
