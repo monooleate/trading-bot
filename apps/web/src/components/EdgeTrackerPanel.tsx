@@ -1225,27 +1225,29 @@ function WinRateHeatmap({ cells }: { cells: HeatmapCell[] }) {
       <div className="et-chart-header">
         <h3>Win Rate by Hour × Category (UTC)</h3>
       </div>
-      <div className="et-heatmap" style={{ gridTemplateColumns: `60px repeat(24, 1fr)` }}>
-        <div className="et-heat-corner" />
-        {Array.from({ length: 24 }, (_, h) => (
-          <div key={h} className="et-heat-hour">{h}</div>
-        ))}
-        {categories.flatMap((cat) => [
-          <div key={`label-${cat}`} className="et-heat-cat">{cat}</div>,
-          ...Array.from({ length: 24 }, (_, h) => {
-            const c = lookup.get(`${h}|${cat}`);
-            return (
-              <div
-                key={`cell-${h}-${cat}`}
-                className="et-heat-cell"
-                style={{ background: c ? cellColor(c.winRate) : "transparent" }}
-                title={c ? `${cat} ${h}h: ${(c.winRate * 100).toFixed(0)}% win (${c.tradeCount}t)` : "no data"}
-              >
-                {c ? c.tradeCount : ""}
-              </div>
-            );
-          }),
-        ])}
+      <div className="et-heat-scroll">
+        <div className="et-heatmap" style={{ gridTemplateColumns: `60px repeat(24, 1fr)` }}>
+          <div className="et-heat-corner" />
+          {Array.from({ length: 24 }, (_, h) => (
+            <div key={h} className="et-heat-hour">{h}</div>
+          ))}
+          {categories.flatMap((cat) => [
+            <div key={`label-${cat}`} className="et-heat-cat">{cat}</div>,
+            ...Array.from({ length: 24 }, (_, h) => {
+              const c = lookup.get(`${h}|${cat}`);
+              return (
+                <div
+                  key={`cell-${h}-${cat}`}
+                  className="et-heat-cell"
+                  style={{ background: c ? cellColor(c.winRate) : "transparent" }}
+                  title={c ? `${cat} ${h}h: ${(c.winRate * 100).toFixed(0)}% win (${c.tradeCount}t)` : "no data"}
+                >
+                  {c ? c.tradeCount : ""}
+                </div>
+              );
+            }),
+          ])}
+        </div>
       </div>
       <div className="et-chart-footer">
         Cells colored red→yellow→green by win rate. Numbers = trade count.
@@ -1452,6 +1454,11 @@ const styles = `
 .et-legend-dot { width: 16px; height: 3px; border-radius: 2px; }
 
 .et-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+/* Grid blowout guard: a 1fr track floors at the item's min-content, so a
+   too-wide card (the 24-hour heatmap) used to stretch the whole track — and
+   with it its sibling card — past the viewport. min-width:0 lets the item
+   shrink and scroll inside itself instead. */
+.et-grid2 > * { min-width: 0; }
 
 .et-ic-list { display: flex; flex-direction: column; gap: 10px; padding: 4px 0; }
 .et-ic-row { display: grid; grid-template-columns: 110px 1fr 60px; align-items: center; gap: 10px; }
@@ -1490,6 +1497,12 @@ const styles = `
 .et-heat-hour { border-bottom: 1px solid var(--border); }
 .et-heat-cat { text-align: right; padding-right: 8px; text-transform: capitalize; color: var(--text); }
 .et-heat-cell { min-height: 22px; border-radius: 2px; color: var(--text); font-weight: 700; display: flex; align-items: center; justify-content: center; }
+/* The 24-column heatmap has a ~440px min-content width — it cannot fit a phone.
+   Give it its own horizontal scroller and keep the category labels pinned, so
+   the swiped-in columns stay readable. The box-shadow paints over the 2px grid
+   gap that the scrolled cells would otherwise show through. */
+.et-heat-scroll { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.et-heat-corner, .et-heat-cat { position: sticky; left: 0; z-index: 1; background: var(--surface); box-shadow: -2px 0 0 var(--surface), 2px 0 0 var(--surface); }
 
 .et-hist { display: flex; align-items: flex-end; gap: 1px; height: 160px; padding: 0 4px; }
 .et-hist-col { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; }
@@ -1513,7 +1526,7 @@ const styles = `
 @media (max-width: 768px) {
   .et-kpi-grid { grid-template-columns: repeat(3, 1fr); }
   .et-grid2 { grid-template-columns: 1fr; }
-  .et-heatmap { font-size: 8px; }
+  .et-heatmap { font-size: 8px; min-width: 440px; }
 }
 @media (max-width: 480px) {
   .et-kpi-grid { grid-template-columns: repeat(2, 1fr); }
