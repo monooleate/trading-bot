@@ -15,6 +15,11 @@ export interface MarketInfo {
   volume24h: number;
   endDate: string;
   active: boolean;
+  // Base coin symbol (e.g. "BTC", "ETH", "SOL"), tagged by the crypto market
+  // finder (B51 multi-coin). Optional so pre-B51 records / non-crypto markets
+  // stay valid. Downstream the combiner re-derives the coin from the slug, so
+  // this is primarily for logging / entry-window vocabulary.
+  coin?: string;
   // Optional duration metadata for short-market exit/entry filters (P1.2).
   // Populated by btc-market-finder for BTC 5m/15m markets.
   durationMs?: number;            // total market lifetime

@@ -498,19 +498,19 @@ export function makeDecision(
       label: "Monotonicitás (egyéb nyitott pozíciók)",
       passed: !violation,
       actual: violation
-        ? `P(>${candParsed.K}K)=${(finalProb * 100).toFixed(0)}% vs P(>${violation.K}K)=${(violation.predictedYesProb * 100).toFixed(0)}% — ellentmondás`
+        ? `P(>$${candParsed.K.toLocaleString("en-US")})=${(finalProb * 100).toFixed(0)}% vs P(>$${violation.K.toLocaleString("en-US")})=${(violation.predictedYesProb * 100).toFixed(0)}% — ellentmondás`
         : sameGroup.length === 0
-          ? "n/a (nincs azonos closingTime-ű BTC-above pozíció)"
+          ? "n/a (nincs azonos closingTime-ű above-K pozíció)"
           : `OK — konzisztens ${sameGroup.length} nyitott pozícióval`,
       required: candParsed.K > 0
         ? `K_new > K_open ⇒ predNew ≤ predOpen (és fordítva)`
         : "monotonicity",
-      hint: "BTC-above-K piacok: ha K_új > K_meglévő ugyanazon resolution-time-on, akkor P(>K_új) ≤ P(>K_meglévő). 78K-NO@52% + 80K-YES@53% típusú ellentmondás blokkolása.",
+      hint: "Crypto above-K piacok (azonos coin): ha K_új > K_meglévő ugyanazon resolution-time-on, akkor P(>K_új) ≤ P(>K_meglévő). $78,000-NO@52% + $80,000-YES@53% típusú ellentmondás blokkolása.",
     });
     if (violation) {
       reasons.push(
-        `Cross-position monotonicity: P(>${candParsed.K}K)=${(finalProb * 100).toFixed(0)}% ` +
-        `${candParsed.K > violation.K ? ">" : "<"} P(>${violation.K}K)=${(violation.predictedYesProb * 100).toFixed(0)}% ` +
+        `Cross-position monotonicity: P(>$${candParsed.K.toLocaleString("en-US")})=${(finalProb * 100).toFixed(0)}% ` +
+        `${candParsed.K > violation.K ? ">" : "<"} P(>$${violation.K.toLocaleString("en-US")})=${(violation.predictedYesProb * 100).toFixed(0)}% ` +
         `— ellentmond a nyitott ${violation.slug} pozícióval`,
       );
     }
@@ -518,9 +518,9 @@ export function makeDecision(
     gates.push({
       label: "Monotonicitás (egyéb nyitott pozíciók)",
       passed: true,
-      actual: "n/a (nem BTC-above-K piac)",
+      actual: "n/a (nem above-K piac)",
       required: "—",
-      hint: "Csak BTC-above-K threshold-piacokra értelmezett (slug: `bitcoin-above-(\\d+)k-on-...`).",
+      hint: "Csak crypto above-K threshold-piacokra értelmezett (slug: `<coin>-above-(\\d+)k?-on-...`, pl. bitcoin-above-78k / ethereum-above-3000).",
     });
   }
 

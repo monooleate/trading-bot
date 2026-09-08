@@ -24,19 +24,29 @@ function expect(cond: boolean, test: string, message: string) {
 }
 
 // ── Parser ──────────────────────────────────────────────────────────────
+// B51: K now returned in USD (78000, not 78) and closingKey is coin-scoped
+// ("BTC:may-14") so ETH/SOL strikes never collide with BTC on the same date.
 {
   const t = "parseBtcAboveSlug";
   const a = parseBtcAboveSlug("bitcoin-above-78k-on-may-14");
-  expect(a !== null && a.K === 78 && a.closingKey === "may-14", t, `78K parse: ${JSON.stringify(a)}`);
+  expect(a !== null && a.K === 78000 && a.closingKey === "BTC:may-14", t, `78K parse: ${JSON.stringify(a)}`);
 
   const b = parseBtcAboveSlug("bitcoin-above-80k-on-may-14");
-  expect(b !== null && b.K === 80 && b.closingKey === "may-14", t, `80K parse: ${JSON.stringify(b)}`);
+  expect(b !== null && b.K === 80000 && b.closingKey === "BTC:may-14", t, `80K parse: ${JSON.stringify(b)}`);
 
   const c = parseBtcAboveSlug("will-bitcoin-be-above-100k-on-2026-05-14");
-  expect(c !== null && c.K === 100 && c.closingKey === "2026-05-14", t, `100K parse: ${JSON.stringify(c)}`);
+  expect(c !== null && c.K === 100000 && c.closingKey === "BTC:2026-05-14", t, `100K parse: ${JSON.stringify(c)}`);
 
   const d = parseBtcAboveSlug("btc-above-65k-on-may-9");
-  expect(d !== null && d.K === 65, t, `btc-above-65k parse: ${JSON.stringify(d)}`);
+  expect(d !== null && d.K === 65000, t, `btc-above-65k parse: ${JSON.stringify(d)}`);
+
+  // B51: ETH literal strike (no "k" suffix) → K in USD, ETH-scoped closingKey.
+  const e = parseBtcAboveSlug("ethereum-above-3000-on-september-11-2026");
+  expect(e !== null && e.K === 3000 && e.closingKey === "ETH:september-11-2026", t, `ETH-3000 parse: ${JSON.stringify(e)}`);
+
+  // B51: same date, different coin → distinct closingKey (never cross-compared).
+  const btcDay = parseBtcAboveSlug("bitcoin-above-80k-on-september-11-2026");
+  expect(btcDay !== null && btcDay.closingKey !== e!.closingKey, t, "BTC vs ETH same date → distinct closingKey");
 
   // Negative cases
   expect(parseBtcAboveSlug("eth-up-or-down-15m") === null, t, "ETH up-or-down should not parse");

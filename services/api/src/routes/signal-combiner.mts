@@ -22,6 +22,16 @@ import { oneTouchProbability, classifyBarrierMarket } from "@core/first-passage.
 import { blDigitalAbove, type SmilePoint } from "@core/deribit-rnd.mts";
 // B49 #5 OI-Δ × price signal (pure math). Default-off; strike-blind (K_BLIND).
 import { oiDeltaProb, classifyOiQuadrant } from "@core/oi-delta.mts";
+// B51 multi-coin: shared coin detector + threshold-strike parser (SSOT).
+import { coinFromText, parseCryptoAboveStrike, type CoinInfo } from "@core/coin.mts";
+
+// Resolve the coin descriptor for a market (slug + question). Defaults to BTC
+// when no coin token is present, so any legacy/ambiguous call prices BTC —
+// identical to the pre-B51 hardcoded behaviour.
+const BTC_DEFAULT: CoinInfo = coinFromText("bitcoin")!;
+function coinOf(m: MarketInfo): CoinInfo {
+  return coinFromText(`${m.slug ?? ""} ${m.question ?? ""}`) ?? BTC_DEFAULT;
+}
 
 const CORS = {
   "Access-Control-Allow-Origin":  "*",
@@ -267,20 +277,22 @@ async function resolveMarket(slug?: string): Promise<MarketInfo | null> {
 }
 
 // ─── Price data with geo-block fallback ───────────────────────────────────────
-async function fetchCloses(limit: number): Promise<number[]> {
+// B51: coin-parametrized (default BTC). Each source is asked for the coin's own
+// symbol/id so ETH/SOL markets get their own spot + realized-vol series.
+async function fetchCloses(limit: number, coin: CoinInfo = BTC_DEFAULT): Promise<number[]> {
   // 1. Binance Futures
   try {
-    const r = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=1m&limit=${limit}`, { signal: AbortSignal.timeout(5000) });
+    const r = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${coin.binance}&interval=1m&limit=${limit}`, { signal: AbortSignal.timeout(5000) });
     if (r.ok) { const k = await r.json() as any[][]; return k.map(c => parseFloat(c[4])); }
   } catch {}
   // 2. CoinGecko OHLC
   try {
-    const r = await fetch(`https://api.coingecko.com/api/v3/coins/bitcoin/ohlc?vs_currency=usd&days=1`, { signal: AbortSignal.timeout(8000) });
+    const r = await fetch(`https://api.coingecko.com/api/v3/coins/${coin.coingecko}/ohlc?vs_currency=usd&days=1`, { signal: AbortSignal.timeout(8000) });
     if (r.ok) { const d = await r.json() as number[][]; return d.slice(-limit).map(c => c[4]); }
   } catch {}
   // 3. CryptoCompare
   try {
-    const r = await fetch(`https://min-api.cryptocompare.com/data/v2/histominute?fsym=BTC&tsym=USD&limit=${limit}`, { signal: AbortSignal.timeout(6000) });
+    const r = await fetch(`https://min-api.cryptocompare.com/data/v2/histominute?fsym=${coin.fsym}&tsym=USD&limit=${limit}`, { signal: AbortSignal.timeout(6000) });
     if (r.ok) { const d = await r.json() as any; return (d.Data?.Data || []).map((c: any) => c.close); }
   } catch {}
   return [];
@@ -289,10 +301,10 @@ async function fetchCloses(limit: number): Promise<number[]> {
 // #5 HAR-RV: daily OHLC bars (oldest→newest) for the persistence-aware σ.
 // Binance Futures 1d klines primary; CryptoCompare histoday fallback. Returns
 // [] on failure so getVolSignal falls back to the legacy 20-min RV.
-async function fetchDailyOHLC(days: number): Promise<OHLC[]> {
+async function fetchDailyOHLC(days: number, coin: CoinInfo = BTC_DEFAULT): Promise<OHLC[]> {
   // 1. Binance Futures 1d klines: [openTime, open, high, low, close, ...]
   try {
-    const r = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=1d&limit=${days}`, { signal: AbortSignal.timeout(6000) });
+    const r = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${coin.binance}&interval=1d&limit=${days}`, { signal: AbortSignal.timeout(6000) });
     if (r.ok) {
       const k = await r.json() as any[][];
       return k.map((c) => ({ open: +c[1], high: +c[2], low: +c[3], close: +c[4] }));
@@ -300,7 +312,7 @@ async function fetchDailyOHLC(days: number): Promise<OHLC[]> {
   } catch {}
   // 2. CryptoCompare histoday
   try {
-    const r = await fetch(`https://min-api.cryptocompare.com/data/v2/histoday?fsym=BTC&tsym=USD&limit=${days}`, { signal: AbortSignal.timeout(8000) });
+    const r = await fetch(`https://min-api.cryptocompare.com/data/v2/histoday?fsym=${coin.fsym}&tsym=USD&limit=${days}`, { signal: AbortSignal.timeout(8000) });
     if (r.ok) {
       const d = await r.json() as any;
       return (d.Data?.Data || []).map((c: any) => ({ open: +c.open, high: +c.high, low: +c.low, close: +c.close }));
@@ -312,13 +324,16 @@ async function fetchDailyOHLC(days: number): Promise<OHLC[]> {
 // #7 Deribit BTC option chain (5-min in-process cache; the smile is the same
 // across BTC markets in one scan). get_instruments → strike/expiry/name;
 // get_book_summary_by_currency → per-instrument mark_iv (percent).
-let _deribitCache: { ts: number; instruments: any[]; ivMap: Map<string, number> } | null = null;
-async function fetchDeribitRaw(): Promise<{ instruments: any[]; ivMap: Map<string, number> } | null> {
-  if (_deribitCache && Date.now() - _deribitCache.ts < 5 * 60 * 1000) return _deribitCache;
+// B51: per-currency cache (Deribit lists BTC + ETH option chains; SOL/others
+// have none → getVolSignal skips the Deribit path and falls back to model σ).
+const _deribitCache = new Map<string, { ts: number; instruments: any[]; ivMap: Map<string, number> }>();
+async function fetchDeribitRaw(currency: string = "BTC"): Promise<{ instruments: any[]; ivMap: Map<string, number> } | null> {
+  const cached = _deribitCache.get(currency);
+  if (cached && Date.now() - cached.ts < 5 * 60 * 1000) return cached;
   try {
     const [instR, sumR] = await Promise.all([
-      fetch("https://www.deribit.com/api/v2/public/get_instruments?currency=BTC&kind=option&expired=false", { signal: AbortSignal.timeout(6000) }),
-      fetch("https://www.deribit.com/api/v2/public/get_book_summary_by_currency?currency=BTC&kind=option", { signal: AbortSignal.timeout(6000) }),
+      fetch(`https://www.deribit.com/api/v2/public/get_instruments?currency=${currency}&kind=option&expired=false`, { signal: AbortSignal.timeout(6000) }),
+      fetch(`https://www.deribit.com/api/v2/public/get_book_summary_by_currency?currency=${currency}&kind=option`, { signal: AbortSignal.timeout(6000) }),
     ]);
     if (!instR.ok || !sumR.ok) return null;
     const instruments = ((await instR.json()) as any).result || [];
@@ -327,8 +342,9 @@ async function fetchDeribitRaw(): Promise<{ instruments: any[]; ivMap: Map<strin
     for (const s of summary) {
       if (typeof s.mark_iv === "number" && s.mark_iv > 0) ivMap.set(s.instrument_name, s.mark_iv);
     }
-    _deribitCache = { ts: Date.now(), instruments, ivMap };
-    return _deribitCache;
+    const entry = { ts: Date.now(), instruments, ivMap };
+    _deribitCache.set(currency, entry);
+    return entry;
   } catch { return null; }
 }
 
@@ -337,8 +353,8 @@ async function fetchDeribitRaw(): Promise<{ instruments: any[]; ivMap: Map<strin
 // getVolSignal falls back to the model σ. Note: the smile provides the vol
 // LEVEL + skew; pricing uses the Polymarket horizon T (flat term-structure
 // proxy — full term-structure interpolation is a Hetzner/SSVI follow-up).
-async function fetchDeribitSmile(endDateMs: number): Promise<SmilePoint[]> {
-  const raw = await fetchDeribitRaw();
+async function fetchDeribitSmile(endDateMs: number, currency: string = "BTC"): Promise<SmilePoint[]> {
+  const raw = await fetchDeribitRaw(currency);
   if (!raw) return [];
   const calls = raw.instruments.filter(
     (i: any) =>
@@ -414,17 +430,12 @@ function normalCdf(z: number): number {
 // edge" against the actual market price, opening contrarian trades on
 // noise. Bug surfaced 2026-05-15 with 3 simultaneous contrarian trades
 // on near-identical finalProb values (0.46, 0.47, 0.47 across 78K/80K/82K
-// markets). Mirrors `parseBtcAboveSlug` in cross-position-gates.mts (kept
-// duplicated to avoid the top-level ↔ auto-trader/ circular import).
+// markets). B51: delegates to the shared `parseCryptoAboveStrike` (@core/coin),
+// which is now the single source of truth also used by cross-position-gates.
+// Returns K in USD and handles both BTC "k"-suffix (78k→78000) and ETH literal
+// (3000→3000) conventions.
 function parseThresholdK(slug: string | undefined | null): number | null {
-  if (!slug) return null;
-  const m = String(slug).toLowerCase().match(
-    /(?:bitcoin|btc)-(?:be-)?above-(\d+(?:\.\d+)?)k(?:-on-(.+?))?$/,
-  );
-  if (!m) return null;
-  const kThousand = parseFloat(m[1]);
-  if (!Number.isFinite(kThousand) || kThousand <= 0) return null;
-  return kThousand * 1000; // K in USD (78k → $78,000)
+  return parseCryptoAboveStrike(slug)?.K ?? null;
 }
 
 // Strike-price estimate: a BTC up/down piacok jellemzően a `openedAt`-kori
@@ -434,10 +445,10 @@ function parseThresholdK(slug: string | undefined | null): number | null {
 // jelenlegi spot árra → d₂ ≈ −σ·√T/2 → fair YES ≈ 0.5 (semleges signal).
 // 2026-05-15: az `above-Nk` piacokra a `parseThresholdK` veszi át (literal
 // strike). Az up-or-down logika ezen kívül változatlan.
-async function fetchBtcPriceAt(timestampMs: number): Promise<number | null> {
+async function fetchBtcPriceAt(timestampMs: number, coin: CoinInfo = BTC_DEFAULT): Promise<number | null> {
   try {
     const r = await fetch(
-      `https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=1m&startTime=${timestampMs}&endTime=${
+      `https://fapi.binance.com/fapi/v1/klines?symbol=${coin.binance}&interval=1m&startTime=${timestampMs}&endTime=${
         timestampMs + 60_000
       }&limit=1`,
       { signal: AbortSignal.timeout(5000) },
@@ -489,6 +500,7 @@ async function getVolSignal(
     return { prob: null, detail: { skipped: "vol_divergence disabled via Settings" } };
   }
   const strikeFetchEnabled = options.strikeFetchEnabled !== false;
+  const coin = coinOf(market);   // B51: price the market's own coin (default BTC)
   try {
     // Time horizon (years) a resolution-ig. Negatív/nulla horizonton skip.
     let timeHours = 0.25; // default 15min — overridden below
@@ -505,7 +517,7 @@ async function getVolSignal(
     const T = timeHours / (365 * 24);
 
     // 1. Realized vol annualizált (jelenlegi RV15 logika érintetlen).
-    const closes = await fetchCloses(20);
+    const closes = await fetchCloses(20, coin);
     if (closes.length < 5) return { prob: null, detail: { error: "no price data" } };
     // B21 (2026-06-04) σ-glitch guard. The 20-sample minutely realized-vol
     // is dominated by its single largest |return|: one spurious ~3%/min
@@ -540,7 +552,7 @@ async function getVolSignal(
     // (graceful fallback → zero regression). The sane-band guard below applies
     // to whichever σ is chosen.
     if (options.volEngine === "har-rv") {
-      const dailyBars = await fetchDailyOHLC(30);
+      const dailyBars = await fetchDailyOHLC(30, coin);
       const har = harRvSigma(dailyBars);
       if (har.ok && Number.isFinite(har.sigmaAnnual) && har.sigmaAnnual > 0) {
         sigmaAnnual = har.sigmaAnnual;
@@ -594,7 +606,7 @@ async function getVolSignal(
         if (Number.isFinite(endTs)) {
           const openTs = endTs - durationMs;
           if (openTs < Date.now() && openTs > Date.now() - 24 * 60 * 60 * 1000) {
-            const fetched = await fetchBtcPriceAt(openTs);
+            const fetched = await fetchBtcPriceAt(openTs, coin);
             if (fetched && fetched > 0) {
               K = fetched;
               strikeSource = "fetched";
@@ -624,11 +636,12 @@ async function getVolSignal(
     // zero regression. Touch markets are handled by #6 below instead.
     if (
       options.deribitIV &&
+      coin.deribit &&   // B51: only BTC/ETH have a Deribit option chain; else keep model σ
       market.endDate &&
       (strikeSource === "slug-threshold" || strikeSource === "fetched") &&
       classifyBarrierMarket(market.slug, market.question) === "terminal"
     ) {
-      const smile = await fetchDeribitSmile(new Date(market.endDate).getTime());
+      const smile = await fetchDeribitSmile(new Date(market.endDate).getTime(), coin.deribit);
       if (smile.length >= 2) {
         const p = blDigitalAbove(S, K, smile, T);
         if (Number.isFinite(p)) { fairYes = p; pricingKind = "deribit-rnd"; }
@@ -657,6 +670,7 @@ async function getVolSignal(
     return {
       prob: fairYes,
       detail: {
+        coin: coin.base,
         S: S.toFixed(2),
         K: K.toFixed(2),
         strikeSource,
@@ -959,12 +973,16 @@ async function getCondProbSignal(market: MarketInfo): Promise<{ prob: number | n
     // markets with the IDENTICAL parsed strike K, and skip the monotonicity
     // component entirely for non-threshold markets (up-or-down has no strike →
     // no monotonic family, so cond_prob falls back to the complement check).
-    const selfK = parseThresholdK(market.slug);
+    // B51: match related markets on the SAME coin AND strike. parseThresholdK
+    // now returns USD across coins, so a BTC $78,000 and a (hypothetical) ETH
+    // $78,000 strike would otherwise collide — compare the full {coin,K} identity.
+    const self = parseCryptoAboveStrike(market.slug);
+    const selfK = self?.K ?? null;
     let monotonSigned = 0;  // signed contribution from related markets
     let monotonAbsSum = 0;  // for detail display only
     let relatedCount = 0;
 
-    if (selfK !== null) {
+    if (self !== null) {
       try {
         const mRes = await fetch(
           `${GAMMA}/markets?active=true&closed=false&limit=30&order=volume24hr&ascending=false`,
@@ -975,7 +993,8 @@ async function getCondProbSignal(market: MarketInfo): Promise<{ prob: number | n
           const all = Array.isArray(mData) ? mData : (mData.markets || []);
           const related = all.filter((m: any) => {
             if (m.slug === market.slug) return false;
-            return parseThresholdK(m.slug) === selfK;  // SAME strike only
+            const other = parseCryptoAboveStrike(m.slug);   // SAME coin + strike only
+            return other !== null && other.coin === self.coin && other.K === self.K;
           });
 
           for (const r of related.slice(0, 5)) {
@@ -1038,19 +1057,19 @@ async function getCondProbSignal(market: MarketInfo): Promise<{ prob: number | n
 }
 
 // ─── 5. FUNDING RATE SIGNAL ───────────────────────────────────────────────────
-// Global (cross-venue BTC funding)
-async function getFundingSignal(): Promise<{ prob: number | null; detail: any }> {
+// Cross-venue perp funding for the market's coin (B51: coin-parametrized).
+async function getFundingSignal(coin: CoinInfo = BTC_DEFAULT): Promise<{ prob: number | null; detail: any }> {
   let rate: number | null = null;
   let source = "";
 
   try {
-    const res = await fetch(`https://api.bybit.com/v5/market/tickers?category=linear&symbol=BTCUSDT`, { signal: AbortSignal.timeout(5000) });
+    const res = await fetch(`https://api.bybit.com/v5/market/tickers?category=linear&symbol=${coin.binance}`, { signal: AbortSignal.timeout(5000) });
     if (res.ok) { const d = await res.json() as any; const t = d?.result?.list?.[0]; if (t?.fundingRate) { rate = parseFloat(t.fundingRate); source = "bybit"; } }
   } catch {}
 
   if (rate === null) {
     try {
-      const res = await fetch(`https://fapi.binance.com/fapi/v1/premiumIndex?symbol=BTCUSDT`, { signal: AbortSignal.timeout(5000) });
+      const res = await fetch(`https://fapi.binance.com/fapi/v1/premiumIndex?symbol=${coin.binance}`, { signal: AbortSignal.timeout(5000) });
       if (res.ok) { const d = await res.json() as any; if (d.lastFundingRate) { rate = parseFloat(d.lastFundingRate); source = "binance"; } }
     } catch {}
   }
@@ -1058,8 +1077,8 @@ async function getFundingSignal(): Promise<{ prob: number | null; detail: any }>
   if (rate === null) {
     try {
       const [s, f] = await Promise.all([
-        fetch(`https://min-api.cryptocompare.com/data/price?fsym=BTC&tsyms=USD`, { signal: AbortSignal.timeout(5000) }),
-        fetch(`https://min-api.cryptocompare.com/data/price?fsym=BTC&tsyms=USDT`, { signal: AbortSignal.timeout(5000) }),
+        fetch(`https://min-api.cryptocompare.com/data/price?fsym=${coin.fsym}&tsyms=USD`, { signal: AbortSignal.timeout(5000) }),
+        fetch(`https://min-api.cryptocompare.com/data/price?fsym=${coin.fsym}&tsyms=USDT`, { signal: AbortSignal.timeout(5000) }),
       ]);
       if (s.ok && f.ok) { const sd = await s.json() as any; const fd = await f.json() as any; if (sd.USD && fd.USDT) { rate = (fd.USDT - sd.USD) / sd.USD; source = "premium_proxy"; } }
     } catch {}
@@ -1067,7 +1086,7 @@ async function getFundingSignal(): Promise<{ prob: number | null; detail: any }>
 
   if (rate === null) return { prob: null, detail: { error: "all sources failed" } };
   const prob = Math.max(0.1, Math.min(0.9, 0.5 + rate * 50));
-  return { prob, detail: { funding_rate: (rate * 100).toFixed(4) + "%", source } };
+  return { prob, detail: { coin: coin.base, funding_rate: (rate * 100).toFixed(4) + "%", source } };
 }
 
 // ─── OI-Δ × price signal (B49 #5) ─────────────────────────────────────────────
@@ -1085,15 +1104,9 @@ async function loadOiDeltaEnabled(): Promise<boolean> {
 }
 
 function parseCoinSymbol(m: MarketInfo): string | null {
-  const s = `${m.slug ?? ""} ${m.question ?? ""}`.toLowerCase();
-  if (/\b(bitcoin|btc)\b/.test(s))    return "BTCUSDT";
-  if (/\b(ethereum|eth)\b/.test(s))   return "ETHUSDT";
-  if (/\b(solana|sol)\b/.test(s))     return "SOLUSDT";
-  if (/\b(ripple|xrp)\b/.test(s))     return "XRPUSDT";
-  if (/\b(dogecoin|doge)\b/.test(s))  return "DOGEUSDT";
-  if (/\b(avalanche|avax)\b/.test(s)) return "AVAXUSDT";
-  if (/\b(bnb)\b/.test(s))            return "BNBUSDT";
-  return null;
+  // B51: delegate to the shared detector (SSOT). Returns null when no coin is
+  // named, so oi_delta stays a no-op on ambiguous markets (unchanged contract).
+  return coinFromText(`${m.slug ?? ""} ${m.question ?? ""}`)?.binance ?? null;
 }
 
 async function getOiDeltaSignal(market: MarketInfo): Promise<{ prob: number | null; detail: any }> {
@@ -1682,12 +1695,13 @@ export default async function handler(req: Request, _ctx: Context) {
       ? Promise.resolve(null)
       : analyseResolutionRisk(riskMeta).catch(() => null);
 
+    const marketCoin = coinOf(market);   // B51: price the market's own coin
     const [vol, flow, apex, cond, fund, mom, contr, pairs, oiDelta, risk] = await Promise.all([
       getVolSignal(market, volOptions),
       getOrderflowSignal(market),
       getApexSignal(market),
       getCondProbSignal(market),
-      getFundingSignal(),
+      getFundingSignal(marketCoin),
       getMomentumSignal(market),
       getContrarianSignal(market),
       getPairsSpreadSignal(market),

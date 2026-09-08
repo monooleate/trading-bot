@@ -1,13 +1,30 @@
 import { GAMMA_API } from "../shared/config.mts";
 import type { MarketInfo } from "@core/types.mts";
+import { coinFromText } from "@core/coin.mts";
 
 /**
- * Find active BTC Up/Down markets on Polymarket via Gamma API.
- * Targets short-duration (5m, 15m) binary markets.
+ * Find active crypto Up/Down + above-K markets on Polymarket via Gamma API.
+ * Targets short-duration (5m, 15m) + daily binary markets.
+ *
+ * B51 (multi-coin): was BTC-only (keyword `bitcoin`/`btc`). Now admits any
+ * coin in the CRYPTO_COINS allowlist (default BTC,ETH,SOL) via the shared
+ * `coinFromText` detector, and tags each MarketInfo with its `coin` base so
+ * the downstream signal path (aggregator OB imbalance, combiner per-coin
+ * fetches) can price the right underlying. All BTC behaviour is unchanged
+ * when the allowlist is left at its default (BTC is always included).
  */
 
-const BTC_KEYWORDS = ["btc", "bitcoin"];
 const UPDOWN_KEYWORDS = ["up", "down", "above", "below"];
+
+// Coin allowlist — comma-separated base symbols (e.g. "BTC,ETH,SOL"). A market
+// whose detected coin is not in the set is skipped. Default admits the three
+// coins with a full combiner signal path (Binance klines + funding + OI).
+const CRYPTO_COINS = new Set(
+  (process.env.CRYPTO_COINS || "BTC,ETH,SOL")
+    .split(",")
+    .map((s) => s.trim().toUpperCase())
+    .filter(Boolean),
+);
 
 interface GammaMarket {
   question?: string;
@@ -34,11 +51,16 @@ interface GammaEvent {
   markets?: GammaMarket[];
 }
 
-function isBtcUpDown(question: string): boolean {
-  const q = question.toLowerCase();
-  const hasBtc = BTC_KEYWORDS.some((kw) => q.includes(kw));
-  const hasUpDown = UPDOWN_KEYWORDS.some((kw) => q.includes(kw));
-  return hasBtc && hasUpDown;
+// Identify an allowed-coin up/down/above/below market. Returns the coin base
+// (e.g. "BTC") when the text names a coin in the allowlist AND carries a
+// directional/threshold keyword; null otherwise. Checks slug + question so
+// slugs like "eth-updown-4h-…" (no coin word in the title) still match.
+function detectCryptoUpDown(question: string, slug: string): string | null {
+  const text = `${slug} ${question}`.toLowerCase();
+  const coin = coinFromText(text);
+  if (!coin || !CRYPTO_COINS.has(coin.base)) return null;
+  const hasUpDown = UPDOWN_KEYWORDS.some((kw) => text.includes(kw));
+  return hasUpDown ? coin.base : null;
 }
 
 function parseTokenIds(m: GammaMarket): [string, string] | null {
@@ -132,7 +154,8 @@ export async function findBtcMarkets(
   for (const evt of events) {
     for (const m of evt.markets || []) {
       const question = m.question || m.title || evt.title || "";
-      if (!isBtcUpDown(question)) continue;
+      const coin = detectCryptoUpDown(question, m.slug || "");
+      if (!coin) continue;
 
       // Skip closed/expired
       if (m.closed === true) continue;
@@ -180,6 +203,7 @@ export async function findBtcMarkets(
         volume24h: vol24h,
         endDate: m.endDate || "",
         active: true,
+        coin,
         durationMs: durationMs ?? undefined,
         openedAtEstimate,
       });

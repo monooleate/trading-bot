@@ -1,5 +1,6 @@
 import { FN } from "../shared/config.mts";
 import type { AggregatedSignal, SignalBreakdown } from "@core/types.mts";
+import { coinFromText } from "@core/coin.mts";
 
 const TIMEOUT = 8000;
 
@@ -65,7 +66,11 @@ export async function aggregateSignals(
   slug: string,
   obThresholds?: { up: number; down: number },
 ): Promise<AggregatedSignal> {
-  const obRatioPromise = fetchOrderBookImbalance("BTCUSDT");
+  // B51 (multi-coin): the Binance order-book imbalance must be for THIS
+  // market's coin, not always BTC. Derive it from the slug; fall back to BTC
+  // when the coin can't be identified (preserves pre-B51 behaviour).
+  const obSymbol = coinFromText(slug)?.binance ?? "BTCUSDT";
+  const obRatioPromise = fetchOrderBookImbalance(obSymbol);
 
   let result: AggregatedSignal | null = null;
   try {

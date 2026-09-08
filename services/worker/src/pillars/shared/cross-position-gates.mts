@@ -12,22 +12,26 @@
 // objects themselves are built inline in each bot so the labels/hints
 // can speak the bot's vocabulary (slug vs coin vs event).
 
-/** Parse a Polymarket "BTC above K" slug. Returns { K, closingKey }. */
+import { parseCryptoAboveStrike } from "@core/coin.mts";
+
+/**
+ * Parse a Polymarket crypto "above K" slug. Returns { K, closingKey }.
+ *
+ * B51 (multi-coin): delegates to the shared `parseCryptoAboveStrike`, so it
+ * now handles ETH ("ethereum-above-3000-…") and SOL as well as BTC. Two
+ * contract changes vs. the old BTC-only parser:
+ *   • K is now in USD (78000, not 78) — the gate only compares K magnitudes
+ *     relatively within a group, so this is safe; callers that DISPLAY K use
+ *     a "$" format instead of the old "K" suffix.
+ *   • closingKey is COIN-SCOPED ("BTC:may-14") so a monotonicity/overlap gate
+ *     never compares an ETH strike against a BTC strike resolving the same day.
+ */
 export function parseBtcAboveSlug(
   slug: string | undefined | null,
 ): { K: number; closingKey: string } | null {
-  if (!slug) return null;
-  // Tolerant pattern:
-  //   bitcoin-above-78k-on-may-14
-  //   btc-above-100k-on-2026-05-14
-  //   will-bitcoin-be-above-80k-on-may-9
-  const m = String(slug).toLowerCase().match(
-    /(?:bitcoin|btc)-(?:be-)?above-(\d+(?:\.\d+)?)k(?:-on-(.+?))?$/,
-  );
-  if (!m) return null;
-  const K = parseFloat(m[1]);
-  if (!Number.isFinite(K)) return null;
-  return { K, closingKey: m[2] || "" };
+  const parsed = parseCryptoAboveStrike(slug);
+  if (!parsed) return null;
+  return { K: parsed.K, closingKey: parsed.closingKey };
 }
 
 /**

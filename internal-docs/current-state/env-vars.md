@@ -390,6 +390,7 @@ tab-ról redeploy nélkül.
 | `BTC_HOLD_TO_END_CUTOFF_MS` | `60000` | &lt; 60s before end → hold-to-end (ne korai exit). |
 | `BTC_MIN_PRICE_BAND` | `0.10` | Min YES ár 10% (kizárja a deep-OTM $0.01 fill artefaktokat). |
 | `POLYMARKET_CRYPTO_TAG_ID` | `21` | Polymarket Gamma tag ID a crypto market-finderhez. |
+| `CRYPTO_COINS` | `BTC,ETH,SOL` | **B51** — vesszős coin-allowlist a crypto market-finderhez (multi-coin scan). Szűkítsd `BTC`-re a pre-B51 BTC-only viselkedéshez. Csak a `@core/coin.mts` által ismert base-ek hatnak (BTC/ETH/SOL/XRP/DOGE/AVAX/BNB). |
 
 **Forrásfájlok:** `netlify/functions/auto-trader/shared/config.mts:27-47`,
 `auto-trader/crypto/btc-market-finder.mts:93,98`

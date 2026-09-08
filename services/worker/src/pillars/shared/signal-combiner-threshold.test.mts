@@ -24,23 +24,15 @@
 //
 // Run: npx tsx netlify/functions/auto-trader/shared/signal-combiner-threshold.test.mts
 //
-// Re-implements the parser locally to avoid pulling the full
-// signal-combiner.mts (which imports getStore and other Netlify-only
-// modules) into the test runtime. The regex MUST stay in sync with
-// `parseThresholdK` in signal-combiner.mts AND `parseBtcAboveSlug` in
-// auto-trader/shared/cross-position-gates.mts — all three are intentionally
-// duplicated and pinned by this test.
+// B51: the three previously-duplicated strike regexes (signal-combiner
+// `parseThresholdK`, cross-position-gates `parseBtcAboveSlug`, and this test's
+// local copy) are now consolidated into `@core/coin` — a pure module, so this
+// test imports it directly instead of re-implementing. parseThresholdK is the
+// USD-strike projection of parseCryptoAboveStrike.
+import { parseCryptoAboveStrike } from "@core/coin.mts";
 
-function parseThresholdK(slug: string | undefined | null): number | null {
-  if (!slug) return null;
-  const m = String(slug).toLowerCase().match(
-    /(?:bitcoin|btc)-(?:be-)?above-(\d+(?:\.\d+)?)k(?:-on-(.+?))?$/,
-  );
-  if (!m) return null;
-  const kThousand = parseFloat(m[1]);
-  if (!Number.isFinite(kThousand) || kThousand <= 0) return null;
-  return kThousand * 1000;
-}
+const parseThresholdK = (slug: string | undefined | null): number | null =>
+  parseCryptoAboveStrike(slug)?.K ?? null;
 
 interface Failure { test: string; message: string; }
 const failures: Failure[] = [];
@@ -66,7 +58,10 @@ function expect(cond: boolean, test: string, message: string) {
   // Negative cases — must NOT parse (so the existing up-or-down K logic
   // takes over OR the spot fallback applies).
   expect(parseThresholdK("bitcoin-up-or-down-on-may-15-2026") === null, t, "up-or-down must not parse");
-  expect(parseThresholdK("eth-above-3k-on-may-15") === null, t, "ETH-above must not parse");
+  // B51: ETH now parses. "eth-above-3k" → 3×1000 = 3000 (k-suffix respected);
+  // real ETH slugs use the literal form ("ethereum-above-3000" → 3000).
+  expect(parseThresholdK("eth-above-3k-on-may-15") === 3000, t, "ETH-above-3k → $3,000");
+  expect(parseThresholdK("ethereum-above-3000-on-may-15") === 3000, t, "ETH literal 3000 → $3,000");
   expect(parseThresholdK("ratio-bitcoin-above-80k-something") === null, t, "non-anchored prefix must not parse");
   expect(parseThresholdK(undefined) === null, t, "undefined input");
   expect(parseThresholdK(null) === null, t, "null input");
