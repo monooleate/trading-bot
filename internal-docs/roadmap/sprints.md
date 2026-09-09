@@ -689,6 +689,24 @@ A 2026-09-03 teljes audit (5 bot + infra + security) implementált fixei: [chang
   3. **Selection-shrink a cryptóra** (a weather B23 mintájára), az optimizer's-curse ellen.
   4. **Több threshold-piac** — pont ezt adja a **B51** (ETH/SOL `above-K`), tehát az már fut.
 
+### B56b — A B56 javaslatok LEMÉRVE: #2 rontana, helyette `combinerLogOddsStrength` visszavonva ✅ 2026-09-09 (88. session)
+
+- **Trigger:** a user: „a B56 javaslatokat is csináld meg, **ha jobb lesz tőle minden bot**." A feltételt komolyan véve a javaslatokat **előbb leszimuláltam a valós ledgeren** (72 directional sor, 71 rezolvált), a `combine()` súlyozásának hű újraimplementálásával.
+- **Hitelesség-ellenőrzés:** a szimulált „mai" variáns `|p−0.5|`=0.041 / Brier 0.2692 ≈ a **ténylegesen logolt** finalProb 0.041 / 0.2692 → a modell hű, az összehasonlítás érvényes.
+
+  | variáns | `|p−0.5|` | Brier | skill a base rate ellen |
+  |---|---|---|---|
+  | mai (log-odds ON, minden jel) | 0.041 | 0.2696 | −7.9% |
+  | **+ semleges jelek kihagyva (a #2 javaslat)** | 0.079 | **0.2889** | **−15.6%** |
+  | **lineáris pool (log-odds OFF)** | 0.032 | **0.2630** | **−5.2%** |
+  | lineáris + semleges kihagyva | 0.062 | 0.2760 | −10.4% |
+
+- **#2 (halott jelek súlyának felszabadítása) — ELVETVE, mérés alapján.** Rosszabbá tenné (Brier 0.2696 → 0.2889). **Ok:** a directional ág élő jelei *tévednek*, tehát a 3 semleges jel 0.5 felé húzása **véletlenül védelmet adott** — a határozottabbá tétel (0.041 → 0.079) csak a hibát nagyítja. Tanulság: egy „nyilvánvaló" tisztítás negatív-skillű ágon árt.
+- **Helyette: `combinerLogOddsStrength` 1 → 0 (default) ✅ ALKALMAZVA.** A knobot 2026-09-03-án a B50-batch része kapcsolta ON-ra **bizonyíték nélkül**; az első mérés szerint **ront**: a lineáris pool Brier-je 0.2630 vs a log-oddsé 0.2696 (skill −5.2% vs −7.9%). Ráadásul kevésbé döntésképes kimenetet ad (0.032 vs 0.041), ami a `combinerConfidenceMin`=0.05 kapun **több rossz directional trade-et blokkol** — azaz implicit módon teljesíti a **#1** javaslatot (directional kapuzás) kódváltozás nélkül.
+- **#1 (directional piacok kihagyása a scanből) — NEM implementálva, szándékosan.** A knob-visszavonás elérte a lényegét (több blokkolás), a scan-sorok viszont **értékes unbiased ledger-adatot** adnak (B50 doktrína) — a kihagyásuk információt semmisítene meg.
+- **#3 (selection-shrink a cryptóra) — NEM implementálva.** Elvileg támogatja ugyanez a lelet (a 0.5 felé húzás segít ezen az ágon), de **n=5 trade** nem elég egy új live-feature bevezetéséhez. Marad javaslat.
+- **Korlát, amit tudni kell:** a mérés **crypto** directional sorokon készült; a knob **globális**, tehát a HL-t is érinti, ahol viszont mindössze **2 ledger-sor** van → ott mérhetetlen. Ezért ez **nem új fogadás, hanem visszaállás a kód-defaultra** a rendelkezésre álló egyetlen bizonyíték alapján. A minta pre-B53 (szennyezett piaci ár), de a modell-oldali `|p−0.5|` és a base-rate-skill ettől független.
+
 ---
 
 ## ✅ Completed sprints (rolling 5 utolsó)

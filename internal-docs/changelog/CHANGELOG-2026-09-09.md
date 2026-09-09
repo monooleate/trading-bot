@@ -1,4 +1,4 @@
-# CHANGELOG — 2026-09-09 (84-87. session)
+# CHANGELOG — 2026-09-09 (84-88. session)
 
 ## 84. session — a 10 bekapcsolt knob Edge-Tracker-kiértékelése (read-only) → P1 mérési hiba
 
@@ -178,3 +178,41 @@ A Phase-4 tiszta indulás a *history* mellett a **knob-override-okat is eldobta*
 - **`combinerKBlindDownweight` = 0.5** — ez kizárólag a **threshold**-piacokra hat, azaz pontosan arra az ágra, amelyről a mai diagnózis kimutatta, hogy **a crypto bot egyetlen működő fele** (+90.9% skill), és ezt a mérést a jelenlegi 1.0 default mellett produkálta. A visszaállítása a működő felet módosítaná. Operátor-döntést kér.
 
 `frMinSpreadHourly` élő indoklás: a jelenleg nyitott AVAX F-arb pozíció **−0.000029** spreaddel lépett be — pont abban a churn-sávban, amit a júliusi 0.00005 bezárt.
+
+---
+
+## 88. session — a B56 javaslatok LEMÉRVE → #2 elvetve, `combinerLogOddsStrength` visszavonva
+
+A user: „a B56 javaslatokat is csináld meg, **ha jobb lesz tőle minden bot**." A feltételt komolyan véve **előbb leszimuláltam** a javaslatokat a valós ledgeren (72 directional sor, 71 rezolvált), a `combine()` súlyozásának hű újraimplementálásával. **Kód nem változott** — a végeredmény egy knob-visszavonás.
+
+**Hitelesség-ellenőrzés:** a szimulált „mai" variáns `|p−0.5|`=0.041 / Brier 0.2692 ≈ a **ténylegesen logolt** finalProb 0.041 / 0.2692 → a modell hű.
+
+| variáns | `|p−0.5|` | Brier | skill a base rate ellen |
+|---|---|---|---|
+| mai (log-odds ON, minden jel) | 0.041 | 0.2696 | −7.9% |
+| **+ semleges jelek kihagyva (a #2 javaslat)** | 0.079 | **0.2889** | **−15.6%** |
+| **lineáris pool (log-odds OFF)** | 0.032 | **0.2630** | **−5.2%** |
+| lineáris + semleges kihagyva | 0.062 | 0.2760 | −10.4% |
+
+### #2 — elvetve, mérés alapján
+
+A saját javaslatom (a 3 konstans-0.5 jel súlyának felszabadítása) **rontana**: Brier 0.2696 → 0.2889.
+
+**Miért:** a directional ág élő jelei *tévednek*. A 3 semleges jel 0.5 felé húzása **véletlenül védelmet adott** — a kimenet határozottabbá tétele (0.041 → 0.079) csak a hibát nagyítja. Tanulság: egy „nyilvánvalóan helyes" tisztítás egy negatív-skillű ágon árt.
+
+### Helyette: `combinerLogOddsStrength` 1 → 0 ✅ alkalmazva
+
+A knobot 2026-09-03-án a B50-batch kapcsolta ON-ra **bizonyíték nélkül**. Az első valódi mérés szerint **ront**: a lineáris pool Brier-je **0.2630** vs a log-oddsé **0.2696** (skill −5.2% vs −7.9%).
+
+Ráadásul kevésbé döntésképes kimenetet ad (0.032 vs 0.041), ami a `combinerConfidenceMin`=0.05 kapun **több rossz directional trade-et blokkol** — vagyis implicit módon teljesíti a **#1 javaslatot** (directional kapuzás), kódváltozás nélkül.
+
+### Amit szándékosan NEM csináltam
+
+- **#1 (directional piacok kihagyása a scanből):** a knob-visszavonás elérte a lényegét; a scan-sorok viszont **értékes unbiased ledger-adatot** adnak (B50 doktrína), a kihagyásuk információt semmisítene meg.
+- **#3 (selection-shrink a cryptóra):** elvileg ugyanez a lelet támogatja (a 0.5 felé húzás segít ezen az ágon), de **n=5 trade** kevés egy új live-feature-höz. Marad javaslat.
+
+### Korlát
+
+A mérés **crypto** directional sorokon készült; a knob **globális**, tehát a HL-t is érinti — ott viszont mindössze **2 ledger-sor** van, azaz mérhetetlen. Ezért ez **nem új fogadás, hanem visszaállás a kód-defaultra** az egyetlen létező bizonyíték alapján. A minta pre-B53 (szennyezett piaci ár), de a modell-oldali `|p−0.5|` és a base-rate-skill ettől független.
+
+**Élő knob-állapot 15 override:** a 09-03-i 10-ből 9 marad (a `combinerLogOddsStrength` kivezetve) + a 6 visszaállított júliusi.

@@ -380,7 +380,21 @@ netlify deploy --prod --dir=dist
 
 **Élő deploy:** **`https://trade.jmeszaros.dev`** — a Hetzner `analytics` Docker co-host (workers+api+model), **ÉL paper módban** (2026-09-02, Phase 5 kész). **Deploy módja (2026-09-03 frissítve):** a box **AUTO-DEPLOYOL** a GitHub Actions-ön át — push `main`-re → `ci.yml` (tsc+teszt+build) zöld → `deploy.yml` (workflow_run) **rsync-eli** a CI-validált commitot a runnerről a boxra (`rsync -rlptz --delete`, a box-lokális `.env`/`data`/`logs`/`dist`/`.git`/`.claude` kizárva) → `docker compose up -d --build` (+`.env`-őr). Ez leváltotta a box-oldali `git pull`-t (az anonim-HTTPS git rate-limit néha 401-elt). Kézi fallback: `ssh analytics` → `git pull --ff-only && docker compose up -d --build` (de utána a fa „dirty" lehet a rsync-hez képest → inkább a Deploy workflow újrafuttatása). **A teljes B49 A-lépcső (#1–#9) + a 67. session audit-fixek (`d2143f5`) DEPLOYOLVA és élnek** (2026-09-03, paper, verifikálva: publikus HTTP 200, workers tick 5s), a knobok default-OFF (0 viselkedés-változás). Memória: `hetzner-box-deploy`. A régi `mj-trading.netlify.app` Netlify-build a `main`-en törött (a monorepo-restruktúra óta), a Netlify **nyugdíjazásra vár** (a user törli — Phase 6 — de előbb a Phase 4 adat-export döntés). Paper mode végig.
 
-### Legutóbbi munka (87. session, 2026-09-09) — crypto-diagnózis (B56) + a júliusi knobok visszaállítva
+### Legutóbbi munka (88. session, 2026-09-09) — a B56 javaslatok LEMÉRVE → #2 elvetve, `combinerLogOddsStrength` visszavonva
+
+A user: „a B56 javaslatokat is csináld meg, **ha jobb lesz tőle minden bot**." A feltételt komolyan véve **előbb leszimuláltam** őket a valós ledgeren (72 directional sor, 71 rezolvált), a `combine()` súlyozásának hű újraimplementálásával (hitelesség: a szimulált „mai" `|p−0.5|`=0.041 / Brier 0.2692 ≈ a ténylegesen logolt 0.041 / 0.2692). **Kód nem változott** — a végeredmény egy knob-visszavonás.
+
+| variáns | `|p−0.5|` | Brier | skill |
+|---|---|---|---|
+| mai (log-odds ON) | 0.041 | 0.2696 | −7.9% |
+| **+ semleges jelek kihagyva (a #2 javaslat)** | 0.079 | **0.2889** | **−15.6%** |
+| **lineáris pool (log-odds OFF)** | 0.032 | **0.2630** | **−5.2%** |
+
+**A #2 saját javaslatomat ELVETETTEM** — rontana. Ok: a directional ág élő jelei *tévednek*, tehát a 3 konstans-0.5 jel 0.5 felé húzása **véletlenül védelmet adott**; a kimenet határozottabbá tétele csak a hibát nagyítja. **Helyette: `combinerLogOddsStrength` 1 → 0 (default) ✅ alkalmazva** — a knobot 09-03-án a B50-batch kapcsolta ON-ra bizonyíték nélkül, az első mérés szerint ront (Brier 0.2630 vs 0.2696), és a kevésbé döntésképes kimenet (0.032 vs 0.041) a `combinerConfidenceMin`=0.05 kapun **több rossz directional trade-et blokkol** → implicit módon teljesíti a **#1** javaslatot is, kódváltozás nélkül. **#1** (directional scan-kihagyás) és **#3** (crypto selection-shrink) szándékosan NEM implementálva (az előbbi értékes unbiased ledger-adatot semmisítene meg; az utóbbihoz n=5 trade kevés). **Korlát:** a mérés crypto-sorokon készült, a knob globális (a HL-en 2 ledger-sor = mérhetetlen) — ezért ez visszaállás a kód-defaultra, nem új fogadás. Részletek: [sprints B56b](internal-docs/roadmap/sprints.md) · [changelog](internal-docs/changelog/CHANGELOG-2026-09-09.md).
+
+> **⚡ Élő knob-állapot (2026-09-09): 15 override** — a 09-03-i 10-ből **9** (a `combinerLogOddsStrength` kivezetve) + **6 visszaállított júliusi** (`weatherSelectionShrink` 1.0, `weatherMaxPositionUSD` 15, `frMinSpreadHourly` 0.00005, `sportsSessionLossLimit` 50 + enabled, `sessionLossLimit` 1000). NEM visszaállítva: `weatherInvertDirection` (IC azóta +0.393 → B40) és `combinerKBlindDownweight` (a threshold-ágra hat, ami a crypto egyetlen működő fele).
+
+### Korábbi munka (87. session, 2026-09-09) — crypto-diagnózis (B56) + a júliusi knobok visszaállítva
 
 **⚠ Korrekció a 84. sessionhöz:** a „crypto modell nem-informatív" megállapítás **átlagban** igaz, de **két ellentétes rezsimet fed el**. Piac-típusonként (98 ledger-sor, 91 rezolvált): **threshold (`above-K`)** n=26, `|final−0.5|`=**0.371** (≈ a piac 0.372), Brier **0.0226** → **+90.9% skill** a base rate ellen; **up-or-down** n=49, `|final−0.5|`=**0.037**, Brier 0.2645 → **−6.5%** (rosszabb, mint a „mindig 0.5"); other n=23 → −17.1%. **A threshold-ág kiváló, a directional ág az, ami nem működik.** *(Caveat: a threshold-minta részben „könnyű", tehát a +90.9% nem tiszta alfa.)*
 
