@@ -52,13 +52,32 @@ export interface EmosParams {
 
 export interface EmosFit extends EmosParams {
   n: number;
+  /** Σ weights — the fit's *effective* sample size. Equals `n` when unweighted. */
+  nEffective?: number;
   varFloor: number;
   rawCrps: number;         // mean CRPS of the raw ensemble (μ=ensMean, σ=ensStd)
   calibratedCrps: number;  // mean CRPS after EMOS — should be ≤ rawCrps
   fitted: boolean;         // false → identity fallback (too few samples)
 }
 
-export interface EmosSample { ensMean: number; ensStd: number; obs: number; }
+export interface EmosSample {
+  ensMean: number;
+  ensStd: number;
+  obs: number;
+  /**
+   * Relative weight in the fit. Omitted / non-finite ⇒ 1 (and an all-unweighted
+   * call is bit-identical to the pre-2026-09-09 unweighted fit).
+   *
+   * Exists because of audit P0-2: every live station is fitted on ~181 SEEDED
+   * historical residuals (ERA5 observations vs inter-model spread) and 0–5
+   * FORWARD ones (METAR observations vs GEFS σ). Those are different
+   * distributions — measured, the seed bias is −0.03 °C while the forward bias
+   * is +0.50 °C — so the seeded mean correction does not transfer, and it
+   * outvotes the live data ~40:1. Weighting lets forward residuals take over as
+   * they accumulate instead of being drowned forever.
+   */
+  weight?: number;
+}
 
 /** Apply fitted EMOS params to a raw ensemble (mean, std) → calibrated (μ,σ).
  *  σ² = c + d·ensStd², floored at `varFloor`. Pure. */
@@ -69,6 +88,9 @@ export function emosApply(p: EmosParams, ensMean: number, ensStd: number, varFlo
 }
 
 const mean = (xs: number[]) => (xs.length ? xs.reduce((s, x) => s + x, 0) / xs.length : 0);
+
+/** Weight of a sample: finite and positive, else 1. */
+const wOf = (s: EmosSample) => (Number.isFinite(s.weight) && (s.weight as number) > 0 ? (s.weight as number) : 1);
 
 /**
  * Fit EMOS params from a per-station history of (ensMean, ensStd, obs) via the
@@ -90,14 +112,20 @@ export function fitEmos(
   // Identity fallback = raw ensemble passthrough (μ=ensMean, σ²=ensVar) with the
   // varFloor applied only in emosApply. c=0 (not varFloor) so σ→ensStd when the
   // raw spread already clears the floor.
-  const identity: EmosFit = { a: 0, b: 1, c: 0, d: 1, n, varFloor, rawCrps: NaN, calibratedCrps: NaN, fitted: false };
+  const identity: EmosFit = { a: 0, b: 1, c: 0, d: 1, n, nEffective: n, varFloor, rawCrps: NaN, calibratedCrps: NaN, fitted: false };
   if (n < minSamples) return identity;
 
-  const em = valid.map((s) => s.ensMean);
-  const ob = valid.map((s) => s.obs);
-  const emBar = mean(em), obBar = mean(ob);
-  const covEO = mean(valid.map((s) => (s.ensMean - emBar) * (s.obs - obBar)));
-  const varE = mean(valid.map((s) => (s.ensMean - emBar) ** 2));
+  // Weighted means. With every weight at 1 these reduce exactly to the plain
+  // arithmetic means the unweighted fit used, so an unweighted call is
+  // bit-identical (pinned in emos.test.mts).
+  const wts = valid.map(wOf);
+  const sumW = wts.reduce((s, w) => s + w, 0);
+  const wMean = (f: (s: EmosSample, i: number) => number) =>
+    valid.reduce((s, x, i) => s + wts[i] * f(x, i), 0) / sumW;
+
+  const emBar = wMean((s) => s.ensMean), obBar = wMean((s) => s.obs);
+  const covEO = wMean((s) => (s.ensMean - emBar) * (s.obs - obBar));
+  const varE = wMean((s) => (s.ensMean - emBar) ** 2);
 
   // Mean: OLS obs ~ a + b·ensMean (bias/regression correction). Guard flat ensMean.
   let b = varE > 1e-9 ? covEO / varE : 1;
@@ -107,9 +135,9 @@ export function fitEmos(
   // Spread: OLS squared-residual ~ c + d·ensVar (matches σ² to realised error).
   const rsq = valid.map((s) => (s.obs - (a + b * s.ensMean)) ** 2);
   const ev = valid.map((s) => s.ensStd * s.ensStd);
-  const evBar = mean(ev), rsqBar = mean(rsq);
-  const covVR = mean(valid.map((_, i) => (ev[i] - evBar) * (rsq[i] - rsqBar)));
-  const varV = mean(ev.map((x) => (x - evBar) ** 2));
+  const evBar = wMean((_, i) => ev[i]), rsqBar = wMean((_, i) => rsq[i]);
+  const covVR = wMean((_, i) => (ev[i] - evBar) * (rsq[i] - rsqBar));
+  const varV = wMean((_, i) => (ev[i] - evBar) ** 2);
   let d = varV > 1e-9 ? covVR / varV : 0;
   d = Math.max(0, d);
   let c = rsqBar - d * evBar;
@@ -122,7 +150,7 @@ export function fitEmos(
     return gaussianCrps(mu, sigma, s.obs);
   }));
 
-  return { ...params, n, varFloor, rawCrps, calibratedCrps, fitted: true };
+  return { ...params, n, nEffective: sumW, varFloor, rawCrps, calibratedCrps, fitted: true };
 }
 
 /**

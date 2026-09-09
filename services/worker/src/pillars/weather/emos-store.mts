@@ -52,10 +52,55 @@ async function save(station: string, s: StationEmos): Promise<void> {
   try { await getStore(STORE).set(keyFor(station), JSON.stringify(s)); } catch { /* best-effort */ }
 }
 
-function refit(s: StationEmos): void {
+/**
+ * Audit P0-2 — seed down-weighting.
+ *
+ * The `EmosResidual.seed` comment has claimed since B50 #5 that seeded rows are
+ * "down-weighted"; they never were. Every live station is fitted on ~181 seeded
+ * residuals (ERA5 observations vs inter-model spread) and 0-5 forward ones
+ * (METAR observations vs GEFS σ) — different distributions, measured seed bias
+ * −0.03 °C vs forward bias +0.50 °C — so the seeded mean correction does not
+ * transfer and outvotes the live data ~40:1.
+ *
+ * Leave-one-out over the 35 forward residuals (refit excluding the held-out
+ * point, so this is out-of-sample):
+ *
+ *   seed weight 1.0 (today)  CRPS 1.0767   log-score 3.5778   var-ratio 5.96
+ *   seed weight 0.1          CRPS 0.9681   log-score 3.1933   var-ratio 4.90
+ *   seed weight 0.03         CRPS 0.8623   log-score 2.9527   var-ratio 4.35
+ *
+ * Default 1.0 ⇒ every weight is 1 ⇒ the fit is bit-identical to before.
+ *
+ * ⚠ Pairs with `weatherSigmaInflation` (P0-1): a better-fitted EMOS needs LESS
+ * post-hoc inflation. Measured optima — seed 1.0 → λ 2.25-2.5; seed 0.1 → λ
+ * 1.75-2.25; seed 0.03 → λ 1.5-2.0. Do not tune one without re-measuring the
+ * other. Recommended pair: seed 0.1 + λ 2.0.
+ *
+ * ⚠ At seed 0.03 the effective sample size collapses to ~10 per station, so the
+ * measured gain is real but high-variance. 0.1 is the conservative setting.
+ */
+async function loadSeedWeight(): Promise<number> {
+  try {
+    const mod: any = await import("@api/routes/trader-settings.mts");
+    const ov = await mod.loadRuntimeOverrides();
+    const w = ov?.weatherEmosSeedWeight;
+    if (typeof w === "number" && Number.isFinite(w) && w > 0 && w <= 1) return w;
+  } catch { /* fall through to the env default */ }
+  const env = parseFloat(process.env.WEATHER_EMOS_SEED_WEIGHT || "1");
+  return Number.isFinite(env) && env > 0 && env <= 1 ? env : 1;
+}
+
+function refit(s: StationEmos, seedWeight = 1): void {
   const samples: EmosSample[] = s.residuals
     .filter((r) => r.obs !== null)
-    .map((r) => ({ ensMean: r.ensMean, ensStd: r.ensStd, obs: r.obs as number }));
+    .map((r) => ({
+      ensMean: r.ensMean,
+      ensStd: r.ensStd,
+      obs: r.obs as number,
+      // Only attach a weight when it actually differs from 1, so the default
+      // path hands fitEmos the exact same objects it always did.
+      ...(r.seed && seedWeight !== 1 ? { weight: seedWeight } : {}),
+    }));
   s.params = fitEmos(samples, { minSamples: MIN_SAMPLES, varFloor: VAR_FLOOR });
   s.fittedAt = new Date().toISOString();
 }
@@ -98,7 +143,7 @@ export async function reconcileEmosObs(station: string, tz: string, budget = 6):
         filled++;
       }
     }
-    if (filled > 0) { refit(s); await save(station, s); }
+    if (filled > 0) { refit(s, await loadSeedWeight()); await save(station, s); }
   } catch { /* swallow */ }
   return { filled };
 }
@@ -128,7 +173,7 @@ export async function injectSeedResiduals(
     if (s.residuals.length > CAP) {
       s.residuals = s.residuals.sort((a, b) => a.date.localeCompare(b.date)).slice(-CAP);
     }
-    if (added > 0) refit(s);
+    if (added > 0) refit(s, await loadSeedWeight());
     await save(station, s);
     return { added, total: s.residuals.length, fitted: !!s.params?.fitted };
   } catch {

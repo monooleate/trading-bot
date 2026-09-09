@@ -51,3 +51,58 @@ A weather bot iránya jó (`forecast_edge` IC ~+0.39), mégis **veszít** — a 
 - **Rank-histogram az Edge Trackerre** (az `observationRank` már megvan) — vizuális underdispersion-diagnózis.
 - **Per-évszak fit** (jelenleg per-állomás, szezon-aggregált).
 - **Open-Meteo multi-model blend** (ECMWF IFS+AIFS ENS) az adat-oldalon — külön adat-upgrade (math/16 §3.B).
+
+---
+
+## 6. P0-2 (rendszer-audit, 2026-09-09) — seed-dominancia és a súlyozott illesztés
+
+### A lelet
+
+Az `EmosResidual.seed` mező kommentje a B50 #5 óta azt állítja, hogy a seedelt sorok „down-weighted" — **soha nem voltak.** Élőben minden állomás **~181 seedelt** (ERA5-megfigyelés + inter-modell szórás) és **0–5 forward** (METAR + GEFS σ) residualon illeszkedik. Ez **két különböző eloszlás**:
+
+| | seed (n=4887) | forward (n=35) |
+|---|---|---|
+| bias | **−0,03 °C** | **+0,50 °C** |
+| var-ratio (nyers) | 2,54 | **10,04** |
+
+A seedelt átlag-korrekció ezért **nem transzferál**, viszont ~40 : 1 arányban leszavazza az élő adatot. Mérve: a forward bias **+0,497 °C nyersen** és **+0,55 °C EMOS után** — vagyis az EMOS a torzítást **nem viszi el**.
+
+### ⚠ Amit az audit ELŐSZÖR rosszul mondott
+
+Az eredeti P0-2 megfogalmazás („az EMOS rossz eloszláson illeszkedik, ezért nem megbízható") **túlbecsülte a kárt**, és a mérés cáfolta. Az élő, seed-illesztett EMOS a forward adaton **javít**: var-ratio 10,04 → **5,96**, log-score 5,61 → **3,58**, CRPS 1,164 → **1,077**. Az a megfigyelés, hogy **27-ből 17 állomás szűkíti** a σ-t (VHHH 0,80 → 0,53), igaz — de az `a + b·ensMean` átlag-korrekció többet nyer, mint amennyit a szűkebb σ veszít.
+
+**Az EMOS tehát nem a bűnös. A pontos hiba szűkebb: a torzítás-korrekció nem transzferál.**
+
+### A fix
+
+A [`fitEmos`](../../packages/core/src/emos.mts) **súlyozott OLS**-t kapott (`EmosSample.weight`, hiányzó/érvénytelen súly ⇒ 1, tehát a súlyozatlan hívás **bit-azonos**). Az [`emos-store`](../../services/worker/src/pillars/weather/emos-store.mts) a seedelt sorokra `weatherEmosSeedWeight`-et tesz (default **1.0 = KI**), env `WEATHER_EMOS_SEED_WEIGHT`. Az `EmosFit` új `nEffective` mezője (Σ súly) mutatja, mikor esett össze az illesztés néhány pontra.
+
+### Mérés — leave-one-out a 35 forward residualon
+
+A kihagyott pontot az illesztés **nem látja**, tehát out-of-sample:
+
+| variáns | CRPS | log-score | var-ratio |
+|---|---|---|---|
+| nyers ensemble (EMOS ki) | 1,1641 | 5,6139 | 10,04 |
+| **seed súly 1,0 (ma)** | 1,0767 | 3,5778 | 5,96 |
+| seed súly 0,3 | 1,0499 | 3,5745 | 5,84 |
+| **seed súly 0,1** | **0,9681** | **3,1933** | 4,90 |
+| seed súly 0,03 | 0,8623 | 2,9527 | 4,35 |
+| seed súly 0,01 | 0,8016 | 2,8457 | 4,30 |
+| seed átlag + forward-súlyozott spread | 1,0603 | 3,3894 | 5,39 |
+
+Monoton javulás mindkét proper score-on.
+
+### ⚠ A két knob PÁRBAN áll
+
+A jobban illesztett EMOS **kevesebb** utólagos σ-tágítást kíván (P0-1, [math/38](./38-weather-dispersion.md)). LOO-val mérve:
+
+| seed súly | optimális λ (CRPS) | optimális λ (log-score) |
+|---|---|---|
+| 1,0 | 2,25 | 2,5 |
+| 0,1 | 1,75 | 2,25 |
+| 0,03 | 1,5 | 2,0 |
+
+**Ajánlott pár: seed 0,1 + λ 2,0.** Ne hangold az egyiket a másik újramérése nélkül.
+
+**Konzervativizmus:** 0,03-nál az effektív mintaméret állomásonként ~10-re esik — a mért nyereség valós, de nagy szórású. Ezért **0,1** az ajánlás, nem a mért optimum. Ahogy a forward-residualok gyűlnek, a súly emelhető a hatás elvesztése nélkül (a seed magától kiöregszik a `CAP = 400`-as gördülő ablakból).

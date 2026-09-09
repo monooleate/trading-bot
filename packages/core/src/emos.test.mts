@@ -86,6 +86,73 @@ const approx = (a: number, b: number, eps = 2e-3) => Math.abs(a - b) < eps;
   expect(observationRank(members, 20) === 5, t, "above all → n");
 }
 
+// ── 6. WEIGHTED fit (audit P0-2) ─────────────────────────────────────────────
+// The live problem in one line: every station is fitted on ~181 SEEDED residuals
+// (ERA5 obs vs inter-model spread, measured bias -0.03 C) and 0-5 FORWARD ones
+// (METAR obs vs GEFS sigma, measured bias +0.50 C). Two different distributions,
+// and the seed outvotes the live data ~40:1, so the mean correction it produces
+// does not transfer. Weighting is what lets forward data take over as it
+// accumulates. The FORWARD rows below are real (live store, 2026-09-09).
+{
+  const t = "weighted-fit";
+
+  // A deterministic stand-in for the seeded population: unbiased (matching the
+  // measured -0.03 C) and centred well away from the forward rows so that a
+  // shift in the fitted intercept is unambiguous evidence of re-weighting.
+  const seed: EmosSample[] = [];
+  for (let i = 0; i < 180; i++) {
+    const m = 10 + (i % 20) * 0.5;
+    const err = ((i * 7919) % 21 - 10) / 10;     // deterministic, mean ~0
+    seed.push({ ensMean: m, ensStd: 0.9, obs: m + err });
+  }
+  // Real forward rows: consistently WARM (the live +0.5 C bias).
+  const forward: EmosSample[] = [
+    { ensMean: 28.9, ensStd: 0.5, obs: 31 }, { ensMean: 28.3, ensStd: 0.5, obs: 30 },
+    { ensMean: 27.8, ensStd: 0.5, obs: 30 }, { ensMean: 27.2, ensStd: 0.5, obs: 30 },
+    { ensMean: 28.3, ensStd: 0.5, obs: 31 }, { ensMean: 27.2, ensStd: 0.5, obs: 30 },
+    { ensMean: 26.7, ensStd: 0.5, obs: 29 }, { ensMean: 23.3, ensStd: 0.94, obs: 24 },
+  ];
+
+  // 6a. UNWEIGHTED IS BIT-IDENTICAL. The default path must not move at all.
+  const all = [...seed, ...forward];
+  const plain = fitEmos(all, { minSamples: 20, varFloor: 0.25 });
+  const ones = fitEmos(all.map((x) => ({ ...x, weight: 1 })), { minSamples: 20, varFloor: 0.25 });
+  for (const k of ["a", "b", "c", "d"] as const) {
+    expect(plain[k] === ones[k], t, `weight:1 must be bit-identical to unweighted for ${k} (${plain[k]} vs ${ones[k]})`);
+  }
+  expect(plain.nEffective === plain.n, t, "unweighted nEffective must equal n");
+
+  // 6b. Down-weighting the seed moves the fit toward the live distribution.
+  // Measured on the real store the forward residuals are warm, so the fitted
+  // map must predict HIGHER at a forward-typical ensMean as seed weight falls.
+  const at = (w: number) => {
+    const f = fitEmos(
+      [...seed.map((x) => ({ ...x, weight: w })), ...forward],
+      { minSamples: 20, varFloor: 0.25 },
+    );
+    return { fit: f, pred: f.a + f.b * 28 };
+  };
+  const w100 = at(1), w10 = at(0.1), w03 = at(0.03);
+  expect(w10.pred > w100.pred, t,
+    `seed weight 0.1 must pull the map toward the warm live rows (${w100.pred.toFixed(3)} -> ${w10.pred.toFixed(3)})`);
+  expect(w03.pred > w10.pred, t, "monotone: less seed weight -> more forward influence");
+
+  // 6c. nEffective reports the real (weighted) sample size, so an operator can
+  // see when a low weight has collapsed the fit to a handful of points. This is
+  // the guard against tuning the weight to 0.01 and believing the result.
+  expect(Math.abs((w10.fit.nEffective ?? 0) - (180 * 0.1 + 8)) < 1e-9, t,
+    `nEffective must be the weight sum, got ${w10.fit.nEffective}`);
+  expect((w03.fit.nEffective ?? 0) < 15, t, "at weight 0.03 the effective sample must visibly collapse");
+  expect(w03.fit.n === all.length, t, "raw n must still report every sample used");
+
+  // 6d. Non-finite / non-positive weights fall back to 1 rather than poisoning
+  // the fit with a zero or NaN denominator.
+  const junk = fitEmos(all.map((x, i) => ({ ...x, weight: i % 3 === 0 ? NaN : i % 3 === 1 ? 0 : -1 })), { minSamples: 20 });
+  for (const k of ["a", "b", "c", "d"] as const) {
+    expect(Math.abs(junk[k] - plain[k]) < 1e-12, t, `junk weights must degrade to unweighted for ${k}`);
+  }
+}
+
 // ─── CLI report ───────────────────────────────────────────────────────────
 const isMain = (() => {
   try {

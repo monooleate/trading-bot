@@ -741,6 +741,17 @@ A 2026-09-03 teljes audit (5 bot + infra + security) implementált fixei: [chang
 - **Doksi:** [`math/38-weather-dispersion.md`](../math/38-weather-dispersion.md).
 - **Élesítés:** deploy (0 viselkedés-változás) → Settings → Weather → *Forecast σ inflation* → **2.25** → 20-30 rezolvált trade után újramérni. Ha a **P0-2** (EMOS seed-dominancia) rendeződik, ezt a szorzót **újra kell mérni** — különben a két korrekció egymásra halmozódna.
 
+### B59 — EMOS seed-dominancia: súlyozott illesztés (audit P0-2) ✅ IMPLEMENTED 2026-09-09 (90. session), default OFF
+
+- **Lelet.** Az `EmosResidual.seed` komment a B50 #5 óta azt állítja, hogy a seedelt sorok „down-weighted" — **soha nem voltak**. Minden élő állomás **~181 seedelt** (ERA5 obs + inter-modell szórás) és **0–5 forward** (METAR + GEFS σ) residualon illeszkedik. Két külön eloszlás: seed bias **−0,03 °C**, forward bias **+0,50 °C** → a seedelt átlag-korrekció **nem transzferál**, viszont ~40:1-ben leszavazza az élő adatot. Mérve: forward bias +0,497 °C nyersen → **+0,55 °C EMOS után** (az EMOS a torzítást nem viszi el).
+- **⚠ Az audit első megfogalmazása RÉSZBEN TÉVES volt, és a mérés cáfolta.** A „rossz eloszlás → az EMOS nem megbízható" túlbecsülte a kárt: a forward adaton az élő EMOS **javít** (var-ratio 10,04 → **5,96**, log-score 5,61 → **3,58**). A „27-ből 17 állomás szűkíti a σ-t" igaz, de nem a domináns hatás. **A pontos hiba szűkebb: csak a torzítás-korrekció nem transzferál.**
+- **Fix:** [`fitEmos`](../../packages/core/src/emos.mts) **súlyozott OLS** (`EmosSample.weight`; hiányzó/érvénytelen ⇒ 1 → a súlyozatlan hívás **bit-azonos**, pinelve), `EmosFit.nEffective` = Σ súly. Az [`emos-store`](../../services/worker/src/pillars/weather/emos-store.mts) a seedelt sorokra `weatherEmosSeedWeight`-et tesz (default **1.0 = KI**) + env `WEATHER_EMOS_SEED_WEIGHT`.
+- **Mérés — leave-one-out a 35 forward residualon** (a kihagyott pontot az illesztés nem látja, tehát OOS): seed súly **1,0** → CRPS 1,0767 / logS 3,5778; **0,3** → 1,0499 / 3,5745; **0,1** → **0,9681 / 3,1933**; **0,03** → 0,8623 / 2,9527; **0,01** → 0,8016 / 2,8457. Monoton javulás mindkét proper score-on. Az „seed átlag + forward-súlyozott spread" változat gyengébb (1,0603) → elvetve.
+- **⚠ A két knob PÁRBAN áll a B58-cal.** A jobban illesztett EMOS **kevesebb** σ-tágítást kíván: seed 1,0 → λ 2,25–2,5; seed **0,1 → λ 1,75–2,25**; seed 0,03 → λ 1,5–2,0. **Ajánlott pár: seed 0.1 + λ 2.0.** Ne hangold az egyiket a másik újramérése nélkül.
+- **Konzervatív default-ajánlás.** A mért optimum 0,01–0,03, de ott az effektív mintaméret állomásonként **~10-re esik** → valós, de nagy szórású nyereség. Ezért **0,1** az ajánlás, nem a mért optimum. Ahogy a forward-residualok gyűlnek, a súly emelhető (a seed magától kiöregszik a `CAP=400` gördülő ablakból).
+- **Teszt:** [`emos.test.mts`](../../packages/core/src/emos.test.mts) 6. csoport — a súlyozatlan hívás **bit-azonossága** (a,b,c,d), a súly-monotonitás valós forward sorokkal, az `nEffective` mint összeomlás-őr, és hogy NaN/0/negatív súly **1-re degradál** (nem mérgezi a nevezőt).
+- **Doksi:** [`math/23 §6`](../math/23-emos.md) · [`math/38`](../math/38-weather-dispersion.md) (a párja).
+
 ---
 
 ## ✅ Completed sprints (rolling 5 utolsó)
