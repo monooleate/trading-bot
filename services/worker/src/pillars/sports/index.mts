@@ -104,6 +104,46 @@ async function runSportsTrader(
     });
   }
 
+  // ─── 1. Settle any pending positions ─────────────────────────────
+  // Audit 2026-09-09: settlement runs BEFORE the stopped check. "Stopped" must
+  // mean "open nothing new", not "abandon what you already hold" — the old
+  // order returned early and stranded open positions forever, with their cost
+  // basis committed and no path to resolution. Live at the time of the fix:
+  // three open sports positions worth $7.50, which stopping the bot would have
+  // frozen indefinitely. Settling first is also what lets an operator stop a
+  // bot the moment they decide to, rather than waiting out its book.
+  const resolveOut = await resolvePendingSportsPositions(session);
+  session = resolveOut.session;
+  if (resolveOut.resolutions.length > 0) await saveSportsSession(session);
+
+  // Audit P2-9: durable operator pause. `session.stopped` is the only other way
+  // to hold this bot down, and that flag is wiped by a reset, a simVersion bump
+  // or (until this audit) a transient read error — which is exactly how the
+  // 2026-07-23 decision to keep sports down until the B37 odds feed exists was
+  // silently lost, letting it reopen positions on 2026-09-09. A knob survives
+  // all three. Placed AFTER settlement on purpose: pausing must not strand open
+  // positions. Default 1 ⇒ unchanged behaviour.
+  let sportsCronOn = true;
+  try {
+    const sm: any = await import("@api/routes/trader-settings.mts");
+    const ov = await sm.loadRuntimeOverrides();
+    sportsCronOn = sm.effectiveFlag(ov, "sportsCronEnabled");
+  } catch { /* settings unavailable → do not block the tick */ }
+  if (source === "cron" && !sportsCronOn) {
+    const result = {
+      ok: true,
+      action: "skipped" as const,
+      category: CATEGORY,
+      reason: "Sports cron disabled (sportsCronEnabled = 0) — settled open positions, opened nothing",
+      paperMode: session.paperMode,
+      source,
+      resolutions: resolveOut.resolutions,
+      session: summarize(session),
+    };
+    await markRunFinish(result).catch(() => {});
+    return result;
+  }
+
   if (session.stopped) {
     const result = {
       ok: true,
@@ -112,15 +152,14 @@ async function runSportsTrader(
       reason: `Session stopped: ${session.stoppedReason}`,
       paperMode: session.paperMode,
       source,
+      // Still report anything that settled on this tick, so a stopped bot
+      // winding down its book is visible rather than silent.
+      resolutions: resolveOut.resolutions,
       session: summarize(session),
     };
     await markRunFinish(result).catch(() => {});
     return result;
   }
-
-  // ─── 1. Settle any pending positions ─────────────────────────────
-  const resolveOut = await resolvePendingSportsPositions(session);
-  session = resolveOut.session;
 
   // ─── 2. Discover sports markets ──────────────────────────────────
   let markets: SportsMarket[] = [];

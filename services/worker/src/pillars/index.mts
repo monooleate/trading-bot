@@ -154,26 +154,6 @@ export default async function handler(req: Request, _ctx: Context) {
       const source: "manual" | "cron" =
         (url.searchParams.get("source") === "cron" || isScheduledTick) ? "cron" : "manual";
 
-      // Audit P2-9: registry bots had NO cron gate — only the legacy weather
-      // branch did (see `wConfig.cronEnabled` below). That left `session.stopped`
-      // as the single way to hold sports down, and a stop flag is exactly what a
-      // reset, a simVersion bump or a transient read error wipes. A cron toggle
-      // is durable operator intent that survives all three. Default 1 ⇒ every
-      // registry bot keeps firing exactly as before.
-      if (source === "cron" && action === "run") {
-        try {
-          const sm: any = await import("@api/routes/trader-settings.mts");
-          const ov = await sm.loadRuntimeOverrides();
-          const knob = `${category}CronEnabled`;
-          if (sm.effectiveKnob(ov, knob) !== undefined && !sm.effectiveFlag(ov, knob)) {
-            return jsonResponse({
-              ok: true, action: "skipped", category,
-              reason: `${category} cron disabled (${knob} = 0)`,
-            });
-          }
-        } catch { /* settings unavailable → do not block the tick */ }
-      }
-
       const out = await dispatchToRegistry({
         category,
         action: action as any,
