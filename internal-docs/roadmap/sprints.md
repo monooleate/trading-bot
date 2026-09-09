@@ -648,6 +648,16 @@ A 2026-09-03 teljes audit (5 bot + infra + security) implementált fixei: [chang
 - **Precondition:** ~~B53~~ ✅ (2026-09-09) → **B53 deploy** + ≥2-3 hét friss adat, és a knobok egyesével (vagy legalább csoportonként) flippelve, hogy legyen valódi kontraszt. A B53 óta egy knob-flip már NEM címkézi át a még nyitott piacokat, tehát a két kar valóban szét fog válni.
 - **Amit addig is tudunk (a szennyezéstől független):** a crypto modell **nem-informatív** — átlagos `|p − 0.5|` = **0.119**, miközben a piacé **0.296**; a modell Brier-je 0.213, a triviális „mindig 0.5" 0.25. Vagyis a combiner a 0.5 körül lebeg, míg a piac határozottan és helyesen áraz. Ez a dokumentált „lapos finalProb" patológia (Sprint 41-42A), és **nem** knob-hangolási kérdés. → külön vizsgálat, ha a B53 után is megmarad.
 
+### B55 — Sports: kizárva a cross-bot aggregátumból + session-reset ✅ IMPLEMENTED 2026-09-09 (86. session)
+
+- **Trigger:** a user kérdése — „miért baj, ha kereskedik a sports bot? nem a rendszer filozófiája szerint kereskedik?" majd: „állítsd vissza a sport botot nullára és úgy működjön ahogy kigondoltuk."
+- **A kódból igazolt ok.** Odds-feed (B37) nélkül a sports élő fair-value-ja a [`decision-engine.mts`](../../services/worker/src/pillars/sports/decision-engine.mts)-ben: `predicted = 0.5 + (yesPrice − 0.5) × 0.55` — **annak az árnak a determinisztikus transzformációja, ami ellen fogad**; a pillérben **nulla külső adatforrás** van. Ebből az edge `= 0.45 × |ár − 0.5|`, ami a szélsőségeken maximális, a kapu pedig csak `≤15¢` / `≥85¢`-en nyílik → **minden belépő longshot, aritmetikából, nem felfedezésből** (a kód saját kommentje is „fabricated — no real edge").
+- **Miért mérési probléma:** a sports **118/236 rezolvált ledger-sort** adott (2026-09-08) — a promóciós kapu bizonyítékának **fele** —, miközben a Brier-skillje **konstrukcióból ≈0** (mért −0,6%): nem tud érdemben eltérni az ártól, viszont a súlyával a „nincs edge" felé húzza az aggregátumot és **elfedi a másik három bot valódi jelét**.
+- **Fix:** új `AGGREGATE_EXCLUDED` az [`edge-tracker.mts`](../../services/api/src/routes/edge-tracker.mts)-ben — a `category="all"` pool (walk-forward · config-attribution · Thompson-bandit · rajtuk át a promóciós kapu hard gate-je) kihagyja a sportsot. **A sports saját fülje változatlanul működik** (single-category kérés a saját ledgerét kapja), és a ledger **tovább gyűlik** (B50 #9) — csak nem hígít. A pool címkéje explicit: `all (excl. sports)`.
+- **⚠ A fix rosszabbnak mutatja az aggregátumot, és ez a helyes:** a valós ledgeren ALL Brier-skill **−52,78% → −135,31%**. A sports a 0 körüli skilljével **érzéstelenítette** a mutatót; kivéve látszik, mennyire rosszul áll valójában a crypto+weather. (A −135% maga is még pre-B53-szennyezett — a valódi szám a tiszta forward-adattal jön.)
+- **Session-reset:** a sports paper-session nullázva (bankroll $50, 0 trade); a **ledger NEM lett törölve** — az a mérési adat, és a reset a rendszerben sem érinti.
+- **B37-nél visszavonandó:** amint a `pinnacleFairYes` fel van töltve, a forecast független lesz a Polymarket ártól → a sportsot ki kell venni az `AGGREGATE_EXCLUDED`-ből.
+
 ---
 
 ## ✅ Completed sprints (rolling 5 utolsó)

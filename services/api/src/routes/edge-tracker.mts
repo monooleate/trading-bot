@@ -49,9 +49,27 @@ import { evaluatePromotionGate, type PromotionGateResult } from "@core/promotion
 import { computeConfigAttribution, type ConfigAttributionRow } from "@core/config-fingerprint.mts";
 import { banditArmsFromRecords, thompsonRank, type ArmPosterior } from "@core/thompson.mts";
 
-// Categories that write a prediction ledger (forecasting bots). Funding-arb
-// is delta-neutral carry (not forecasting); sports is not yet wired.
+// Categories that write a prediction ledger (forecasting bots). Funding-arb is
+// delta-neutral carry (not forecasting), so it has none.
 const LEDGER_CATEGORIES = ["crypto", "weather", "hyperliquid", "sports"];
+
+// Categories held OUT of the category="all" aggregate (walk-forward, config
+// attribution, Thompson bandit, and through the walk-forward the promotion
+// gate's hard "beats market OOS" check). Each still keeps its own ledger and is
+// fully viewable on its own tab — this only stops it from diluting the
+// cross-bot evidence.
+//
+// `sports` is excluded while its fair value is FABRICATED. With no odds feed
+// (B37) the live path is `predicted = 0.5 + (yesPrice − 0.5) × 0.55`
+// (sports/decision-engine.mts) — a deterministic transform of the very price it
+// is scored against. Two consequences make it poison for an aggregate:
+//   • its Brier skill vs the market is ≈0 BY CONSTRUCTION (measured −0.6%), so
+//     it drags every aggregate toward "no edge" regardless of the other bots;
+//   • it out-weighs them — 118 of 236 resolved rows on 2026-09-08, i.e. HALF
+//     the evidence the promotion gate reads.
+// Remove this entry when B37 lands: once `pinnacleFairYes` is populated the
+// forecast becomes independent of the Polymarket price and belongs in the pool.
+const AGGREGATE_EXCLUDED = new Set(["sports"]);
 
 // Aggregate per-category ledger stats into one object (for category="all").
 function aggregateLedgerStats(label: string, parts: LedgerStats[]): LedgerStats {
@@ -395,15 +413,21 @@ export default async function handler(req: Request, _ctx: Context) {
     let banditEval: ArmPosterior[] | null = null;
     if (!isMock) {
       try {
+        // A single-category request always gets its OWN ledger (sports included —
+        // its tab must still work); only the "all" pool applies the exclusion.
         const cats = category === "all"
-          ? LEDGER_CATEGORIES
+          ? LEDGER_CATEGORIES.filter((c) => !AGGREGATE_EXCLUDED.has(c))
           : (LEDGER_CATEGORIES.includes(category) ? [category] : []);
         if (cats.length > 0) {
           const loaded = await Promise.all(
             cats.map((c) => loadLedger(c).then((recs) => ({ c, recs }))),
           );
           const parts = loaded.map(({ c, recs }) => computeLedgerStats(c, recs));
-          ledgerStats = cats.length === 1 ? parts[0] : aggregateLedgerStats("all", parts);
+          // Name the pool honestly so a caller can see what it does NOT contain.
+          const poolLabel = category === "all" && AGGREGATE_EXCLUDED.size > 0
+            ? `all (excl. ${[...AGGREGATE_EXCLUDED].join(", ")})`
+            : "all";
+          ledgerStats = cats.length === 1 ? parts[0] : aggregateLedgerStats(poolLabel, parts);
           const allRecs = loaded.flatMap(({ recs }) => recs);
           walkForward = computeWalkForward(ledgerPointsFromRecords(allRecs), { blockCount: 5 });
           const attr = computeConfigAttribution(allRecs as any[]);

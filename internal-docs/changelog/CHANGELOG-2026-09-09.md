@@ -1,4 +1,4 @@
-# CHANGELOG — 2026-09-09 (84. + 85. session)
+# CHANGELOG — 2026-09-09 (84. + 85. + 86. session)
 
 ## 84. session — a 10 bekapcsolt knob Edge-Tracker-kiértékelése (read-only) → P1 mérési hiba
 
@@ -82,3 +82,45 @@ Doksi: [`math/37` §2](../math/37-multi-model-ensemble.md) · [`math/16` §3.B (
 ### Következő
 
 Deploy → a B53 tiszta mérése és a 8-rendszeres log innen indul → 2-3 hét után `bun scripts/eval-multimodel.ts` (B52 flip) és a **B54** knob-kiértékelés, immár valódi A/B-karokkal.
+
+---
+
+## 86. session — sports: kizárva a cross-bot aggregátumból + session-reset (B55)
+
+A user megkérdőjelezte a tegnapi „a sports bot ne kereskedjen" javaslatot: *„miért baj, ha kereskedik? nem a rendszer filozófiája szerint kereskedik? a weather akkor a külső api-kat használja és az alapján kereskedik?"* — jogos kérdés, és a kódból megválaszolva **részben igaza volt**.
+
+### Mit mond a kód
+
+A sports élő fair-value ága (odds-feed nélkül) — [`sports/decision-engine.mts`](../../services/worker/src/pillars/sports/decision-engine.mts):
+
+```ts
+predicted = 0.5 + (yp - 0.5) * 0.55;   // yp = a Polymarket YES-ára
+```
+
+Ez **annak az árnak a determinisztikus függvénye, ami ellen fogad**; a sports pillérben **egyetlen külső adatforrás sincs**. Következmények: edge = `0.45 × |ár − 0.5|` (a szélsőségeken maximális), a kapu csak `≤15¢`/`≥85¢`-en nyílik → **minden belépő longshot — aritmetikából, nem felfedezésből**. A kód saját kommentje is kimondja: *„fabricated — no real edge"*.
+
+**Kontraszt a weatherrel** (a user második kérdése): a weather P(YES)-e olyan forrásokból jön, amelyek semmit nem tudnak a Polymarket árról — Open-Meteo ensemble (**8 rendszer**: GEFS, ECMWF IFS-ENS, ECMWF AIFS-ENS, Google WeatherNext 2, CMC, MOGREPS-G, ICON-EU, ICON-D2), determinisztikus GFS+ECMWF+NOAA, METAR a settlementhez és az EMOS-kalibrációhoz. Ezért a weather **tud érdemben nem egyetérteni a piaccal**; a sports ma nem tud. Pont ezt adná meg neki a **B37**.
+
+### A user igazsága, és ami mégis probléma
+
+Igaza volt abban, hogy ez **nem veszélyes** (paper), és hogy a `paperNeverStop` filozófia szerint egy bot ne álljon le magától. *(Pontosítás: az 52. session szándékosan csak az **auto**-stopot oldotta fel; a manuális operátor-stop maradni hivatott volt — azt a Phase-4 tiszta indulás vesztette el, nem a filozófia.)*
+
+A valódi kár **mérési**: a sports **118/236 rezolvált ledger-sort** adott — a promóciós kapu bizonyítékának **felét** —, miközben a Brier-skillje **konstrukcióból ≈0** (mért −0,6%).
+
+### Amit csináltam (B55)
+
+- Új `AGGREGATE_EXCLUDED` az [`edge-tracker.mts`](../../services/api/src/routes/edge-tracker.mts)-ben: a `category="all"` pool (walk-forward · config-attribution · Thompson-bandit · rajtuk át a promóciós kapu hard gate-je) **kihagyja a sportsot**. A sports **saját fülje változatlanul működik**, és a ledgere **tovább gyűlik** — csak nem hígítja a cross-bot bizonyítékot. A pool címkéje explicit: `all (excl. sports)`.
+- A **sports session nullázva** (bankroll $50, 0 trade, 0 open). A **ledger NEM törölve** — az mérési adat, és a rendszer `reset`-je sem érinti.
+
+### ⚠ A fix ROSZABBNAK mutatja az aggregátumot — és ez a helyes
+
+A valós ledgeren mérve:
+
+| pool | n | Brier-skill a piac ellen |
+|---|---|---|
+| ALL **sportsszal** (eddig) | 236 | **−52,78%** |
+| ALL **sports nélkül** (mostantól) | 118 | **−135,31%** |
+
+A sports a ~0 körüli skilljével **érzéstelenítette** a mutatót. Kivéve látszik, milyen rosszul áll valójában a crypto+weather. Ez nem regresszió: eddig egy olyan bot maszkolta a képet, amelyik nem tud eltérni az ártól. (A −135% maga is még **pre-B53-szennyezett** — a valódi szám a tiszta forward-adattal jön.)
+
+**B37-nél visszavonandó:** amint a `pinnacleFairYes` fel van töltve, a sports forecastja független lesz az ártól → ki kell venni az `AGGREGATE_EXCLUDED`-ből.
