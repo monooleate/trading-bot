@@ -71,9 +71,10 @@ jobs:
         run: |
           set -euo pipefail
           SHA="${{ github.event.workflow_run.head_sha || github.sha }}"
-          printf 'sha=%s
-builtAt=%s
-' "$SHA" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > BUILD_INFO
+          {
+            echo "sha=$SHA"
+            echo "builtAt=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } > BUILD_INFO
           echo "BUILD_INFO:"; cat BUILD_INFO
 
       - name: Rsync + rebuild over SSH
