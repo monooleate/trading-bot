@@ -1,4 +1,4 @@
-# CHANGELOG — 2026-09-09 (84-91. session)
+# CHANGELOG — 2026-09-09 (84-92. session)
 
 ## 84. session — a 10 bekapcsolt knob Edge-Tracker-kiértékelése (read-only) → P1 mérési hiba
 
@@ -417,3 +417,53 @@ Lokális ütemezett feladat (`edgecalc-drift-check`, minden nap 08:00 helyi idő
 Nyolc read-only ellenőrzés: knob-override-ok vs. CLAUDE.md · session-állapotok (az F-Arb a `blob_kv`-ben, nem a normalizált táblában!) · bankroll-ugrás · **tiszta first-observation számláló** (ma 1, nőnie kell) · `codeVersion`-stamp vs. box `BUILD_INFO` · recorderek frissessége · deploy-szinkron · konténer-egészség. Csak eltérést jelent; nem javít, nem dönt.
 
 Amíg meg nem bizonyosodunk, hogy minden stabil, **napi**; utána heti.
+
+---
+
+## 92. session — a napi drift-check első futása: sports visszaindítva, `weatherSigmaInflation` igazolva
+
+A user: „futtasd le most kézzel a drift-ellenőrzést" → majd „indítsd újra a sportsot ahogy reggel megbeszéltük, ehhez adj segítséget: `weatherSigmaInflation=2.25` be van kapcsolva, jó ha be van kapcsolva?"
+
+### A drift-check első futása: 6 tiszta, 2 jelzés
+
+Nincs programozott „run now" a scheduled-tasks API-ban, ezért kézzel futtattam le mind a nyolc ellenőrzést. **Az első futáson rögtön két valódi eltérést talált** — pontosan azért készült.
+
+| check | eredmény |
+|---|---|
+| Deploy-szinkron | box `bf6f382834ca` = `origin/main` ✓ |
+| Konténerek / hibák | Up, **0 hiba** 1 órában ✓ |
+| Recorderek | 10 snapshot / 6 óra, **6 db 8-rendszeres** (EU) + 4 db 6-os ✓ |
+| `codeVersion`-stamp | működik — a crypto ledgerben **két kód-arm** különül el (`66efbf6c` ×6, `a3501946` ×4) ✓ |
+| Bankroll-ugrás | nincs ✓ |
+| Tiszta rezolvált sorok | **2** (reggel 1) — nő, de lassan ✓ |
+| **Sessionök** | 🔴 **sports leállítva** — szemben a user aznap reggeli döntésével |
+| **Knobok** | 🟠 `weatherSigmaInflation=2.25` **aktív**, pedig default-OFF-ként szállították |
+
+### 🔴 Sports — két session ellentétesen döntött
+
+A 86. sessionben a user döntése: fusson (paper), de legyen kizárva a cross-bot aggregátumból (B55) — a session nullázva, a CLAUDE.md-be beírva, hogy **FUT**. A 90. session rendszer-audit ezt **leállította** (`sportsCronEnabled=0` + manuális session-stop, „no odds feed (B37)" indoklással), a régi dokumentált politika alapján.
+
+Nem hiba egyik oldalról sem — a politika tényleg az volt, a user viszont aznap reggel megváltoztatta. **A user megerősítette a reggeli döntést**, ezért visszaindítva az app saját `resumeSportsSession` útján: `stopped=false`, bankroll $50, 0 trade, a `sportsCronEnabled=0` override törölve (vissza default 1-re) → 17 override. A B55 aggregát-kizárás **érintetlen**.
+
+### 🟠 `weatherSigmaInflation=2.25` — MÉRVE, és jó
+
+A user kérdésére lemértem élő EMOS-residuálokon (`dispersionDiagnostics` + `suggestSigmaInflation`). **Két minta ellentmond egymásnak:**
+
+| σ-faktor | varRatio — seedelt (n=4924) | varRatio — forward METAR (n=37) |
+|---|---|---|
+| 1,00 | 2,62 | **13,04** |
+| 1,50 | 1,16 | 5,80 |
+| **2,25 (élő)** | **0,52** | **2,58** |
+| 3,00 | 0,29 | 1,45 |
+| *javaslat* | *1,75* | *3,00* |
+
+**A feloldás a medián.** A `varRatio` átlag-alapú és a forward mintában outlier-vezérelt (átlag 13,04 vs **medián 2,53**). Az outlier-robusztus mediánból (kalibrált referencia χ²₁ szerint **0,455**):
+
+- **forward METAR:** 2,531 / 0,455 = 5,56 → σ-alulbecslés **√5,56 ≈ 2,36×**
+- seedelt: 0,636 / 0,455 = 1,40 → **≈ 1,18×**
+
+A termelési adaton a robusztus becslés **~2,36** → a beállított **2,25 gyakorlatilag telibe talál**. A „túllő" olvasat kizárólag a seedelt residuálokból jön, azok viszont **más adatgeneráló folyamat** (Open-Meteo inter-modell spread + ERA5, nem GEFS + METAR) — az audit ezért állította be egyúttal a `weatherEmosSeedWeight=0.1`-et.
+
+**Aszimmetria:** túl széles σ → kimaradt lehetőség; túl szűk σ → a dokumentált `payoffRatio 0.44` vérzés. A vérző boton a széles irányba tévedni olcsóbb. **Verdikt: marad ON.**
+
+**Két figyelmeztetés rögzítve:** (1) n=37 vékony — ha a forward medián lemegy 0,455 közelébe, a 2,25 sokká válik; a napi check figyeli. (2) **Dupla-számolás-veszély a B52-vel**: a `weatherUseMultiModel` flip a *forrásnál* szélesíti a σ-t (inter-modell tag), a `weatherSigmaInflation` *utólag* ugyanazt — a flip előtt újra kell mérni és valószínűleg lejjebb venni, különben a confidence (`1 − σ/4`) beomlik. Felvezetve a [B52 flip-checklistbe](../roadmap/sprints.md). A recorder `baseSd`-je a **nyers** GEFS-szórást rögzíti, tehát a B52 forecast-mérése maga nem szennyezett — csak a trading-út.
