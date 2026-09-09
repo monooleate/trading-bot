@@ -98,6 +98,7 @@ Stabil procedure-ök Claude Code (vagy operator) számára — minden playbook *
 | Fájl | Mikor használd | Cél |
 |------|-----------------|-----|
 | `playbooks/trade-history-audit.md` | User kéri a closed trade-ek + open positions ellenőrzését (pl. "validate", "audit", "PnL valós?") | 5-step audit: Gamma resolution cross-check, paper-fee PnL reproduction, bankroll-rekonciliáció, cross-position konzisztencia, statisztikai sanity. Pattern-detection-tár, modifikációs javaslatok, anti-pattern lista. |
+| `playbooks/system-audit.md` | Szisztematikus rendszer-audit: MINDEN bot + megosztott infra + live-state drift (nem diff-review, nem per-bot trade-history) | 9 párhuzamos read-only sáv (5 bot + jel-infra + mérési réteg + execution/state + live-state drift). **Adat-first metódus**: a 2026-09-03-i kód-audit „0 P0/P1"-et mondott, miközben a B53 élt — a kód konzisztens volt, csak a mező nem azt jelentette, amit a fogyasztója hitt róla. 1. fázis read-only → egyetlen prioritált P0-P3 lista (mérés + kód-hely + hatókör + ellen-hipotézis) → jóváhagyás → fix-fázis. |
 | `playbooks/edgecalc-ops.md` | A live Hetzner Docker-stack üzemeltetése (status, logok, deploy-update, kill-switch, bot-control, monitoring, backup-TODO) | Az `analytics` co-host operatív runbookja (2026-09-02 deploy). Hol mi van, health-check parancsok, umami-izoláció szabály. |
 
 ---
