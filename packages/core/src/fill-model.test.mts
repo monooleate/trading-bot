@@ -121,6 +121,42 @@ const approx = (a: number, b: number, eps = 1e-6) => Math.abs(a - b) < eps;
   expect(isFillValid(20, 1.2, 10) === false, t, "price out of (0,1) → invalid");
 }
 
+// ── P2-13: a fill must be plausible against the price we decided on ─────────
+// Live incident: one crypto trade booked entry_price 0.10 against a quoted
+// market_price_at_entry of 0.375 — a BUY filled 27.5 cents BELOW the market,
+// which cannot happen. The two numbers come from different feeds (Gamma
+// outcomePrices vs a separately-fetched CLOB book) and nothing compared them;
+// simulateDepthFill is not even given the limit price. The dollar cost was
+// right, but it booked ~3.75x the shares, so a YES resolution would have paid
+// ~275% too much — the phantom-share mode the fill model exists to prevent.
+{
+  const t = "P2-13 reference-price guard";
+  // Without a reference the old behaviour is preserved exactly.
+  expect(isFillValid(100, 0.10, 5) === true, t, "no reference ⇒ unchanged (backwards compatible)");
+
+  // The real incident: vwap 0.10 vs quote 0.375.
+  expect(isFillValid(89.9, 0.10, 5, 0.375) === false, t,
+    "the live 0.10-vs-0.375 fill must be rejected");
+
+  // The four sound fills measured alongside it (+0.013…+0.015 slippage) must pass.
+  for (const [vwap, quote] of [[0.26, 0.245], [0.38, 0.385], [0.127, 0.114], [0.26, 0.245]] as [number, number][]) {
+    expect(isFillValid(50, vwap, 5, quote) === true, t,
+      `legitimate slippage must pass: vwap ${vwap} vs quote ${quote}`);
+  }
+
+  // Band is a plausibility check, not a slippage limit — symmetric and wide.
+  expect(isFillValid(50, 0.47, 5, 0.38) === true, t, "0.09 deviation is within the band");
+  expect(isFillValid(50, 0.49, 5, 0.38) === false, t, "0.11 deviation is outside it");
+
+  // Existing guards still apply, and a bad reference is ignored rather than
+  // blocking every fill.
+  expect(isFillValid(1, 0.30, 5, 0.30) === false, t, "min-size guard still fires");
+  expect(isFillValid(50, 1.4, 5, 0.30) === false, t, "out-of-range vwap still fires");
+  for (const bad of [undefined, NaN, 0, -1] as any[]) {
+    expect(isFillValid(50, 0.10, 5, bad) === true, t, `unusable reference (${bad}) must not block a fill`);
+  }
+}
+
 // ─── CLI report ───────────────────────────────────────────────────────────
 const isMain = (() => {
   try {

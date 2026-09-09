@@ -201,9 +201,34 @@ export function isFillValid(
   filledShares: number,
   vwap: number,
   minOrderSizeShares: number,
+  // Audit P2-13. `referencePrice` is the quoted YES price the decision was made
+  // on (Gamma `outcomePrices`); the VWAP comes from a separately-fetched CLOB
+  // book. Nothing used to compare the two, and `simulateDepthFill` never even
+  // receives the limit price — so any disagreement between the two feeds passed
+  // straight through into the recorded entry, unbounded.
+  //
+  // Measured live: one crypto trade booked entry 0.10 against a quoted 0.375 —
+  // a BUY filled 27.5 cents BELOW the market, which is not a thing that can
+  // happen. The dollar cost was still right (shares come from the same walk),
+  // but it booked ~3.75x the shares a 0.375 entry would, so a YES resolution
+  // would have paid out ~275% too much. That is precisely the phantom-share
+  // failure mode the depth-aware fill model was built to eliminate, returning
+  // through an unguarded channel.
+  //
+  // The band is deliberately wide: it is a plausibility check for feed
+  // disagreement, not a slippage limit. Legitimate slippage on the four sound
+  // fills measured was +0.013 to +0.015.
+  referencePrice?: number,
+  maxAbsDeviation = 0.10,
 ): boolean {
   if (!(filledShares >= minOrderSizeShares - EPS)) return false;
   if (!(vwap > 0 && vwap < 1)) return false;
+  if (
+    typeof referencePrice === "number" &&
+    Number.isFinite(referencePrice) &&
+    referencePrice > 0 &&
+    Math.abs(vwap - referencePrice) > maxAbsDeviation
+  ) return false;
   return true;
 }
 

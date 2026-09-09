@@ -81,6 +81,51 @@ const sortedAsc = (a: number[]) => [...a].sort((x, y) => x - y);
   expect(effectiveNumberOfBets([[1]]).enb === 1, t, "single → 1");
 }
 
+// ── P3-15: idle days must not read as agreement ─────────────────────────────
+// The edge-tracker builds every bot's series on the UNION of all bots' trading
+// days and zero-fills the rest. A bot active on 5 of 40 days therefore carries
+// 35 structural zeros, and correlating mostly-zero vectors invents a shared
+// "flat" factor. Worse, a no-variance series made Pearson return NaN, which was
+// mapped to 0 = "uncorrelated" — MORE independence than the data supports.
+// Both biases inflate ENB, defeating the module's entire purpose (warning that
+// crypto + HL + F-Arb are one crypto-beta bet).
+{
+  const t = "P3-15 pairwise-complete";
+  // Two bots that never traded on the same day. There is NO evidence about
+  // their relationship, and the honest answer is not "independent".
+  const a = [1, -1, 2, 0, 0, 0];
+  const b = [0, 0, 0, 1, -1, 2];
+  const ma = [true, true, true, false, false, false];
+  const mb = [false, false, false, true, true, true];
+
+  const naive = correlationMatrix([a, b]);
+  const masked = correlationMatrix([a, b], { activeMask: [ma, mb] });
+  expect(masked[0][1] === 1, t,
+    `zero overlap must be treated as correlated (conservative for a concentration warning), got ${masked[0][1]}`);
+  expect(effectiveNumberOfBets(masked).enb <= effectiveNumberOfBets(naive).enb + 1e-9, t,
+    "the corrected matrix must not report MORE independent bets than the zero-filled one");
+
+  // Genuinely independent bots that DO overlap still measure as independent.
+  const c = [1, -1, 1, -1, 1, -1];
+  const d = [1, 1, -1, -1, 1, 1];
+  const both = [true, true, true, true, true, true];
+  const rIndep = correlationMatrix([c, d], { activeMask: [both, both] })[0][1];
+  expect(Math.abs(rIndep) < 0.6, t, `overlapping independent series stay low-correlation, got ${rIndep}`);
+  expect(effectiveNumberOfBets(correlationMatrix([c, d], { activeMask: [both, both] })).enb > 1.5, t,
+    "two genuinely independent bots should still score close to 2 effective bets");
+
+  // Perfectly correlated overlapping bots collapse to ~1 — the warning case.
+  const e2 = [2, -2, 2, -2, 2, -2];
+  const rSame = correlationMatrix([c, e2], { activeMask: [both, both] })[0][1];
+  expect(rSame > 0.99, t, `identical direction must read as correlated, got ${rSame}`);
+  expect(effectiveNumberOfBets(correlationMatrix([c, e2], { activeMask: [both, both] })).enb < 1.2, t,
+    "two identical bots are one bet");
+
+  // Thin overlap (below minOverlap) is unknown, not independent.
+  const thin = correlationMatrix([a, b], { activeMask: [[true, true, false, false, false, false], [true, true, false, false, false, false]], minOverlap: 3 });
+  expect(thin[0][1] === 1, t, "2 overlapping days is below the floor ⇒ unknown ⇒ assumed correlated");
+}
+
 // ─── CLI report ───────────────────────────────────────────────────────────
 const isMain = (() => {
   try {

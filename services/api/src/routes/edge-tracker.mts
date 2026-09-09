@@ -528,15 +528,24 @@ export default async function handler(req: Request, _ctx: Context) {
         const dates = [...dateSet].sort();
         if (dates.length >= 2) {
           const idx = new Map(dates.map((d, i) => [d, i]));
+          // Audit P3-15: also track WHICH days each bot was actually active on.
+          // The zero-filled union makes idle days look like agreement, so the
+          // correlation is computed pairwise-complete over the days both bots
+          // traded (see correlationMatrix).
           const active = perBot
             .map((b) => {
               const v = new Array(dates.length).fill(0);
-              for (const t of b.ts) { const i = idx.get(dayKey(t.closedAt)); if (i != null) v[i] += (t.pnl || 0); }
-              return { cat: b.cat, v };
+              const m = new Array(dates.length).fill(false);
+              for (const t of b.ts) {
+                const i = idx.get(dayKey(t.closedAt));
+                if (i != null) { v[i] += (t.pnl || 0); m[i] = true; }
+              }
+              return { cat: b.cat, v, m };
             })
-            .filter((x) => x.v.some((y) => y !== 0));
+            .filter((x) => x.m.some(Boolean));
           if (active.length >= 2) {
-            enb = { ...effectiveNumberOfBets(correlationMatrix(active.map((a) => a.v))), labels: active.map((a) => a.cat) };
+            const R = correlationMatrix(active.map((a) => a.v), { activeMask: active.map((a) => a.m) });
+            enb = { ...effectiveNumberOfBets(R), labels: active.map((a) => a.cat) };
           }
         }
       } catch { enb = null; }

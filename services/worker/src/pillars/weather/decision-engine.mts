@@ -75,6 +75,13 @@ export interface WeatherConfig {
   // change corr(prediction, outcome) (measured −0.316 over n=28 entry rows).
   // See packages/core/src/weather-dispersion.mts and math/38.
   sigmaInflation: number;     // default 1.0 (off)
+  // shrinkSizing (P2-12, audit 2026-09-09): also apply the optimizer's-curse
+  // penalty to the Kelly probability, not just to the trade/no-trade gate.
+  // `selectionShrink` deflates the gross edge before the threshold test, but
+  // Kelly then sized on the raw probability — so a bucket that barely cleared
+  // the shrunk gate was staked at full conviction. 0 = off (default,
+  // bit-identical); 1 = subtract the full penalty from the bet-side probability.
+  shrinkSizing: number;       // default 0 (off)
 }
 
 export interface WeatherTradeDecision {
@@ -153,6 +160,7 @@ export function getWeatherConfig(): WeatherConfig {
     // P0-1 (2026-09-09): default 1.0 = OFF / bit-identical. Measure-first —
     // the operator flips it after reading the dispersion diagnostics.
     sigmaInflation:     parseFloat(process.env.WEATHER_SIGMA_INFLATION || "1.0"),
+    shrinkSizing:       parseFloat(process.env.WEATHER_SHRINK_SIZING || "0"),
   };
 }
 
@@ -194,6 +202,7 @@ export async function getEffectiveWeatherConfig(): Promise<WeatherConfig> {
       minPrice:           ov.weatherMinPrice        ?? env.minPrice,
       kellyScale:         ov.weatherKellyScale       ?? env.kellyScale,
       sigmaInflation:     ov.weatherSigmaInflation   ?? env.sigmaInflation,
+      shrinkSizing:       ov.weatherShrinkSizing     ?? env.shrinkSizing,
     };
   } catch {
     return env;
@@ -442,9 +451,24 @@ export function makeWeatherDecision(params: {
   const probYes     = (typeof (match as any).probability === "number")
     ? (match as any).probability
     : bucketPrice + match.edge;  // fallback: matchProb = bucketPrice + edge
-  const probSide  = baseDirection === "YES" ? probYes : 1 - probYes;
+  const probSideRaw = baseDirection === "YES" ? probYes : 1 - probYes;
   const priceSide = baseDirection === "YES" ? bucketPrice : 1 - bucketPrice;
   const safePrice = Math.max(0.01, Math.min(0.99, priceSide));
+  // Audit P2-12: the optimizer's-curse penalty computed above (`selPenalty`)
+  // only ever gated whether to trade — Kelly then sized on the UNSHRUNK
+  // probability. That is internally inconsistent: if we believe the winning
+  // bucket's edge is inflated because it was chosen as the max of N, we should
+  // not turn around and stake the full inflated conviction on it. A trade that
+  // barely clears the shrunk-edge gate is sized as though no shrink applied.
+  //
+  // Default OFF (shrinkSizing = 0) ⇒ probSide === probSideRaw, bit-identical.
+  // Note this is NOT what `weatherSelectionShrink` alone does, despite the
+  // operator-facing impression: that knob changes trade FREQUENCY only. The
+  // sizing knob is `weatherKellyScale`.
+  const shrinkSizing = config.shrinkSizing ?? 0;
+  const probSide = shrinkSizing > 0 && selPenalty > 0
+    ? Math.max(0, probSideRaw - shrinkSizing * selPenalty)
+    : probSideRaw;
   const b = (1 / safePrice) - 1;
   const rawKelly = b > 0 ? Math.max(0, (probSide * b - (1 - probSide)) / b) : 0;
   // ¼-Kelly + confidence shrinkage. Confidence is a noisy signal so we

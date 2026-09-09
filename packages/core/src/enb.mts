@@ -35,17 +35,51 @@ export function pearson(x: number[], y: number[]): number {
 
 /**
  * N×N Pearson correlation matrix from N aligned return series (each `series[i]`
- * a bot's return array, same length/calendar). Diagonal = 1; a NaN pair
- * (flat/short series) → 0 correlation (treated as uncorrelated). Pure.
+ * a bot's return array, same length/calendar). Diagonal = 1.
+ *
+ * Audit P3-15 — TWO biases, both pointing the same (wrong) way.
+ *
+ * The caller builds each bot's series on the UNION of every bot's trading days
+ * and zero-fills the rest, so a bot that closed trades on 5 of 40 days carries
+ * 35 structural zeros. Correlating mostly-zero vectors makes unrelated bots look
+ * like they move together on a shared "flat" factor. And a series with no
+ * variance makes Pearson return NaN, which was then mapped to 0 — read as
+ * "uncorrelated", i.e. MORE independence than the data supports.
+ *
+ * Both push ENB toward the optimistic end. That is the exact opposite of what
+ * this module is for: it exists to warn that crypto + HL + F-Arb are one
+ * crypto-beta bet wearing several hats, so an optimistic bias defeats it.
+ *
+ * The fix is pairwise-complete correlation over days where BOTH bots were
+ * actually active, with an explicit `unknown` when they barely overlap. An
+ * unknown pair is deliberately treated as CORRELATED (1) rather than
+ * independent — the conservative direction for a concentration warning: it
+ * lowers ENB, so the monitor errs toward "you have fewer independent bets than
+ * you think" rather than the reverse.
  */
-export function correlationMatrix(series: number[][]): number[][] {
+export function correlationMatrix(
+  series: number[][],
+  opts: { activeMask?: boolean[][]; minOverlap?: number } = {},
+): number[][] {
   const n = series.length;
+  const minOverlap = opts.minOverlap ?? 3;
   const R: number[][] = Array.from({ length: n }, () => new Array(n).fill(0));
   for (let i = 0; i < n; i++) {
     R[i][i] = 1;
     for (let j = i + 1; j < n; j++) {
-      const r = pearson(series[i], series[j]);
-      const v = Number.isFinite(r) ? r : 0;
+      const mi = opts.activeMask?.[i];
+      const mj = opts.activeMask?.[j];
+      let a = series[i], b = series[j];
+      if (mi && mj) {
+        const ai: number[] = [], bj: number[] = [];
+        for (let k = 0; k < Math.min(a.length, b.length); k++) {
+          if (mi[k] && mj[k]) { ai.push(a[k]); bj.push(b[k]); }
+        }
+        a = ai; b = bj;
+      }
+      const r = a.length >= minOverlap ? pearson(a, b) : NaN;
+      // Too little overlap, or no variance ⇒ we do not know. Assume correlated.
+      const v = Number.isFinite(r) ? r : 1;
       R[i][j] = v; R[j][i] = v;
     }
   }

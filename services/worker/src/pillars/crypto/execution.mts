@@ -115,7 +115,10 @@ export async function placeBuyOrder(
         fillNote = book ? "fallback-thin" : "fallback-nobook";
       }
 
-      if (res.ok && isFillValid(res.filledShares, res.vwap, fillOpts.minOrderSizeShares ?? 5)) {
+      // P2-13: cross-check the book-derived VWAP against the price the decision
+      // was actually made on. A buy cannot fill materially below the quote; if
+      // it appears to, the two feeds disagree and the fill is not real.
+      if (res.ok && isFillValid(res.filledShares, res.vwap, fillOpts.minOrderSizeShares ?? 5, price)) {
         filledShares = res.filledShares;
         fillPrice    = res.vwap;
         filledUsdc   = res.filledUsdc;
@@ -126,7 +129,9 @@ export async function placeBuyOrder(
         log("ORDER_REJECTED", true, {
           market: market.slug,
           direction,
-          reason: "paper fill below min size / invalid",
+          reason: "paper fill below min size / invalid / implausible vs quote",
+          quotedPrice: price,
+          vwap: res.vwap,
           requestedUsdc: sizeUSDC,
           fillNote,
         });

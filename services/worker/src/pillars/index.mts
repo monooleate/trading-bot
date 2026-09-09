@@ -154,6 +154,26 @@ export default async function handler(req: Request, _ctx: Context) {
       const source: "manual" | "cron" =
         (url.searchParams.get("source") === "cron" || isScheduledTick) ? "cron" : "manual";
 
+      // Audit P2-9: registry bots had NO cron gate — only the legacy weather
+      // branch did (see `wConfig.cronEnabled` below). That left `session.stopped`
+      // as the single way to hold sports down, and a stop flag is exactly what a
+      // reset, a simVersion bump or a transient read error wipes. A cron toggle
+      // is durable operator intent that survives all three. Default 1 ⇒ every
+      // registry bot keeps firing exactly as before.
+      if (source === "cron" && action === "run") {
+        try {
+          const sm: any = await import("@api/routes/trader-settings.mts");
+          const ov = await sm.loadRuntimeOverrides();
+          const knob = `${category}CronEnabled`;
+          if (sm.effectiveKnob(ov, knob) !== undefined && !sm.effectiveFlag(ov, knob)) {
+            return jsonResponse({
+              ok: true, action: "skipped", category,
+              reason: `${category} cron disabled (${knob} = 0)`,
+            });
+          }
+        } catch { /* settings unavailable → do not block the tick */ }
+      }
+
       const out = await dispatchToRegistry({
         category,
         action: action as any,
@@ -716,12 +736,34 @@ async function runCryptoTrader(
       //  • Drawdown kill-switch — halt NEW entries once peak-to-current equity
       //    drops past the limit (peak from the closed-trade equity curve).
       //  • Vol-target — scale the ¼-Kelly size by target/realised return vol.
+      // Audit P2-11: in paper mode with the never-stop valve on, the DD kill
+      // LOGS but does not block. It is a one-way door otherwise: `peak` is
+      // monotone from bankrollStart, so once drawdown crosses the limit the only
+      // way back under it is a winning trade — which the gate itself forbids.
+      // Live crypto is already past it (peak $150, current $104.30 = 30.5% ≥
+      // 25%) and simply has not reached this line yet, because it is skipped
+      // earlier at the combiner/resolution-risk gates. The first time it would
+      // otherwise trade, it would halt permanently. `paperNeverStop` exists to
+      // stop exactly that, and already raises the session loss limit to
+      // +Infinity a few dozen lines up; the DD kill is a per-tick skip rather
+      // than a session stop, so the valve could not see it. In LIVE the kill is
+      // untouched — there, a hard stop on capital is the entire point.
       if (riskOverlay.ddKillEnabled) {
         const start = updatedSession.bankrollStart || 0;
         let eq = start, peak = start;
         for (const t of updatedSession.closedTrades ?? []) { eq += (t.pnl || 0); if (eq > peak) peak = eq; }
         const dd = drawdownKill(peak, updatedSession.bankrollCurrent || eq, riskOverlay.maxDdFraction);
-        if (dd.kill) {
+        const ddAdvisoryOnly = config.paperMode && paperNeverStop;
+        if (dd.kill && ddAdvisoryOnly) {
+          log("SIGNAL", config.paperMode, {
+            market: market.slug,
+            ddKillAdvisory: true,
+            ddFraction: dd.ddFraction,
+            limit: riskOverlay.maxDdFraction,
+            note: "paper + paperNeverStop: drawdown kill logged, not enforced (would be a permanent halt)",
+          });
+        }
+        if (dd.kill && !ddAdvisoryOnly) {
           const reason = `Drawdown kill-switch: ${(dd.ddFraction * 100).toFixed(1)}% ≥ ${(riskOverlay.maxDdFraction * 100).toFixed(0)}% peak-to-current`;
           log("DECISION_SKIP", config.paperMode, { market: market.slug, reason });
           results.push({ ...marketContext, action: "skip", reason });
@@ -884,7 +926,12 @@ async function runCryptoTrader(
     action: "run",
     paperMode: config.paperMode,
     marketsScanned: markets.length,
-    marketsConsidered: Math.min(markets.length, 3),
+    // Audit P3-14: this was `Math.min(markets.length, 3)` — a literal left over
+    // from the pre-B57 fixed window of 3. B57 made the window configurable
+    // (default 5) but this counter kept reporting at most 3, so the dashboard
+    // under-reported the scan it had just been widened to perform. Live: 23
+    // scanned, 5 results, "3 considered".
+    marketsConsidered: topN.length,
     results,
     droppedMarkets,
     config: traderConfigSummary(config, btcExit, btcMinPriceBand),
