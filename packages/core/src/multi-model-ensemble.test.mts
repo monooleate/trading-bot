@@ -28,7 +28,7 @@ console.log("\n1. parseModelList");
   check("empty → fallback",
     parseModelList("", ["a", "b"]).join(",") === "a,b");
   check("undefined → fallback",
-    parseModelList(undefined, DEFAULT_ENSEMBLE_MODELS).length === 4);
+    parseModelList(undefined, DEFAULT_ENSEMBLE_MODELS).length === DEFAULT_ENSEMBLE_MODELS.length);
   check("null → fallback",
     parseModelList(null, ["x"]).join(",") === "x");
   check("trims + lowercases",
@@ -43,9 +43,15 @@ console.log("\n1. parseModelList");
     got.push("b");
     return fb.length === 1;
   })());
-  check("default list is the four verified systems",
+  // Pins the shipped list: 6 global + 2 European regional. A regional model
+  // outside its domain is dropped by the API, so one list serves all stations.
+  check("default list is the verified systems, globals first",
     DEFAULT_ENSEMBLE_MODELS.join(",") ===
-      "gfs_seamless,ecmwf_ifs025,ecmwf_aifs025,google_weathernext2_ensemble");
+      "gfs_seamless,ecmwf_ifs025,ecmwf_aifs025,google_weathernext2_ensemble," +
+      "gem_global,ukmo_global_ensemble_20km,icon_eu,icon_d2");
+  check("no all-null / too-small systems in the default list",
+    !DEFAULT_ENSEMBLE_MODELS.includes("bom_access_global_ensemble") &&
+    !DEFAULT_ENSEMBLE_MODELS.includes("ukmo_uk_ensemble_2km"));
 }
 
 // ─── 2. splitEnsembleKeys ─────────────────────────────────────────────────

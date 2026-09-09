@@ -1,6 +1,6 @@
 # 37 — Weather multi-model ensemble (B52 #1)
 
-> **Státusz:** log-forward recorder **ÉL** (default-ON, mérés-only) · a trading-flip
+> **Státusz:** log-forward recorder **ÉL** (default-ON, mérés-only), **8 rendszerrel** (2026-09-09) · a trading-flip
 > (`weatherUseMultiModel`) **default-OFF**, a felvett head-to-head bizonyítékára vár.
 > Feladat-tracking: [`sprints.md` B52](../roadmap/sprints.md) · adatforrás-kontextus:
 > [`16-weather-bot.md` §3.B (d)](./16-weather-bot.md) · env: [`env-vars.md` §13](../current-state/env-vars.md).
@@ -31,7 +31,8 @@ legmagabiztosabban téves tétre kerül a legtöbb pénz.
 
 ### Élő bizonyíték (RJTT Tokyo, 2026-09-09 célnap, T+1)
 
-A négy rendszer ugyanarra a napra, ugyanabban a percben:
+A négy rendszer ugyanarra a napra, ugyanabban a percben (ez a **4-rendszeres**
+mérés a 2026-09-08-i állapot; a lista azóta 8-ra bővült — §2):
 
 | rendszer | tagok | μ (°C) | σ (°C) |
 |---|---|---|---|
@@ -52,7 +53,7 @@ Londonban viszont a keverék σ-ja **szűkebb** (0.84 vs 0.91) és a confidence
 
 ---
 
-## 2. Az adat: 197 tag, egy kérés, nulla kulcs
+## 2. Az adat: 236–296 tag, egy kérés, nulla kulcs
 
 Ugyanaz az endpoint, amit a bot eddig is hívott. Az Open-Meteo elfogadja a
 modelleket vesszővel felsorolva **egyetlen** kérésben:
@@ -61,11 +62,41 @@ modelleket vesszővel felsorolva **egyetlen** kérésben:
 GET https://ensemble-api.open-meteo.com/v1/ensemble
       ?latitude=…&longitude=…&timezone=…&forecast_days=7
       &daily=temperature_2m_max
-      &models=gfs_seamless,ecmwf_ifs025,ecmwf_aifs025,google_weathernext2_ensemble
+      &models=gfs_seamless,ecmwf_ifs025,ecmwf_aifs025,google_weathernext2_ensemble,
+              gem_global,ukmo_global_ensemble_20km,icon_eu,icon_d2
 ```
 
-Mérve (2026-09-08): **197 tag, ~30 KB, ~0,2 s.** Tehát **0 extra HTTP-hívás** a
-piaconkénti költségvetésben.
+| `models=` érték | Rendszer | Tagok | Natív lépés | Hatókör |
+|---|---|---|---|---|
+| `gfs_seamless` | NCEP GEFS | 31 | 3 h | globális — *a bot mai σ-forrása* |
+| `ecmwf_ifs025` | ECMWF IFS-ENS | **51** | 3 h | globális |
+| `ecmwf_aifs025` | ECMWF **AIFS**-ENS (AI) | 51 | 6 h | globális |
+| `google_weathernext2_ensemble` | **Google DeepMind WeatherNext 2** (AI) | **64** | 6 h | globális, 12 óránként |
+| `gem_global` | CMC GEPS | 21 | 3 h | globális |
+| `ukmo_global_ensemble_20km` | UKMO MOGREPS-G | 18 | 1 h | globális |
+| `icon_eu` | DWD ICON-EU-EPS | 40 | 1 h | **Európa, 13 km** |
+| `icon_d2` | DWD ICON-D2-EPS | 20 | 1 h | **Közép-Európa + UK, 2 km** |
+
+**Egyetlen lista minden állomásra.** Egy regionális modellt a domainjén kívül az
+API **némán elhagy** a multi-model válaszból (verifikálva: Tokió
+`gfs_seamless,icon_eu` → HTTP 200, 31 tag, se hiba, se null-oszlop) — csak
+**önmagában** kérve ad 400-at, amit ez a kód sosem tesz. Nem kell per-állomás
+tábla, és egy regionális modell hozzáadása nem tudja elrontani azt az állomást,
+amit nem fed.
+
+Mérve (2026-09-09, **egy** kérés, ~42 KB, **~0,2 s**) — tehát **0 extra
+HTTP-hívás** a piaconkénti költségvetésben:
+
+| állomások | rendszer | tag |
+|---|---|---|
+| EGLC London, EDDM München | **8** | **296** |
+| LEMD Madrid (az `icon_d2` kiesik) | 7 | 276 |
+| US / Ázsia / Dél-Amerika / Afrika | 6 | 236 |
+
+**Kihagyva:** `bom_access_global_ensemble` (18 tagot hirdet, de minden tesztelt
+állomáson **csupa null** hőmérséklet-oszlop) és `ukmo_uk_ensemble_2km` (mindössze
+**3 tag** — modellenként egyenlő súlyú keverékben túl kevés egy használható
+modellen-belüli σ-hoz, és egyetlen állomást fed).
 
 **Kulcs-formátum.** Egy modellnél `temperature_2m_max`, `…_member01`; többnél a
 kulcs **modell-szuffixet** kap: `temperature_2m_max_member01_ncep_gefs_seamless`.
@@ -75,7 +106,7 @@ a modell-taget, nem a kért listával párosít
 ([`splitEnsembleKeys`](../../packages/core/src/multi-model-ensemble.mts)).
 
 **Miért `daily=temperature_2m_max` és nem `hourly`?** Numerikusan azonos
-(ellenőrizve mind a 4 modellen — az Open-Meteo ugyanazt az interpolált órás sort
+(ellenőrizve minden modellen — az Open-Meteo ugyanazt az interpolált órás sort
 aggregálja), töredék payloadért.
 
 ---
@@ -227,7 +258,7 @@ pont-hiba, a becsületes σ jobb CRPS-t kap").
   pont ilyen. A `perModel` log per-rendszer bias-t mér, a §4.4 korrekció + EMOS
   korrigálni tudja. **Mérés után**, nem előtte.
 - **Open-Meteo free tier: non-commercial**, és a hívás-súly a változószámmal nő
-  (>10 változó → törtrészes többszörös); 197 tag ≈ 197 „változó". A recorder
+  (>10 változó → törtrészes többszörös); ~236–296 tag ≈ ugyanennyi „változó". A recorder
   throttle miatt ez ma elfér, de a live-flip (B10) előtt újraszámolandó.
 - **Regionális nagyfelbontás.** EU-ra `icon_eu` (40 tag, 13 km) / `icon_d2_eps`
   (20 tag, 2 km), US-ra `ncep_nbm_conus` / `gfs_hrrr` — a `WEATHER_ENSEMBLE_MODELS`

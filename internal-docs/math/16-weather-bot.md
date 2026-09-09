@@ -123,7 +123,10 @@ A fenti 4-forrásos pipeline a paper trade-eken validáltan működik (2 closed 
 | `icon_eu` / `icon_d2_eps` | DWD ICON-EU-EPS / D2-EPS | 40 / 20 | 1 h | EU, 13 km / 2 km |
 | `gem_global`, `ukmo_global_ensemble_20km`, `bom_access_global_ensemble` | CMC / UKMO / BOM | 21 / 18 / 18 | 3 h | |
 
-A 4 globális együtt: **197 tag egyetlen HTTP-hívásban** (`temperature_2m_member01_ncep_gefs_seamless` alakú kulcsokkal —
+A lista **6 globális + 2 európai regionális** rendszer (2026-09-09): a fentiek mellett `gem_global` (CMC, 21)
+és `ukmo_global_ensemble_20km` (MOGREPS-G, 18) mindenhol, valamint `icon_eu` (40 @ 13 km) és `icon_d2`
+(20 @ 2 km) Európában — a domainjén kívüli regionális modellt az API némán elhagyja, így **egy lista elég
+minden állomásra**. Együtt: **236 tag (Európában 296) egyetlen HTTP-hívásban** (`temperature_2m_member01_ncep_gefs_seamless` alakú kulcsokkal —
 a mai `/^temperature_2m(_member\d+)?$/` parser és a `MAX_MEMBERS=31` cap emiatt módosítandó).
 
 **Miért számít (mért, a bot saját állomásain, T+0/T+1 daily-max, 2026-09-08):**

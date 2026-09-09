@@ -13,9 +13,10 @@
 // exactly what oversizes Kelly, which is the documented weather pathology
 // (forecast_edge IC +0.393 = good direction, payoffRatio 0.44 = bad sizing).
 //
-// The Open-Meteo ensemble endpoint serves NCEP GEFS (31), ECMWF IFS-ENS (51),
-// ECMWF AIFS-ENS (51) and Google DeepMind WeatherNext 2 (64) in ONE request —
-// 197 members, no extra HTTP call, no API key.
+// The Open-Meteo ensemble endpoint serves several independent systems in ONE
+// request — 236 members at a typical station, 296 in Europe where the regional
+// ICON models also apply — with no extra HTTP call and no API key. See
+// DEFAULT_ENSEMBLE_MODELS below for the list and the domain-drop behaviour.
 //
 // POOLING: members are NOT pooled equally. Weighting per member would give
 // WeatherNext 2 (64 members) twice the say of GEFS (31) for no physical
@@ -49,12 +50,37 @@ export interface MultiModelStats {
 
 // ─── Model-list parsing ───────────────────────────────────────────────────
 
-/** The four independent global systems verified live on 2026-09-08. */
+/**
+ * Independent ensemble systems to log, verified live 2026-09-08 / 2026-09-09.
+ *
+ * ONE list serves every station: a REGIONAL model outside its domain is
+ * silently dropped from a multi-model response (verified — Tokyo with
+ * `gfs_seamless,icon_eu` returns HTTP 200 with GEFS's 31 members, no error and
+ * no null column). It only 400s when requested on its own, which this code
+ * never does. So no per-station table is needed and adding a regional model
+ * cannot break a station it does not cover.
+ *
+ * Measured member counts (2026-09-09, one request, ~42 KB, ~0.2 s):
+ *   Europe (London, Munich) 8 systems / 296 members
+ *   Madrid                  7 systems / 276   (icon_d2 out of domain)
+ *   US, Asia, S-America, Africa
+ *                           6 systems / 236
+ */
 export const DEFAULT_ENSEMBLE_MODELS: readonly string[] = [
+  // ── Global (every station) ──
   "gfs_seamless",                  // NCEP GEFS, 31 members (the bot's current source)
   "ecmwf_ifs025",                  // ECMWF IFS-ENS, 51
   "ecmwf_aifs025",                 // ECMWF AIFS-ENS (AI), 51
   "google_weathernext2_ensemble",  // Google DeepMind WeatherNext 2 (AI), 64
+  "gem_global",                    // CMC GEPS, 21
+  "ukmo_global_ensemble_20km",     // UKMO MOGREPS-G, 18
+  // ── Regional, higher resolution — auto-dropped outside their domain ──
+  "icon_eu",                       // DWD ICON-EU-EPS, 40 @ 13 km — Europe
+  "icon_d2",                       // DWD ICON-D2-EPS, 20 @ 2 km — central Europe + UK
+  // NOT included: `bom_access_global_ensemble` advertises 18 members but every
+  // temperature column came back null at every station tested; and
+  // `ukmo_uk_ensemble_2km` carries only 3 members, too few for a usable
+  // within-model σ under equal-weight-per-model pooling (it covers one station).
 ];
 
 /**
