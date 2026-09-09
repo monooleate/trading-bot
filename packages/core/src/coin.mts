@@ -101,3 +101,40 @@ export function parseCryptoAboveStrike(
   const K = m[2] === "k" ? n * 1000 : n;
   return { coin: coin.base, K, closingKey: `${coin.base}:${m[3] || ""}` };
 }
+
+/**
+ * Is this a DIRECTIONAL crypto market — one whose YES probability is a genuine
+ * P(price goes up) rather than P(price ends above some strike)?
+ *
+ * Audit P0-3 (2026-09-09). The Hyperliquid pillar converts a Polymarket YES
+ * probability into a perp conviction with `edge = |p − 0.5| × 2`. That transform
+ * is only meaningful when `p` really is directional. Its market lookup fell back
+ * to a bare coin keyword ("bitcoin"), which matched whatever bitcoin market
+ * happened to top the volume list — in practice a THRESHOLD market. Live proof:
+ * for 2412 consecutive scans the resolved slug was
+ * `bitcoin-above-82k-on-september-9-2026` (YES 0.0365, deep OTM), so the
+ * combiner's correct answer of p ≈ 0.0156 became a bogus 96.9% "edge" that the
+ * 40% sanity cap then blocked. The bot could not place a trade for seven days,
+ * and its direction was decided by Polymarket's volume ranking: when an
+ * in-the-money strike topped the list instead, p ≈ 0.9995 read as "LONG" — the
+ * origin of the documented 22/22 LONG bias (B18).
+ *
+ * Deliberately strict: a market must both (a) fail the threshold parser and
+ * (b) positively look like an up/down market. Anything unrecognised is NOT
+ * directional, because the failure mode being fixed is exactly a silent
+ * mis-classification. Pure.
+ */
+export function isDirectionalCryptoMarket(
+  slug: string | undefined | null,
+  question?: string | undefined | null,
+): boolean {
+  if (!slug) return false;
+  // A parseable strike proves it is a threshold market, whatever else it says.
+  if (parseCryptoAboveStrike(slug) !== null) return false;
+  const text = `${String(slug)} ${String(question ?? "")}`.toLowerCase();
+  // "above"/"below" name a strike even when the strike itself did not parse
+  // (unusual formats, non-anchored suffixes) — refuse those too rather than
+  // guess.
+  if (/\b(above|below|greater than|less than)\b/.test(text)) return false;
+  return /up[-\s]?or[-\s]?down|up[-\s]?down|updown/.test(text);
+}

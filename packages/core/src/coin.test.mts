@@ -5,7 +5,7 @@
 //
 // Run: npx tsx packages/core/src/coin.test.mts
 
-import { coinFromText, coinByBase, parseCryptoAboveStrike } from "./coin.mts";
+import { coinFromText, coinByBase, parseCryptoAboveStrike, isDirectionalCryptoMarket } from "./coin.mts";
 
 interface Failure { test: string; message: string; }
 const failures: Failure[] = [];
@@ -82,6 +82,68 @@ const isMain = (() => {
     return entry.endsWith("coin.test.mts") || entry.endsWith("coin.test.js");
   } catch { return false; }
 })();
+
+// ── isDirectionalCryptoMarket (audit P0-3) ───────────────────────────────────
+// Pins the LIVE incident, not an invented example. For 2412 consecutive scans
+// the Hyperliquid pillar resolved BTC to `bitcoin-above-82k-on-september-9-2026`
+// (YES 0.0365, deep OTM) and fed that probability into `edge = |p−0.5|×2`,
+// manufacturing a 96.9% edge out of pure moneyness. Every slug below was
+// observed in the live Gamma response on 2026-09-09.
+{
+  const t = "directional-market";
+
+  // The slugs that actually broke it — all must be refused.
+  for (const bad of [
+    "bitcoin-above-82k-on-september-9-2026",
+    "bitcoin-above-84k-on-september-9-2026",
+    "bitcoin-above-74k-on-september-9-2026",
+    "bitcoin-above-72k-on-september-9-2026",
+    "bitcoin-above-76k-on-september-9-2026",
+    "solana-above-105-on-september-9-2026",
+    "ethereum-above-2600-on-september-9-2026",
+  ]) {
+    expect(isDirectionalCryptoMarket(bad) === false, t, `threshold market must NOT be directional: ${bad}`);
+  }
+
+  // The markets the bot was always supposed to use — all must be accepted.
+  for (const good of [
+    "bitcoin-up-or-down-on-september-9-2026",
+    "bitcoin-up-or-down-september-4-2026-9pm-et",
+    "ethereum-up-or-down-on-september-9-2026",
+    "solana-up-or-down-on-september-9-2026",
+  ]) {
+    expect(isDirectionalCryptoMarket(good) === true, t, `up-or-down market must be directional: ${good}`);
+  }
+
+  // Unrecognised input is NOT directional. The bug was a silent
+  // mis-classification, so the default has to be refusal, never a guess.
+  for (const unknown of [
+    "highest-temperature-in-london-on-september-9-2026",
+    "ucl-fcb-fey-2026-09-09-fcb",
+    "",
+    null,
+    undefined,
+    "some-random-market",
+  ]) {
+    expect(isDirectionalCryptoMarket(unknown as any) === false, t,
+      `unrecognised input must default to NOT directional: ${String(unknown)}`);
+  }
+
+  // "above"/"below" wording is refused even when the strike itself fails to
+  // parse — otherwise an unusual format would slip straight back through.
+  expect(isDirectionalCryptoMarket("bitcoin-up-or-down-but-above-80k-weird") === false, t,
+    "a slug naming a strike must be refused even if the strike parser misses it");
+  expect(isDirectionalCryptoMarket("btc-market", "Will Bitcoin be above $80,000?") === false, t,
+    "threshold wording in the QUESTION must be refused too");
+
+  // Consistency with the existing threshold parser: anything it parses is, by
+  // definition, not directional.
+  for (const slug of ["bitcoin-above-82k-on-september-9-2026", "ethereum-above-2600-on-x", "solana-above-105-on-y"]) {
+    if (parseCryptoAboveStrike(slug)) {
+      expect(isDirectionalCryptoMarket(slug) === false, t, `parser and classifier must agree on ${slug}`);
+    }
+  }
+}
 
 if (isMain) {
   if (failures.length === 0) {

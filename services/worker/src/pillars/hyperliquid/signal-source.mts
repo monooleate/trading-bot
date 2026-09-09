@@ -9,20 +9,20 @@
 // |prob - 0.5| × 2 is the implied directional edge.
 
 import { FN } from "../shared/config.mts";
+import { coinFromText, isDirectionalCryptoMarket } from "@core/coin.mts";
+import { findBtcMarkets } from "../crypto/btc-market-finder.mts";
 import type { SignalBreakdown } from "@core/types.mts";
 import type { HlCoin, HlDirection } from "./types.mts";
 
 const TIMEOUT = 8000;
 
-// Polymarket slug keyword per coin (matches "bitcoin-up-or-down-…" pattern)
-const COIN_KEYWORDS: Record<HlCoin, string[]> = {
-  BTC:  ["bitcoin-up-or-down", "btc-up-or-down", "bitcoin"],
-  ETH:  ["ethereum-up-or-down", "eth-up-or-down", "ethereum"],
-  SOL:  ["solana-up-or-down", "sol-up-or-down", "solana"],
-  XRP:  ["xrp-up-or-down", "xrp"],
-  DOGE: ["dogecoin", "doge"],
-  AVAX: ["avalanche", "avax"],
-};
+// NOTE (audit P0-3, 2026-09-09): the previous per-coin keyword list ended in a
+// BARE COIN NAME ("bitcoin", "ethereum", …) as a last-resort fallback. Because
+// the lookup returned the first substring match from a generic top-volume list,
+// that fallback silently resolved to whatever bitcoin market happened to rank
+// highest — in practice a THRESHOLD market, not an up/down one. Coin identity is
+// now taken from @core/coin.mts and the directional test is explicit, so there is
+// no keyword list left to drift.
 
 export interface HlSignalResult {
   coin:          HlCoin;
@@ -42,23 +42,42 @@ export interface HlSignalResult {
   timestamp:     string;
 }
 
+/**
+ * Find the highest-volume DIRECTIONAL (up-or-down) Polymarket market for a coin.
+ *
+ * Two things changed here in audit P0-3:
+ *
+ *  1. UNIVERSE. This used to read `polymarket-proxy?limit=80`, which is the
+ *     global top-N events by 24h volume across every vertical — so a busy sports
+ *     week could push every crypto up/down market out of view. It now uses the
+ *     crypto-tagged Gamma query the crypto pillar already relies on, which is
+ *     where `bitcoin-up-or-down-on-…` actually lives. (Measured 2026-09-09: the
+ *     80-item proxy list contained five bitcoin markets, ALL of them thresholds,
+ *     and no ethereum or solana market at all — which is why only BTC ever
+ *     produced a signal.)
+ *
+ *  2. TYPE SAFETY. The result must pass `isDirectionalCryptoMarket`. A threshold
+ *     market's P(YES) is not a directional probability, and feeding one into
+ *     `|p − 0.5| × 2` manufactures an edge out of moneyness.
+ *
+ * Returns null when no directional market exists for the coin. That is a correct
+ * outcome, not a failure: it is strictly better for the bot to stand down than to
+ * trade a category error.
+ */
 async function findCoinMarketSlug(coin: HlCoin): Promise<string | null> {
   try {
-    const r = await fetch(`${FN}/polymarket-proxy?limit=80`, {
-      signal: AbortSignal.timeout(TIMEOUT),
-    });
-    if (!r.ok) return null;
-    const d = await r.json() as any;
-    const markets: any[] = Array.isArray(d?.markets) ? d.markets : [];
-    const keywords = COIN_KEYWORDS[coin] || [];
-    for (const kw of keywords) {
-      const match = markets.find(m =>
-        (m.slug || "").toLowerCase().includes(kw) ||
-        (m.question || "").toLowerCase().includes(kw.replace(/-/g, " ")),
-      );
-      if (match?.slug) return match.slug;
-    }
-    return null;
+    // Price band 0 — an up/down market sits near 0.5 anyway, and we must not
+    // inherit the crypto pillar's deep-OTM filter, which is there to protect
+    // *binary* fills rather than a perp signal.
+    const markets = await findBtcMarkets(0, 0);
+    const candidates = markets
+      .filter((m) => {
+        const base = (m as any).coin ?? coinFromText(`${m.slug} ${(m as any).question ?? ""}`)?.base;
+        return base === coin && isDirectionalCryptoMarket(m.slug, (m as any).question);
+      });
+    // findBtcMarkets already returns volume-descending, so the first hit is the
+    // most liquid directional market for this coin.
+    return candidates[0]?.slug ?? null;
   } catch {
     return null;
   }
@@ -67,6 +86,11 @@ async function findCoinMarketSlug(coin: HlCoin): Promise<string | null> {
 export async function getHlSignalForCoin(coin: HlCoin): Promise<HlSignalResult | null> {
   const slug = await findCoinMarketSlug(coin);
   if (!slug) return null;
+  // Defence in depth. The lookup above already filters, but the whole P0-3 bug
+  // was a threshold probability reaching the directional transform below without
+  // anyone noticing for seven days. Re-check at the point of use so a future
+  // change to the lookup cannot silently reintroduce it.
+  if (!isDirectionalCryptoMarket(slug)) return null;
 
   try {
     // `&category=hyperliquid` opts this call into the realized-IC blend
@@ -81,6 +105,9 @@ export async function getHlSignalForCoin(coin: HlCoin): Promise<HlSignalResult |
     if (!d?.ok) return null;
 
     const finalProb: number = d.combined_probability ?? 0.5;
+    // Valid ONLY because `slug` is guaranteed directional above: for an up/down
+    // market P(YES) really is P(price rises), so |p − 0.5| × 2 is a conviction.
+    // On a threshold market the same expression measures moneyness, not edge.
     const edgeRaw   = Math.abs(finalProb - 0.5) * 2;   // 0 at 0.5, 1 at extremes
     const direction: HlDirection = finalProb >= 0.5 ? "LONG" : "SHORT";
 
