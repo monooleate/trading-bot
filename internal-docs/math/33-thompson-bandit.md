@@ -37,3 +37,9 @@ A discovery **egyetlen erős új adaptív technikája.** A rendszer diszkrét co
 - **Kiegészíti az AdaHedge-et** ([`online-weights.mts`](../../packages/core/src/online-weights.mts)): az AdaHedge a **jel-súlyokat** hangolja online (megvan), a Thompson a **diszkrét config-választást** — a kettő ortogonális.
 - **#8 továbbvitel:** a `forgettingWeight` a megosztott primitív; a Platt-kalibráció ([`calibration.mts`](../../packages/core/src/calibration.mts)) + a realized-IC ([`signal-calibration.mts`](../../services/worker/src/pillars/shared/signal-calibration.mts)) ugyanezt a fél-életidőt átvéve teljesíti ki a „unified forgetting factor"-t (kis follow-up).
 - **Follow-up (#6 live-fele):** champion-challenger shadow-promóció — a bandit-javasolt config paperben a champion mellett, proper-score-on, a #1 promóciós-kapun át; bounded lépés + auto-revert; a risk-guardrailek KÍVÜL. RL alfára = tiltva (discovery).
+
+> **⚠ B53 (2026-09-08):** a bandit reward-ja és arm-kulcsa a ledger **first-sighting** hármasát olvassa
+> (`firstPredictedProb` / `firstMarketPrice` / `firstConfigHash`), nem a rescan-enként
+> felülírt „latest” mezőket — különben a lejárat felé konvergáló ár hízeleg a piacnak, és
+> egy knob-flip átcímkézi a még nyitott piacokat (mérve: 3 sor a flip előtt vs 214 utána).
+> A teljes indoklás: [`math/21` §6](./21-walk-forward.md). Pre-B53 sorok a latest mezőkre esnek vissza.

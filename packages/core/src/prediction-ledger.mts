@@ -40,6 +40,22 @@ export interface PredictionRecord {
   predictedProb: number;              // model P(YES) at the latest scan
   marketPrice: number;                // market YES price at the latest scan
   edge: number;                       // |predictedProb − marketPrice|
+  // ── B53: the FIRST-SIGHTING tuple, written once and never overwritten ──
+  // The three fields above are refreshed on every rescan, so by the time a
+  // market resolves they hold the LAST scan's values — and a market price
+  // converges mechanically to the outcome as expiry approaches. Scoring the
+  // model against that price is not the entry-time comparison the walk-forward
+  // card claims to make; it is a late-life snapshot that flatters the market
+  // (measured 2026-09-08: 17 of 43 resolved weather rows had a stored price
+  // > 0.98, and 94% of those resolved YES).
+  //
+  // These carry the state at `firstTs` instead: a fixed, pre-convergence
+  // information horizon. Optional so records written before the fix still
+  // parse — every consumer falls back to the latest fields and the fix fills
+  // forward from deploy (the overwritten prices are NOT recoverable).
+  firstPredictedProb?: number;
+  firstMarketPrice?: number;
+  firstConfigHash?: string | null;    // the config that produced THAT prediction
   direction: string;                  // side the bot took / would take (YES/NO/LONG/SHORT)
   taken: boolean;                     // did the bot ever open a position here?
   lastAction: string;                 // position_opened / skip / failed / error
@@ -146,6 +162,10 @@ export function upsertRecords(
         predictedProb: inc.predictedProb,
         marketPrice: inc.marketPrice,
         edge: inc.edge,
+        // B53: latched at first sighting, never touched again.
+        firstPredictedProb: inc.predictedProb,
+        firstMarketPrice: inc.marketPrice,
+        firstConfigHash: inc.configHash ?? null,
         direction: inc.direction,
         taken: inc.taken,
         lastAction: inc.lastAction,
@@ -157,6 +177,15 @@ export function upsertRecords(
         configHash: inc.configHash ?? null,
       });
     } else {
+      // B53: the first-sighting tuple is write-once — latch BEFORE the refresh
+      // below overwrites the latest fields. `??=` also back-fills a record
+      // written before these fields existed, using the values it still holds
+      // from its previous scan: the oldest state available, and from here on
+      // that row's first-tuple stops moving.
+      prev.firstPredictedProb ??= prev.predictedProb;
+      prev.firstMarketPrice ??= prev.marketPrice;
+      prev.firstConfigHash ??= prev.configHash ?? null;
+
       prev.ts = inc.ts;
       prev.conditionId = inc.conditionId ?? prev.conditionId;
       prev.endDate = inc.endDate ?? prev.endDate;

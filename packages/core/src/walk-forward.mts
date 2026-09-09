@@ -79,10 +79,18 @@ const mean = (xs: number[]) => (xs.length ? xs.reduce((s, x) => s + x, 0) / xs.l
  * Extract scorable points from prediction-ledger records: resolved (outcome
  * 0/1), finite model/market probs in [0,1], parseable resolution time. Pure.
  */
+// B53: prefer the FIRST-SIGHTING tuple. `predictedProb`/`marketPrice` are
+// refreshed on every rescan, so on a resolved row they hold the last scan's
+// values — and a market price converges to the outcome near expiry, which
+// makes the market baseline look near-omniscient and is not the entry-time
+// comparison this scoring claims to make. Records written before B53 have no
+// first-tuple; they fall back to the latest fields (same behaviour as before),
+// so the fix fills forward rather than rewriting history.
 export function ledgerPointsFromRecords(
   records: Array<{
     predictedProb?: unknown; marketPrice?: unknown; outcome?: unknown;
     resolvedAt?: unknown; endDate?: unknown; slug?: unknown;
+    firstPredictedProb?: unknown; firstMarketPrice?: unknown;
   }>,
 ): LedgerPoint[] {
   const out: LedgerPoint[] = [];
@@ -90,8 +98,8 @@ export function ledgerPointsFromRecords(
     if (r.outcome === null || r.outcome === undefined) continue; // unresolved (Number(null)===0 would slip through)
     const y = Number(r.outcome);
     if (y !== 0 && y !== 1) continue;
-    const p = Number(r.predictedProb);
-    const m = Number(r.marketPrice);
+    const p = Number(r.firstPredictedProb ?? r.predictedProb);
+    const m = Number(r.firstMarketPrice ?? r.marketPrice);
     if (!Number.isFinite(p) || p < 0 || p > 1) continue;
     if (!Number.isFinite(m) || m <= 0 || m >= 1) continue; // market price must be a usable baseline
     const t = Date.parse(String(r.resolvedAt ?? r.endDate ?? ""));

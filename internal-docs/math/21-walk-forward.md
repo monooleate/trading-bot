@@ -51,3 +51,53 @@ Nincs új knob, nincs env-vár, nincs live-döntés — tisztán mérés.
 - **Purge/embargo** a korrelált klaszterekre (azonos strike-létra / város-nap) a puszta caveat helyett — de-correlated skill.
 - **Anchored-fit walk-forward** a #2 Platt-kalibrációval összekötve (a kalibrátort múlt-blokkon illeszteni, a következőn scoreolni) — a `calibration.mts` már ad walk-forward Platt-evalt; ezt a ledger-szubsztrátumra kiterjeszteni.
 - **Per-kategória bontás** az UI-n (jelenleg `all`-nál poololt).
+
+---
+
+## 6. ⚠ B53 — melyik (μ, ár) párt pontozzuk? (2026-09-08 javítás)
+
+A mérés sokáig **rossz mezőt olvasott**, és ez a kártyát érdemben félrevitte.
+
+A [`prediction-ledger`](../../packages/core/src/prediction-ledger.mts) slug-onként **upsertel**: minden
+rescan frissíti a `predictedProb`-ot, a `marketPrice`-t és a `configHash`-t, miközben a `firstTs`-t
+megőrzi. Egy rezolvált sor tehát az **utolsó** scan állapotát hordozta — a lejárathoz közelit, amikorra
+a piaci ár már mechanikusan a kimenetre konvergált.
+
+Mérve (2026-09-08, élő ledger):
+
+| | weather | crypto | sports |
+|---|---|---|---|
+| rezolvált sor | 43 | 73 | 118 |
+| ebből `ár > 0.98` | **17** | 0 | 0 |
+| ebből `|ár − kimenet| < 0.02` | **18** | 4 | 1 |
+| Brier-skill a piac ellen | **−233.6%** | −98.7% | −0.6% |
+
+A szennyezettség sorrendje pontosan megmagyarázza a „rosszaság" sorrendjét. A `mkt > 0.98` sorok
+**94%-a** YES-re rezolvált — vagyis a „baseline" a válasz ismeretében árazott. Ez **nem** az a
+belépéskori összehasonlítás, amit a kártya állít: a bot belépéskor kereskedik, nem az utolsó scan-en.
+
+**Fix.** A `PredictionRecord` új, **írás-egyszer** hármast kap — `firstPredictedProb`,
+`firstMarketPrice`, `firstConfigHash` —, amit az `upsertRecords` az **első látáskor** rögzít és
+soha nem ír felül (a latch a frissítés ELŐTT fut, hogy egy régi rekordnál a frissítés előtti,
+azaz régebbi értéket kapja). A `predictedProb`/`marketPrice`/`configHash` továbbra is „latest”
+marad — a UI azt mutatja.
+
+A hármas együtt latch-elődik, és ez szándékos: a pontozott predikciót ahhoz a **konfighoz** kell
+kötni, amelyik **készítette** — különben egy knob-flip átcímkézi az összes még nyitott piacot, és
+kiéhezteti a régebbi kart (mérve: 3 sor flip előtt vs 214 utána → **nem volt A/B**, ez blokkolta a
+B54-et).
+
+**Négy fogyasztó vált** a first-hármasra, mind `?? latest` fallbackkel, tehát a B53 előtti sorok
+változatlanul viselkednek (élőben verifikálva: a fenti számok a fix után bit-azonosak):
+
+| fogyasztó | mit olvas |
+|---|---|
+| `ledgerPointsFromRecords` → walk-forward (ez a doksi) | first (μ, ár) |
+| [`computeConfigAttribution`](./30-config-attribution.md) | first (μ, ár) + first config |
+| [`banditArmsFromRecords`](./33-thompson-bandit.md) | first (μ, ár) + first config |
+| [promóciós kapu](./27-promotion-gate.md) *hard* „beats market OOS" gate | a walk-forwardon át |
+
+**Forward-only.** A már felülírt belépéskori árak **nem visszaállíthatók** (ugyanaz a
+„nem backfillelhető" logika, mint a B50 #2 / B52 recordereknél) → a tiszta mérés a deploytól indul.
+A B53 **nem** trading-hiba: a bot belépéskor mindig a valós árral dolgozott, csak a mérési réteg
+olvasott rossz mezőt. Tracker: [`sprints.md` B53](../roadmap/sprints.md).

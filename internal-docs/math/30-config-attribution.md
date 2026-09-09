@@ -39,3 +39,9 @@ Minden ledger-rekordot **stampelünk az aktív override-ok stabil hash-ével** s
 
 - **Feloldja:** a #3 két follow-upját — a per-config forecast-sorozatból számolható a **valódi ONC** (a trial-ek tényleges teljesítmény-korrelációján, a knob-halmaz-proxy helyett) + a **cross-trial σ_SR** (a bootstrap-CI-proxy helyett). Táplálja a #1 promóciós-kaput (config-szintű proper-score).
 - **Follow-up (B50):** PnL-oldali A/B — a `configHash` stampelése az `OpenPosition`-re belépéskor (a session-store residual JSONB-be → nincs migráció) → átvitel a `ClosedTrade`-re záráskor; per-config PnL/Sharpe. Az edge-tracker per-config proper-score-idősor → ONC-input.
+
+> **⚠ B53 (2026-09-08):** a per-config Brier-skill a ledger **first-sighting** hármasát olvassa
+> (`firstPredictedProb` / `firstMarketPrice` / `firstConfigHash`), nem a rescan-enként
+> felülírt „latest” mezőket — különben a lejárat felé konvergáló ár hízeleg a piacnak, és
+> egy knob-flip átcímkézi a még nyitott piacokat (mérve: 3 sor a flip előtt vs 214 utána).
+> A teljes indoklás: [`math/21` §6](./21-walk-forward.md). Pre-B53 sorok a latest mezőkre esnek vissza.

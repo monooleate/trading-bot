@@ -19,6 +19,9 @@ import {
   computeLedgerStats,
   type PredictionRecord,
 } from "./prediction-ledger.mts";
+import { ledgerPointsFromRecords } from "./walk-forward.mts";
+import { computeConfigAttribution } from "./config-fingerprint.mts";
+import { banditArmsFromRecords } from "./thompson.mts";
 
 interface Failure { test: string; message: string; }
 const failures: Failure[] = [];
@@ -220,6 +223,95 @@ function expect(cond: boolean, test: string, message: string) {
   const rec = upsertRecords([], inc, "sports").find((r) => r.slug === "lakers-vs-celtics")!;
   const eligible = rec.outcome === null && !!rec.conditionId && !!rec.endDate && new Date(rec.endDate).getTime() < Date.now();
   expect(eligible, t, "sports skip record is reconcile-eligible after a past endDate");
+}
+
+
+// ── B53: the first-sighting tuple is write-once ─────────────────────────────
+//
+// Regression guard for the measured 2026-09-08 defect: `predictedProb` /
+// `marketPrice` / `configHash` were refreshed on every rescan, so a resolved
+// row carried the LAST scan's values. Market prices converge to the outcome
+// near expiry, so scoring the model against that price flattered the market
+// (17 of 43 resolved weather rows held a stored price > 0.98, 94% of which
+// resolved YES) and a config change re-labelled every still-open market
+// (3 pre-flip rows vs 214 post-flip → no A/B possible).
+{
+  const t = "B53 first-sighting latch";
+  const mk = (prob: number, price: number, ts: string, cfg: string) =>
+    buildIncoming(
+      [{ market: "m1", action: "skip", reason: "r", predictedProb: prob, marketPrice: price, direction: "YES", endDate: "2026-01-09T00:00:00Z" }],
+      [{ slug: "m1", conditionId: "0x1" }],
+      ts, cfg,
+    );
+
+  const a = upsertRecords([], mk(0.30, 0.25, "2026-01-01T00:00:00Z", "cfgA"), "crypto");
+  expect(a[0].firstPredictedProb === 0.30, t, `first prob latched, got ${a[0].firstPredictedProb}`);
+  expect(a[0].firstMarketPrice === 0.25, t, `first price latched, got ${a[0].firstMarketPrice}`);
+  expect(a[0].firstConfigHash === "cfgA", t, `first config latched, got ${a[0].firstConfigHash}`);
+
+  // Rescans under a NEW config, price converging toward a YES resolution.
+  let rec = a;
+  for (const [p, m, ts] of [[0.42, 0.60, "2026-01-05T00:00:00Z"], [0.55, 0.99, "2026-01-08T23:00:00Z"]] as const) {
+    rec = upsertRecords(rec, mk(p, m, ts, "cfgB"), "crypto");
+  }
+  expect(rec[0].scans === 3, t, `scans=3, got ${rec[0].scans}`);
+  expect(rec[0].predictedProb === 0.55 && rec[0].marketPrice === 0.99, t, "latest fields still refresh (UI needs them)");
+  expect(rec[0].configHash === "cfgB", t, "latest config still refreshes");
+  expect(rec[0].firstPredictedProb === 0.30, t, `first prob UNCHANGED, got ${rec[0].firstPredictedProb}`);
+  expect(rec[0].firstMarketPrice === 0.25, t, `first price UNCHANGED (not the 0.99 near-expiry price), got ${rec[0].firstMarketPrice}`);
+  expect(rec[0].firstConfigHash === "cfgA", t, `first config UNCHANGED (no re-labelling), got ${rec[0].firstConfigHash}`);
+
+  // A pre-B53 record (no first-tuple) back-fills from the values it still
+  // holds — the OLDEST available — and stops moving from then on.
+  const legacy: PredictionRecord = {
+    slug: "m2", category: "crypto", firstTs: "2026-01-01T00:00:00Z", ts: "2026-01-02T00:00:00Z",
+    conditionId: "0x2", endDate: "2026-01-09T00:00:00Z",
+    predictedProb: 0.20, marketPrice: 0.22, edge: 0.02, direction: "YES",
+    taken: false, lastAction: "skip", skipReason: null, signalBreakdown: null,
+    scans: 4, outcome: null, resolvedAt: null, configHash: "cfgOld",
+  };
+  const legacyInc = buildIncoming(
+    [{ market: "m2", action: "skip", reason: "r", predictedProb: 0.9, marketPrice: 0.97, direction: "YES", endDate: "2026-01-09T00:00:00Z" }],
+    [{ slug: "m2", conditionId: "0x2" }],
+    "2026-01-08T00:00:00Z", "cfgNew",
+  );
+  const back = upsertRecords([legacy], legacyInc, "crypto");
+  expect(back[0].firstPredictedProb === 0.20, t, `legacy back-fill uses the PRE-refresh prob, got ${back[0].firstPredictedProb}`);
+  expect(back[0].firstMarketPrice === 0.22, t, `legacy back-fill uses the PRE-refresh price, got ${back[0].firstMarketPrice}`);
+  expect(back[0].firstConfigHash === "cfgOld", t, `legacy back-fill uses the PRE-refresh config, got ${back[0].firstConfigHash}`);
+  const again = upsertRecords(back, buildIncoming(
+    [{ market: "m2", action: "skip", reason: "r", predictedProb: 0.95, marketPrice: 0.99, direction: "YES", endDate: "2026-01-09T00:00:00Z" }],
+    [{ slug: "m2", conditionId: "0x2" }], "2026-01-08T12:00:00Z", "cfgNewer",
+  ), "crypto");
+  expect(again[0].firstMarketPrice === 0.22, t, "back-filled first-tuple is then immutable");
+
+  // The consumers must read the first-tuple. This is the whole point: with the
+  // last-scan price (0.99) the market looks near-perfect on a YES outcome; with
+  // the first-sighting price (0.25) the model (0.30) is the better forecast.
+  const resolved = [{ ...rec[0], outcome: 1, resolvedAt: "2026-01-09T00:00:00Z" }];
+  const pts = ledgerPointsFromRecords(resolved);
+  expect(pts.length === 1, t, `one scorable point, got ${pts.length}`);
+  expect(pts[0].marketPrice === 0.25, t, `walk-forward uses the first price, got ${pts[0].marketPrice}`);
+  expect(pts[0].predictedProb === 0.30, t, `walk-forward uses the first prob, got ${pts[0].predictedProb}`);
+
+  const attr = computeConfigAttribution(resolved as any[]);
+  expect(attr.length === 1 && attr[0].configHash === "cfgA", t,
+    `attribution credits the config that MADE the forecast, got ${attr.map((a) => a.configHash).join(",")}`);
+  expect(attr[0].brierSkill > 0, t, `model beats the first-sighting price here, got skill ${attr[0].brierSkill}`);
+
+  const arms = banditArmsFromRecords(resolved as any[]);
+  expect(arms.length === 1 && arms[0].arm === "cfgA", t,
+    `bandit arm keyed on the first config, got ${arms.map((a) => a.arm).join(",")}`);
+  expect(arms[0].rewards[0]?.reward === 1, t, "reward: the model beat the first-sighting price");
+
+  // Pre-B53 rows keep working on the latest fields (no data loss, no crash).
+  const preB53 = [{
+    slug: "old", outcome: 1, resolvedAt: "2026-01-09T00:00:00Z",
+    predictedProb: 0.4, marketPrice: 0.5, configHash: "legacy",
+  }];
+  const oldPts = ledgerPointsFromRecords(preB53 as any[]);
+  expect(oldPts.length === 1 && oldPts[0].marketPrice === 0.5, t, "pre-B53 rows fall back to the latest fields");
+  expect(computeConfigAttribution(preB53 as any[])[0]?.configHash === "legacy", t, "pre-B53 attribution falls back");
 }
 
 // ─── CLI report ───────────────────────────────────────────────────────────

@@ -75,6 +75,8 @@ export function computeConfigAttribution(
   records: Array<{
     configHash?: string | null;
     predictedProb?: unknown; marketPrice?: unknown; outcome?: unknown; edge?: unknown;
+    // B53 — see the note on the reads below.
+    firstPredictedProb?: unknown; firstMarketPrice?: unknown; firstConfigHash?: string | null;
   }>,
 ): ConfigAttributionRow[] {
   const acc = new Map<string, { n: number; bm: number; bk: number; edge: number; pred: number }>();
@@ -82,11 +84,20 @@ export function computeConfigAttribution(
     if (r?.outcome === null || r?.outcome === undefined) continue; // Number(null)===0 would slip through
     const y = Number(r?.outcome);
     if (y !== 0 && y !== 1) continue;                       // unresolved / non-binary
-    const p = Number(r?.predictedProb);
-    const m = Number(r?.marketPrice);
+    // B53: score the first-sighting prediction against the first-sighting price
+    // (both latched together), falling back to the latest fields for pre-B53 rows.
+    const p = Number(r?.firstPredictedProb ?? r?.predictedProb);
+    const m = Number(r?.firstMarketPrice ?? r?.marketPrice);
     if (!Number.isFinite(p) || p < 0 || p > 1) continue;
     if (!Number.isFinite(m) || m <= 0 || m >= 1) continue;  // need a usable baseline
-    const key = (typeof r?.configHash === "string" && r.configHash) ? r.configHash : "unlabeled";
+    // B53: attribute to the config that PRODUCED that prediction, not the one
+    // active at the last rescan — otherwise a config change re-labels every
+    // still-open market and starves the older arm (measured 2026-09-08:
+    // 3 rows pre-flip vs 214 post-flip, so no A/B was possible).
+    const hash = (typeof r?.firstConfigHash === "string" && r.firstConfigHash)
+      ? r.firstConfigHash
+      : (typeof r?.configHash === "string" && r.configHash) ? r.configHash : null;
+    const key = hash ?? "unlabeled";
     const g = acc.get(key) ?? { n: 0, bm: 0, bk: 0, edge: 0, pred: 0 };
     g.n += 1;
     g.bm += brier(p, y);

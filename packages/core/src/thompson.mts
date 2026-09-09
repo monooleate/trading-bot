@@ -130,6 +130,8 @@ export function banditArmsFromRecords(
   records: Array<{
     configHash?: string | null;
     predictedProb?: unknown; marketPrice?: unknown; outcome?: unknown; resolvedAt?: unknown;
+    // B53 — first-sighting tuple; see the reads below.
+    firstPredictedProb?: unknown; firstMarketPrice?: unknown; firstConfigHash?: string | null;
   }>,
 ): BanditArm[] {
   const rows: { key: string; reward: number; t: number }[] = [];
@@ -137,13 +139,19 @@ export function banditArmsFromRecords(
     if (r?.outcome === null || r?.outcome === undefined) continue;
     const y = Number(r.outcome);
     if (y !== 0 && y !== 1) continue;
-    const p = Number(r.predictedProb), m = Number(r.marketPrice);
+    // B53: the reward ("model beat the market") must compare the first-sighting
+    // prediction with the first-sighting price — the latest price has already
+    // converged toward the outcome. Falls back to the latest fields pre-B53.
+    const p = Number(r.firstPredictedProb ?? r.predictedProb);
+    const m = Number(r.firstMarketPrice ?? r.marketPrice);
     if (!Number.isFinite(p) || p < 0 || p > 1) continue;
     if (!Number.isFinite(m) || m <= 0 || m >= 1) continue;
     const t = Date.parse(String(r.resolvedAt ?? ""));
     const brierModel = (p - y) ** 2, brierMarket = (m - y) ** 2;
     rows.push({
-      key: (typeof r.configHash === "string" && r.configHash) ? r.configHash : "unlabeled",
+      key: (typeof r.firstConfigHash === "string" && r.firstConfigHash)
+        ? r.firstConfigHash
+        : (typeof r.configHash === "string" && r.configHash) ? r.configHash : "unlabeled",
       reward: brierModel < brierMarket ? 1 : 0,
       t: Number.isFinite(t) ? t : 0,
     });
