@@ -720,6 +720,27 @@ A 2026-09-03 teljes audit (5 bot + infra + security) implementált fixei: [chang
   - **SOL-kizárás a gyengébb σ miatt (#4).** A Deribit-opció csak BTC/ETH-re van, a SOL-nak nincs → ott a horgony modell-σ-ra épül. De ez **nem ok a kizárásra**: a `combinerConfidenceMin` + `resolution-risk` kapuk kezelik a gyenge predikciót, a logolt sor pedig értékes adat. A kvótát viszont **1-en** hagytam coinonként, hogy a SOL ne kapjon aránytalan súlyt.
 - **⚠ Őszinte korlát a fókuszhoz.** A threshold-ág a base rate-et fényesen veri (**+90.9%**, n=20), **de a piaci árat nem** (Brier modell 0.0226 vs piac 0.0166; a nem-konvergált 17 soron −23.9%). A piaci baseline B53-szennyezett, tehát a valós szám ennél jobb — **de bizonyítottan pozitív edge NINCS**. Ezért a bővítés indoka elsősorban a **bizonyíték-gyűjtés üteme**, nem egy ismert profit; a B53 tiszta mérése ezen fog eldőlni.
 
+
+---
+
+## 🔧 Rendszer-audit fix-fázis (2026-09-09, 90. session)
+
+> A [rendszer-audit charta](../playbooks/system-audit.md) szerint lefuttatott teljes audit **16 leletet** adott (P0×3, P1×5, P2×5, P3×3). A fixek prioritási sorrendben, egyenként saját commitban, mindegyik mellé a **mérést** pinelő regressziós teszt.
+
+### B58 — Weather σ-diszperzió korrekció (audit P0-1) ✅ IMPLEMENTED 2026-09-09 (90. session), default OFF
+
+- **Lelet (adat-first, nem kódolvasásból).** Az EMOS-residual-store **forward** felén (élő METAR obs vs. a bot által ténylegesen használt GEFS-átlag, **n = 35**): `mean(err²/σ²)` = **10,04**, ahol 1,0 lenne a kalibrált; medián-ratio **1,44** vs. a χ²₁ 0,455-e → a σ **~1,8×** (medián, outlier-robusztus) … **~3,2×** (átlag) **túl kicsi**. Átlagos torzítás **+0,497 °C**. Ok: az ensemble szórása a saját perturbációit méri, a strukturális modellhibát nem; a `Math.max(0.5, …)` padló pedig pont a legegyoldalúbb hibájú állomásokon harap (ZSPD +1,7…+2,8 n=5; RKSS +2,3…+2,8 n=3).
+- **Miért fájt.** Nem rossz irány, hanem téves magabiztosság: σ = 0,5 mellett egy μ-től 1,55 °C-ra lévő bucket ~1,6%-ot kap, és a bot erre méretez ¼-Kelly-t. A valós belépőkön (n = 28, `pillar_closed_trade` — ez befagyasztja a belépési értékeket, tehát **B53-tól mentes**): a `[0 – 0,15)` predikció-sáv (n=7, átlag 0,104) **71,4%-ban YES-re rezolvált** és **−$20,68**-t vitt a −$11,82-os összesből.
+- **Fix:** új pure modul [`@core/weather-dispersion.mts`](../../packages/core/src/weather-dispersion.mts) — `inflateSigma` (clamp [1,4], λ=1 **bit-azonos**, σ-t soha nem zsugorít) + `dispersionDiagnostics` (var-ratio / medián-ratio / CRPS / log-score / PIT-KS / bias) + `suggestSigmaInflation` (**`selectPlateau`**-val, B50 #7). Alkalmazás [`weather/index.mts`](../../services/worker/src/pillars/weather/index.mts)-ben **EMOS UTÁN**, a `matchBucket` előtt. Knob **`weatherSigmaInflation`** default **1.0 = KI** + env `WEATHER_SIGMA_INFLATION`.
+- **λ megválasztása — plató, nem csúcs.** Három független metrika a nyers adaton: log-score → plató 2,5; CRPS → plató 2,0; trading PnL (n=28) → plató 2,0. λ ≥ 3,5-nél a var-ratio 1,0 **alá** megy → „több" nem „jobb".
+- **⚠ λ PATH-FÜGGŐ, és a mérés menet közben megfordította a saját premisszámat.** Élesben `weatherUseEmos=1`, a szorzó pedig EMOS UTÁN hat → a releváns sweep a kalibrált (μ,σ)-n fut. Ott `selectPlateau` **mindkét** metrikán **2,25**-öt ad → **ez a shippelt ajánlás**. Az irány a nem-nyilvánvaló rész: az élő út **kevesebb** inflációt kér, mint a nyers, mert az EMOS a túl-magabiztosság egy részét már elnyeli.
+- **A P0-2 audit-megfogalmazása RÉSZBEN CÁFOLVA — mérve.** Az eredeti tétel („az EMOS rossz eloszláson illesztve, nem megbízható") túlbecsülte a kárt. A forward adaton az élő, seed-illesztett EMOS **javít**: var-ratio 10,04 → **5,96**, log-score 5,61 → **3,58**, CRPS 1,164 → **1,077**. Az „27-ből 17 állomás SZŰKÍTI a σ-t" megfigyelés igaz, de nem a domináns hatás — az átlag-korrekció többet nyer. **Amit az EMOS viszont tényleg NEM javít: a torzítást** (+0,497 °C nyersen → **+0,55 °C** EMOS után), mert az `a,b` a seed −0,03 °C-os biasára illeszkedett és nem transzferál. **Ez a P0-2 valódi, mért tartalma** — és a σ-tágítás definíció szerint nem segít rajta.
+- **Szimulált hatás a 28 valós belépőn (λ=2,0 proxy):** Brier 0,3513 → **0,2969**, realizált PnL −$11,82 → **−$2,96**, 26/28 trade marad.
+- **⚠ Kár-csökkentés, NEM edge.** Monoton transzformáció → matematikailag **nem tudja** megfordítani a `corr(predikció, kimenet)` = **−0,316** előjelét, és a Brier **minden λ-nál 0,25 fölött marad**. A naiv „flippeljük meg" **szintén nem működik** (Brier(1−p) = 0,2753 > 0,2500) — ugyanaz a csapda, mint a B56b-nél. Az előjel-probléma nyitva marad.
+- **Teszt:** [`weather-dispersion.test.mts`](../../packages/core/src/weather-dispersion.test.mts) — 8 csoport, a fixture a **valós** 35 forward-residual a boxról. A **mérést** pineli (var-ratio 10,04, bias +0,50, plató-szélesség), nem a függvény-szignatúrát. Külön assert arra, hogy a bias **invariáns** a σ-ra — kifejezetten az ellen, hogy valaki a kettőt összemossa.
+- **Doksi:** [`math/38-weather-dispersion.md`](../math/38-weather-dispersion.md).
+- **Élesítés:** deploy (0 viselkedés-változás) → Settings → Weather → *Forecast σ inflation* → **2.25** → 20-30 rezolvált trade után újramérni. Ha a **P0-2** (EMOS seed-dominancia) rendeződik, ezt a szorzót **újra kell mérni** — különben a két korrekció egymásra halmozódna.
+
 ---
 
 ## ✅ Completed sprints (rolling 5 utolsó)

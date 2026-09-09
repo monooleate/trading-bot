@@ -59,6 +59,22 @@ export interface WeatherConfig {
   // a risk reduction, NOT a payoff-ratio fix. 1.0 = legacy sizing; 0.5 =
   // half-size (default). Pair with a low maxPositionUSD.
   kellyScale: number;         // default 0.5
+  // sigmaInflation (P0-1, system audit 2026-09-09): multiply the forecast σ
+  // handed to the bucket matcher. The GEFS ensemble spread measures only its
+  // own perturbations, so it misses structural model error: on the FORWARD
+  // half of the EMOS residual store (live METAR obs vs the GEFS mean actually
+  // used, n=35) mean(err²/σ²) = 10.04 where 1.0 is calibrated — σ too small by
+  // ~1.8× (median, outlier-robust) to ~3.2× (mean). The consequence is not a
+  // wrong direction but misplaced conviction: at σ=0.5 a bucket 1.55 °C off μ
+  // scores ~1.6% and gets ¼-Kelly sized against that near-certainty.
+  // 1.0 = off (default, bit-identical). Measured plateau on the LIVE path
+  // (weatherUseEmos=1) is 2.25; on the raw ensemble it is 2.0-2.5. EMOS already
+  // absorbs part of the overconfidence (var-ratio 10.04 -> 5.96), so the live
+  // path needs slightly LESS inflation than raw - the two are not interchangeable.
+  // ⚠ HARM REDUCTION, NOT EDGE — it is a monotone transform, so it cannot
+  // change corr(prediction, outcome) (measured −0.316 over n=28 entry rows).
+  // See packages/core/src/weather-dispersion.mts and math/38.
+  sigmaInflation: number;     // default 1.0 (off)
 }
 
 export interface WeatherTradeDecision {
@@ -134,6 +150,9 @@ export function getWeatherConfig(): WeatherConfig {
     // B35 (2026-09-01): default 0.5 — halve the final Kelly fraction to cap
     // the downside while the (genuinely predictive) direction edge validates.
     kellyScale:         parseFloat(process.env.WEATHER_KELLY_SCALE || "0.5"),
+    // P0-1 (2026-09-09): default 1.0 = OFF / bit-identical. Measure-first —
+    // the operator flips it after reading the dispersion diagnostics.
+    sigmaInflation:     parseFloat(process.env.WEATHER_SIGMA_INFLATION || "1.0"),
   };
 }
 
@@ -174,6 +193,7 @@ export async function getEffectiveWeatherConfig(): Promise<WeatherConfig> {
         ? ov.weatherInvertDirection >= 0.5 : env.invertDirection,
       minPrice:           ov.weatherMinPrice        ?? env.minPrice,
       kellyScale:         ov.weatherKellyScale       ?? env.kellyScale,
+      sigmaInflation:     ov.weatherSigmaInflation   ?? env.sigmaInflation,
     };
   } catch {
     return env;

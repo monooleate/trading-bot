@@ -69,6 +69,7 @@ A **CLAUDE.md** a repo gyökerében az **AKTUÁLIS ÁLLAPOT** szekcióval — mi
 | `math/35-ledger-coverage.md` | **Prediction-ledger lefedettség** (sports-ledger + deferred infra) | sports-ledger bekötve (bináris piac); a normalizált-tábla migráció deferred (blob_kv MÁR Postgres → B12), HL/F-arb not-applicable (perp/delta-neutral) (B50 #9) |
 | `math/36-multi-coin.md` | **Crypto multi-coin scan** (BTC/ETH/SOL) | `@core/coin.mts` SSOT (coin-detektor + strike-parser: BTC „k" ×1000 / ETH literál); finder allowlist + a 7 BTC-hardcode-olt combiner-fetch coin-aware; default-BTC fallback → 0 BTC-regresszió (B51) |
 | `math/37-multi-model-ensemble.md` | **Weather multi-model ensemble** (GEFS-only → +IFS-ENS/AIFS-ENS/WeatherNext 2) | 197 tag EGY Open-Meteo kérésben; modellenként egyenlő súlyú keverék (σ² = belső + modellek közötti); log-forward recorder default-ON (nem backfillelhető), a trading-flip default-OFF a CRPS-head-to-head-ig (B52 #1) |
+| `math/38-weather-dispersion.md` | **Weather σ-diszperzió korrekció (P0-1)** | A GEFS-szórás csak a saját perturbációit méri → a forward-residualokon `mean(err²/σ²)` = 10,04 (1,0 lenne kalibrált). Utólagos σ-szorzó EMOS után, `selectPlateau`-val választott λ = 2,0, default OFF. **Kár-csökkentés, nem edge**: monoton, tehát a −0,316-os korrelációt nem fordítja meg. |
 | `math/151-Trading-Strategies.pdf` | Academic reference (Kakushadze) | 151 strategies anthology |
 
 ---

@@ -12,6 +12,7 @@ import { matchBucket, marketConsensusModalTempC } from "./bucket-matcher.mts";
 import { logForecast, loadStationEmosParams, reconcileEmosObs } from "./emos-store.mts";
 import { isRecordDue, recordSnapshot, fillObsFromEmos } from "./multi-model-store.mts";
 import { emosApply } from "@core/emos.mts";
+import { inflateSigma } from "@core/weather-dispersion.mts";
 import { makeWeatherDecision, getWeatherConfig, padWeatherGates } from "./decision-engine.mts";
 import type { WeatherTradeDecision, WeatherConfig } from "./decision-engine.mts";
 import { placeBuyOrder } from "../crypto/execution.mts";
@@ -428,6 +429,14 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
           sigma = cal.sigma;
         }
       }
+      // P0-1 (system audit 2026-09-09): post-hoc dispersion correction. Applied
+      // AFTER EMOS on purpose — EMOS's own σ² = c + d·ensStd² fit is currently
+      // dominated 4887:35 by SEEDED historical residuals drawn from a different
+      // distribution (ERA5 obs + inter-model spread) than the one it is applied
+      // to (METAR obs + GEFS σ), so its dispersion term cannot be trusted to do
+      // this job yet — that is P0-2. Inflating afterwards is predictable and
+      // independent of the fit. Default 1.0 ⇒ `sigma` is untouched.
+      sigma = inflateSigma(sigma, config.sigmaInflation);
       const match = matchBucket(emosMu, market.outcomes, sigma);
       if (!match) {
         results.push({
