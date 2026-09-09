@@ -14,7 +14,7 @@ import { log } from "../shared/logger.mts";
 import { loadPaperNeverStop, isAutoStopReason } from "../shared/paper-never-stop.mts";
 import { alertError, alertLiveBlocked } from "../shared/telegram.mts";
 import { computeLiveReadiness, shouldForcePaper, type LiveReadinessReport } from "../shared/live-readiness.mts";
-import { appendPredictions } from "@core/prediction-ledger.mts";
+import { appendPredictions, reconcileLedger } from "@core/prediction-ledger.mts";
 import { getHlConfig, getEffectiveHlConfig } from "./config.mts";
 import { getEffectiveBetaCap } from "../shared/config.mts";
 import { loadPortfolioBetaSnapshot } from "../shared/portfolio-exposure.mts";
@@ -299,6 +299,10 @@ async function runHyperliquidTraderInner(
   const betaCap  = await getEffectiveBetaCap();
   const betaSnap = betaCap.enabled ? await loadPortfolioBetaSnapshot(config.paperMode) : null;
 
+  // Audit P1-8: coin -> the market its signal came from, for the ledger.
+
+  const scannedMarkets = new Map<string, { slug: string; conditionId: string | null; endDate: string | null }>();
+
   for (const coin of SCAN_COINS) {
     const coinGates: import("@core/types.mts").DecisionGate[] = [];
     // Snapshot helper: returns the full Y-gate list, padding with
@@ -328,6 +332,16 @@ async function runHyperliquidTraderInner(
 
       // Gate 2 — Signal source available
       const signal = await getHlSignalForCoin(coin);
+      // Audit P1-8: remember which Polymarket market backed this coin's signal,
+      // so the ledger rows below can be keyed on the MARKET rather than on the
+      // coin symbol (see the appendPredictions call at the end of this file).
+      if (signal) {
+        scannedMarkets.set(coin, {
+          slug: signal.marketSlug,
+          conditionId: signal.conditionId,
+          endDate: signal.endDate,
+        });
+      }
       coinGates.push({
         label: HL_GATE_LABELS[1],
         passed: !!signal,
@@ -724,7 +738,30 @@ async function runHyperliquidTraderInner(
   // B50 #4: stamp each logged prediction with the active-config fingerprint.
   let hlCfgHash = "default";
   try { const sm: any = await import("@api/routes/trader-settings.mts"); hlCfgHash = await sm.currentConfigFingerprint(); } catch {}
-  await appendPredictions("hyperliquid", results, [], session.closedTrades, undefined, hlCfgHash);
+  // Audit P1-8. Two defects met here. (1) The ledger keys rows on
+  // `r.market ?? r.coin`, and HL rows carried only `coin` — so every scan of
+  // BTC collapsed into ONE immortal record, re-upserted forever (2412 scans on
+  // a single row, whose first- and latest-tuple turned out to describe two
+  // entirely different markets). (2) HL was the only bot that never called
+  // `reconcileLedger`, and passed `[]` for markets, so no row ever carried a
+  // conditionId — meaning outcomes could only ever come from
+  // fillOutcomesFromClosedTrades, i.e. TAKEN trades only. That is exactly the
+  // selection bias the ledger exists to remove.
+  //
+  // Now that P0-3 makes the lookup return a real directional Polymarket market,
+  // each row can be keyed on that market and resolved from Gamma like every
+  // other bot. The prediction being scored is P(price rises), and an up-or-down
+  // market resolving YES *is* "it rose" — so Gamma is the correct outcome
+  // source even though the position itself is a perp.
+  const hlLedgerRows = results.map((r: any) => {
+    const m = scannedMarkets.get(r.coin);
+    return m ? { ...r, market: m.slug, conditionId: m.conditionId, endDate: m.endDate } : r;
+  });
+  const hlLedgerMarkets = [...scannedMarkets.values()]
+    .filter((m) => m.conditionId)
+    .map((m) => ({ slug: m.slug, conditionId: m.conditionId, endDate: m.endDate }));
+  await appendPredictions("hyperliquid", hlLedgerRows, hlLedgerMarkets, session.closedTrades, undefined, hlCfgHash);
+  await reconcileLedger("hyperliquid");
 
   // Persist per-signal realized IC for the signal-combiner's optional
   // blending path. Cheap; runs every tick so the Edge Tracker UI can

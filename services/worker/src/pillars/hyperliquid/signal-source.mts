@@ -34,6 +34,12 @@ export interface HlSignalResult {
   signalBreakdown: SignalBreakdown;
   marketSlug:    string;
   marketPrice:   number;
+  // Audit P1-8: carried so the prediction ledger can key HL rows on the actual
+  // market and reconcile their outcome from Gamma, instead of collapsing every
+  // scan of a coin into one immortal row that only ever learns the outcome of
+  // trades the bot happened to take.
+  conditionId:   string | null;
+  endDate:       string | null;
   resolutionCategory?: "LOW" | "MEDIUM" | "HIGH" | "SKIP";
   // Combiner's own action verdict — "BUY YES" / "BUY NO" / "WAIT" / "WATCH"
   // / "SKIP". Used by the HL trust-gate to filter trades the combiner
@@ -64,7 +70,7 @@ export interface HlSignalResult {
  * outcome, not a failure: it is strictly better for the bot to stand down than to
  * trade a category error.
  */
-async function findCoinMarketSlug(coin: HlCoin): Promise<string | null> {
+async function findCoinMarket(coin: HlCoin) {
   try {
     // Price band 0 — an up/down market sits near 0.5 anyway, and we must not
     // inherit the crypto pillar's deep-OTM filter, which is there to protect
@@ -76,16 +82,18 @@ async function findCoinMarketSlug(coin: HlCoin): Promise<string | null> {
         return base === coin && isDirectionalCryptoMarket(m.slug, (m as any).question);
       });
     // findBtcMarkets already returns volume-descending, so the first hit is the
-    // most liquid directional market for this coin.
-    return candidates[0]?.slug ?? null;
+    // most liquid directional market for this coin. Return the whole record —
+    // P1-8 needs its conditionId and endDate for ledger reconciliation.
+    return candidates[0] ?? null;
   } catch {
     return null;
   }
 }
 
 export async function getHlSignalForCoin(coin: HlCoin): Promise<HlSignalResult | null> {
-  const slug = await findCoinMarketSlug(coin);
-  if (!slug) return null;
+  const market = await findCoinMarket(coin);
+  if (!market) return null;
+  const slug = market.slug;
   // Defence in depth. The lookup above already filters, but the whole P0-3 bug
   // was a threshold probability reaching the directional transform below without
   // anyone noticing for seven days. Re-check at the point of use so a future
@@ -131,6 +139,8 @@ export async function getHlSignalForCoin(coin: HlCoin): Promise<HlSignalResult |
       },
       marketSlug:     slug,
       marketPrice:    d.market?.yes_price ?? 0.5,
+      conditionId:    market.conditionId ?? null,
+      endDate:        market.endDate ?? d.market?.end_date ?? null,
       resolutionCategory: d.resolution_risk?.category,
       combinerRecommendation: typeof d.recommendation?.action === "string"
         ? d.recommendation.action

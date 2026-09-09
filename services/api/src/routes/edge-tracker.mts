@@ -388,7 +388,20 @@ export default async function handler(req: Request, _ctx: Context) {
     // decomposition + reliability-diagram bins. Scores the forecast itself so
     // combiner/calibration changes can be judged on a strictly-proper metric
     // instead of noisy PnL.
-    const properScores = computeProperScores(trades);
+    // Audit P1-7: B55 excluded sports from the LEDGER pool but not from the
+    // TRADE pool, so the promotion gate has been reading two incompatible
+    // populations — wfBrierSkill computed without sports, while its own sample
+    // floor (properScores.n) and base-rate skill were computed WITH it. Sports
+    // is the dominant closed-trade producer and its "fair value" is a
+    // deterministic affine transform of the price it bets against (proven to
+    // zero error over n=161), so it carries no forecasting information: it only
+    // inflates the sample count that unlocks a verdict. Same exclusion, same
+    // pool. The portfolio-level `summary` above deliberately still includes it —
+    // those are real dollars — this is the EVIDENCE pool, not the P&L.
+    const scoringTrades = category === "all"
+      ? trades.filter((t) => !AGGREGATE_EXCLUDED.has(t.category ?? "crypto"))
+      : trades;
+    const properScores = computeProperScores(scoringTrades);
     // Post-hoc calibration eval (model-discovery §7 #2, measurement only):
     // walk-forward raw-vs-calibrated Brier/log-score — tells the operator
     // whether a Platt calibrator WOULD help, with NO live behaviour change.
@@ -476,6 +489,9 @@ export default async function handler(req: Request, _ctx: Context) {
         summary.returnSkew, summary.returnKurtosis, nTrials, sdProxy,
       );
       promotionGate = evaluatePromotionGate({
+        // P1-7: scoredN/tradeN come from the sports-excluded pool so the gate's
+        // sample floor and its walk-forward half finally describe the same
+        // population.
         scoredN:         properScores.n,
         brierSkillScore: properScores.brierSkillScore,
         logSkillScore:   properScores.logSkillScore,
@@ -486,7 +502,7 @@ export default async function handler(req: Request, _ctx: Context) {
         psr:             summary.psr,
         dsr:             Number.isFinite(dsr) ? dsr : 0,
         minTrl:          summary.minTrl >= 999999 ? Infinity : summary.minTrl,
-        tradeN:          summary.totalTrades,
+        tradeN:          scoringTrades.length,
         nTrials,
       });
     } catch { promotionGate = null; }
