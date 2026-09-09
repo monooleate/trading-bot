@@ -357,3 +357,32 @@ A **munich** a lényeg: 0,0069-ről kijött abból a `[0–0,15)` sávból, ami 
 **Egészség:** 0 hiba / 10 perc, 4 tick, a crypto 5 piacot scannel vegyes coinnal (BTC threshold 0,87 és 0,07 — a K-horgony dolgozik; a directional lapos 0,51, ahogy a B56 leírta).
 
 **Fontos részlet:** a `confidence` (1 − σ/4) **változatlan** maradt — a σ-infláció szándékosan az EMOS UTÁN, közvetlenül a `matchBucket` előtt hat, tehát a confidence-kaput **nem** mozgatja; a hatás az edge/Kelly úton jön. Ez a sebészi elhelyezés szándékos.
+
+## 4. fázis — peer-lelet: a ledger nem rögzítette, MELYIK KÓD készítette a predikciót (B66)
+
+Egy párhuzamos Claude-session (a charta szerzője) adta át lane 7 / lane 9 leletként. **Függetlenül reprodukálva, mielőtt hozzányúltam** — a részletek: [sprints B66](../roadmap/sprints.md).
+
+Röviden: a `configHash` a futásidejű **knobokat** hasheli, nem a kódot, tehát egy attribúciós arm némán átível minden knob-változás nélküli deployt. Élőben az `e03b4835` arm 10:45:41 → 11:07:11 közé esett — **benne a 11:03-as audit-deploy**, ami átírta a HL signal-source-ot, a ledger-szabályokat, az IC-blendet és a fill-ellenőrzést.
+
+**A SHA-t szándékosan NEM hasheltem a `configHash`-be** (minden push új armot nyitna → egysoros armok, sosem gyűlő bizonyíték). Helyette külön `codeVersion` mező + `codeVersionSpread()`, ami armonként **megnevezi** a kevert kód-rezsimeket.
+
+**Élő igazolás a deploy után** (crypto ledger, n=102) — a mechanizmus azonnal láthatóvá tette azt, amiért készült:
+
+```
+arm 3683673b:  81 sor unlabeled  +  3 sor 66efbf6c7503   → MIXED
+arm e03b4835:   1 sor unlabeled  +  2 sor 66efbf6c7503   → MIXED
+```
+
+### ⚠ Incidens: elrontottam a deploy-workflow-t, majd javítottam (10 perc)
+
+A `fc21251` BUILD_INFO-lépése `printf 'sha=%s\nbuiltAt=%s\n'`-t használt, de a backslash-escape-ek nem élték túl a szerkesztést és **valódi sortörésekké** váltak → a printf formátum-string három sorra terjedt, és **a YAML nem parse-olt**. A GitHub 0 másodperces, a workflow-fájlról elnevezett hibaként jelentette — ez az érvénytelen workflow aláírása, nem egy elbukott job.
+
+**Hatás:** amíg törött volt, **semmilyen deploy nem futhatott**. A box a korábbi jó deployt (`87ba884`) szolgálta ki változatlanul, tehát **éles hatás nem volt** — de az `fc21251` nem jutott ki.
+
+**Javítás** (`66efbf6`): escape nélküli `echo`-blokk (`{ echo "sha=$SHA"; echo "builtAt=$(date -u …)"; } > BUILD_INFO`), és ezúttal **lokálisan leparse-oltam a YAML-t push előtt**, plusz lefuttattam a lépés shell-jét szó szerint, hogy a kimenet egyezzen azzal, amit a `build-info.mts` olvas.
+
+**Tanulság a chartához:** ugyanez az escape-hiba **kétszer** ütött ma (a tesztfájlban is), és mindkétszer *hihető, de néma* eredményt adott. Ez ugyanaz az osztály, mint a B53/B66: nem összeomlás, hanem egy elfogadhatónak látszó érték egy meg nem történt művelet helyén. A generált YAML/shell-t **parse-olni kell**, nem ránézni.
+
+### Egészség a végén
+
+0 hiba, tickek futnak, sports `stopped=true` és kihagyva, HL mindkét coinon józan jel (`BTC LONG 0.524 / 4,8%`, `ETH LONG 0.5308 / 6,2%`), BUILD_INFO a konténerben.
