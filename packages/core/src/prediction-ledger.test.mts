@@ -19,6 +19,7 @@ import {
   computeLedgerStats,
   type PredictionRecord,
 } from "./prediction-ledger.mts";
+import { isCleanFirstObservation, firstObservationCoverage } from "./prediction-ledger.mts";
 import { ledgerPointsFromRecords } from "./walk-forward.mts";
 import { computeConfigAttribution } from "./config-fingerprint.mts";
 import { banditArmsFromRecords } from "./thompson.mts";
@@ -312,6 +313,68 @@ function expect(cond: boolean, test: string, message: string) {
   const oldPts = ledgerPointsFromRecords(preB53 as any[]);
   expect(oldPts.length === 1 && oldPts[0].marketPrice === 0.5, t, "pre-B53 rows fall back to the latest fields");
   expect(computeConfigAttribution(preB53 as any[])[0]?.configHash === "legacy", t, "pre-B53 attribution falls back");
+}
+
+// ── P1-4: a back-filled first-tuple is marked, not passed off as clean ──────
+// B53 made the first-sighting tuple write-once, but its `??=` back-fill also
+// stamps rows that already existed — using whatever their PREVIOUS scan left
+// behind. Measured right after the B53 deploy: 32 of 36 latched rows had been
+// scanned more than 10 times before the latch fired (up to 2412 scans, firstTs
+// up to six days earlier). The worst case, hyperliquid/BTC, latched
+// firstMarketPrice 0.9995 against outcome 1 — a fully converged price wearing
+// the name "first". Consumers only ever tested `first ?? latest`, i.e. presence
+// rather than provenance, so nothing could tell the two apart.
+{
+  const t = "first-tuple-provenance";
+  const inc = (prob: number, price: number, ts: string, cfg: string) =>
+    buildIncoming(
+      [{ market: "p1", action: "skip", reason: "r", predictedProb: prob, marketPrice: price, direction: "YES", endDate: "2026-09-20T00:00:00Z" }],
+      [{ slug: "p1", conditionId: "0xp" }],
+      ts, cfg,
+    );
+
+  // A brand-new row: latched at first sighting, so NOT back-filled.
+  const fresh = upsertRecords([], inc(0.40, 0.30, "2026-09-09T00:00:00Z", "cfgA"), "crypto");
+  expect(fresh[0].firstBackfilled !== true, t, "a genuinely new row must not be flagged as back-filled");
+  expect(isCleanFirstObservation(fresh[0]), t, "a first-sighting row is clean evidence");
+
+  // Re-scanning it must NOT retroactively flag it.
+  const rescanned = upsertRecords(fresh, inc(0.95, 0.97, "2026-09-09T09:00:00Z", "cfgB"), "crypto");
+  expect(rescanned[0].firstPredictedProb === 0.40, t, "first-tuple stays write-once across rescans");
+  expect(rescanned[0].predictedProb === 0.95, t, "latest fields still refresh");
+  expect(isCleanFirstObservation(rescanned[0]), t, "a rescan must not turn a clean row dirty");
+
+  // A pre-B53 row (no first-tuple, already scanned 2412 times) gets back-filled
+  // on its next scan — and must be MARKED, because 0.97 here is a late-life
+  // price, not a first observation.
+  const legacy: any = {
+    slug: "p1", category: "crypto", firstTs: "2026-09-02T00:00:00Z",
+    ts: "2026-09-08T23:00:00Z", conditionId: "0xp", endDate: "2026-09-20T00:00:00Z",
+    predictedProb: 0.88, marketPrice: 0.97, edge: 0.09, direction: "YES",
+    taken: false, lastAction: "skip", skipReason: null, signalBreakdown: null,
+    scans: 2412, outcome: null, resolvedAt: null, configHash: "cfgOld",
+  };
+  const backfilled = upsertRecords([legacy], inc(0.99, 0.995, "2026-09-09T09:00:00Z", "cfgNew"), "crypto");
+  expect(backfilled[0].firstBackfilled === true, t, "a back-filled row MUST be flagged");
+  expect(backfilled[0].firstMarketPrice === 0.97, t,
+    `back-fill still uses the pre-refresh value (best available), got ${backfilled[0].firstMarketPrice}`);
+  expect(!isCleanFirstObservation(backfilled[0]), t, "a back-filled row is NOT clean evidence");
+
+  // Flagging is itself write-once: a later rescan must not clear it.
+  const again = upsertRecords(backfilled, inc(0.999, 0.999, "2026-09-09T10:00:00Z", "cfgNew"), "crypto");
+  expect(again[0].firstBackfilled === true, t, "the back-filled flag must survive later rescans");
+
+  // Coverage splits the three states the live ledger actually contains.
+  const cov = firstObservationCoverage([
+    rescanned[0] as any,                       // clean
+    backfilled[0] as any,                      // laundered
+    { predictedProb: 0.5, marketPrice: 0.5 } as any, // pre-B53, never rescanned
+  ]);
+  expect(cov.total === 3, t, `coverage total should be 3, got ${cov.total}`);
+  expect(cov.clean === 1 && cov.backfilled === 1 && cov.missing === 1, t,
+    `coverage must separate all three states, got ${JSON.stringify(cov)}`);
+  expect(Math.abs(cov.cleanFraction - 1 / 3) < 1e-9, t, "cleanFraction must be clean/total");
+  expect(firstObservationCoverage([]).cleanFraction === 0, t, "empty pool must not divide by zero");
 }
 
 // ─── CLI report ───────────────────────────────────────────────────────────

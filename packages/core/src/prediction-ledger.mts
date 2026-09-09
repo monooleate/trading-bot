@@ -56,6 +56,12 @@ export interface PredictionRecord {
   firstPredictedProb?: number;
   firstMarketPrice?: number;
   firstConfigHash?: string | null;    // the config that produced THAT prediction
+  // Audit P1-4: true when the tuple above was BACK-FILLED onto a row that
+  // already existed (written before B53 shipped), rather than captured at the
+  // row's first sighting. Such a value was measured mid-life — for the worst
+  // observed case, 2412 scans after `firstTs` — so it is not a pre-convergence
+  // horizon and must not be counted as clean evidence. Absent/false ⇒ genuine.
+  firstBackfilled?: boolean;
   direction: string;                  // side the bot took / would take (YES/NO/LONG/SHORT)
   taken: boolean;                     // did the bot ever open a position here?
   lastAction: string;                 // position_opened / skip / failed / error
@@ -182,6 +188,22 @@ export function upsertRecords(
       // written before these fields existed, using the values it still holds
       // from its previous scan: the oldest state available, and from here on
       // that row's first-tuple stops moving.
+      //
+      // Audit P1-4 (2026-09-09): that back-fill is NOT a first observation, and
+      // silently pretending otherwise is worse than having no value at all.
+      // Measured right after the B53 deploy, 32 of 36 latched rows had already
+      // been scanned more than 10 times (up to 2412, firstTs up to six days
+      // earlier) — hyperliquid/BTC latched firstMarketPrice 0.9995 against
+      // outcome 1, i.e. |first − outcome| = 0.0005, a perfectly converged price
+      // wearing the name "first". `firstTs` is not updated either, so the record
+      // asserts a date the tuple was never measured at, and every consumer just
+      // tests `firstPredictedProb ?? predictedProb` — presence, not provenance.
+      //
+      // So mark it. The value is still the best available (freezing at back-fill
+      // time beats letting `latest` drift on to resolution), but downstream can
+      // now tell a genuine first sighting from a laundered one and report or
+      // exclude accordingly. See `isCleanFirstObservation` below.
+      if (prev.firstPredictedProb == null) prev.firstBackfilled = true;
       prev.firstPredictedProb ??= prev.predictedProb;
       prev.firstMarketPrice ??= prev.marketPrice;
       prev.firstConfigHash ??= prev.configHash ?? null;
@@ -411,4 +433,51 @@ export function computeLedgerStats(category: string, records: PredictionRecord[]
     oldestTs: tss[0] ?? null,
     newestTs: tss[tss.length - 1] ?? null,
   };
+}
+
+/**
+ * Does this record carry a GENUINE first-sighting observation?
+ *
+ * Audit P1-4. Three states exist in the live ledger and the measurement layer
+ * must not treat them alike:
+ *
+ *   1. `firstPredictedProb` set, `firstBackfilled` unset  → clean. Captured at
+ *      the row's first scan, before the market price converged.
+ *   2. `firstPredictedProb` set, `firstBackfilled` true    → laundered. Frozen at
+ *      B53-deploy time, potentially thousands of scans into the row's life.
+ *   3. `firstPredictedProb` unset                          → pre-B53 row not yet
+ *      rescanned; consumers fall back to the LATEST fields, which is the fully
+ *      converged value the whole fix exists to avoid.
+ *
+ * Only (1) is clean. Consumers should keep scoring every row — dropping (2) and
+ * (3) today would leave almost nothing — but they must be able to say how much
+ * of a verdict rests on contaminated evidence. Pure.
+ */
+export function isCleanFirstObservation(r: {
+  firstPredictedProb?: number;
+  firstBackfilled?: boolean;
+} | null | undefined): boolean {
+  if (!r) return false;
+  return typeof r.firstPredictedProb === "number" && r.firstBackfilled !== true;
+}
+
+/**
+ * Split records by first-observation provenance. Returns the counts a card or a
+ * promotion verdict should print next to its headline number, so "beats market"
+ * can never again be asserted on a pool whose baseline is the outcome itself.
+ */
+export function firstObservationCoverage(
+  records: readonly {
+    firstPredictedProb?: number;
+    firstBackfilled?: boolean;
+  }[],
+): { total: number; clean: number; backfilled: number; missing: number; cleanFraction: number } {
+  let clean = 0, backfilled = 0, missing = 0;
+  for (const r of records ?? []) {
+    if (typeof r?.firstPredictedProb !== "number") missing++;
+    else if (r.firstBackfilled === true) backfilled++;
+    else clean++;
+  }
+  const total = clean + backfilled + missing;
+  return { total, clean, backfilled, missing, cleanFraction: total ? clean / total : 0 };
 }

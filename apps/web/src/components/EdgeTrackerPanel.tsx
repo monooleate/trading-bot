@@ -200,6 +200,8 @@ interface EdgeTrackerData {
   onlineWeightsEval?: OnlineWeightsEval;
   ledgerStats?: LedgerStats | null;
   walkForward?: WalkForwardResult | null;
+  // Audit P1-4: provenance of the ledger pool behind walkForward / promotionGate.
+  firstObsCoverage?: { total: number; clean: number; backfilled: number; missing: number; cleanFraction: number } | null;
   configAttribution?: ConfigAttributionRow[] | null;
   banditEval?: ArmPosterior[] | null;
   enb?: EnbResult | null;
@@ -306,7 +308,7 @@ export default function EdgeTrackerPanel({ defaultCategory = "all" }: Props) {
           {data.calibrationEval && <CalibrationEvalCard ce={data.calibrationEval} />}
           {data.onlineWeightsEval && <OnlineWeightsCard ow={data.onlineWeightsEval} />}
           {data.ledgerStats && <LedgerStatsCard s={data.ledgerStats} />}
-          {data.walkForward && <WalkForwardCard wf={data.walkForward} />}
+          {data.walkForward && <WalkForwardCard wf={data.walkForward} cov={data.firstObsCoverage ?? null} />}
           {data.configAttribution && <ConfigAttributionCard rows={data.configAttribution} />}
           {data.banditEval && <BanditEvalCard arms={data.banditEval} />}
           {data.enb && <EnbCard e={data.enb} />}
@@ -784,7 +786,37 @@ function EnbCard({ e }: { e: EnbResult }) {
 // resolution time, splits into chronological blocks, and scores model P(YES) vs
 // the market-price baseline per block. Brier skill > 0 ⇒ the model beats the
 // price out-of-sample; consistency across blocks ⇒ not one lucky window.
-function WalkForwardCard({ wf }: { wf: WalkForwardResult }) {
+type FirstObsCoverage = { total: number; clean: number; backfilled: number; missing: number; cleanFraction: number };
+
+/**
+ * Audit P1-4 — say out loud how much of this verdict rests on a trustworthy
+ * baseline. Rows written before B53 either carry no first-sighting tuple (the
+ * card then scores against the LAST scan's price, which converges to the
+ * outcome and flatters the market) or carry one back-filled mid-life at deploy
+ * time. Both make "beats market" unreliable, and until now the card showed a
+ * confident percentage with nothing to qualify it.
+ */
+function FirstObsBanner({ cov }: { cov: FirstObsCoverage | null }) {
+  if (!cov || cov.total === 0) return null;
+  const pct = Math.round(cov.cleanFraction * 100);
+  if (cov.clean === cov.total) {
+    return (
+      <div className="et-ps-empty" style={{ marginTop: 8, color: COLORS.actual }}>
+        Baseline clean: all {cov.total} rows carry a first-sighting price.
+      </div>
+    );
+  }
+  return (
+    <div className="et-ps-empty" style={{ marginTop: 8, color: pct >= 50 ? COLORS.warn : COLORS.loss }}>
+      ⚠ Baseline only {pct}% clean — {cov.clean}/{cov.total} rows carry a genuine
+      first-sighting price ({cov.backfilled} back-filled mid-life, {cov.missing} scored
+      against the last scan). A converged price flatters the market, so treat the
+      skill number above as a LOWER bound until these resolve out.
+    </div>
+  );
+}
+
+function WalkForwardCard({ wf, cov }: { wf: WalkForwardResult; cov?: FirstObsCoverage | null }) {
   if (!wf || wf.nResolved < 2 || wf.nBlocks === 0) {
     return (
       <div className="et-chart">
@@ -803,6 +835,7 @@ function WalkForwardCard({ wf }: { wf: WalkForwardResult }) {
         <h3>Walk-forward vs market (out-of-sample)</h3>
         <span className="et-ps-n">{wf.nResolved} resolved · {wf.nBlocks} blocks</span>
       </div>
+      <FirstObsBanner cov={cov ?? null} />
       <div className="et-kpi-grid et-ps-kpis">
         <Card title="Brier skill" value={`${(o.brierSkill * 100).toFixed(1)}%`} sub="vs market price" color={skillColor} />
         <Card title="Consistency" value={`${wf.blocksPositiveSkill}/${wf.nBlocks}`} sub="blocks beat market" color={consColor} />

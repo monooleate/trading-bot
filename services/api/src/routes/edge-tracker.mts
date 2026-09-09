@@ -36,6 +36,7 @@ import {
 import {
   loadLedger,
   computeLedgerStats,
+  firstObservationCoverage,
   type LedgerStats,
 } from "@core/prediction-ledger.mts";
 import {
@@ -404,6 +405,7 @@ export default async function handler(req: Request, _ctx: Context) {
     // B49 #4: walk-forward scoring over the ledger — model P(YES) vs the market
     // baseline, per chronological block. Reuses the records loaded for stats.
     let walkForward: WalkForwardResult | null = null;
+    let firstObsCoverage: ReturnType<typeof firstObservationCoverage> | null = null;
     // B50 #4: per-config forecast-quality A/B from the config-fingerprint stamped
     // on each ledger record. Groups resolved predictions by config → Brier skill.
     let configAttribution: ConfigAttributionRow[] | null = null;
@@ -429,6 +431,13 @@ export default async function handler(req: Request, _ctx: Context) {
             : "all";
           ledgerStats = cats.length === 1 ? parts[0] : aggregateLedgerStats(poolLabel, parts);
           const allRecs = loaded.flatMap(({ recs }) => recs);
+          // Audit P1-4: report how much of this pool is a GENUINE first-sighting
+          // observation. Rows written before B53 either carry no first-tuple at
+          // all (consumers fall back to the converged latest price) or carry one
+          // back-filled mid-life at deploy time. Both flatter the market baseline,
+          // so a "beats market" verdict computed over them is not trustworthy —
+          // and until now nothing said so.
+          firstObsCoverage = firstObservationCoverage(allRecs as any[]);
           walkForward = computeWalkForward(ledgerPointsFromRecords(allRecs), { blockCount: 5 });
           const attr = computeConfigAttribution(allRecs as any[]);
           configAttribution = attr.length > 0 ? attr : null;
@@ -593,6 +602,8 @@ export default async function handler(req: Request, _ctx: Context) {
         onlineWeightsEval,
         ledgerStats,
         walkForward,
+        // Audit P1-4: provenance of the ledger pool behind walkForward/promotionGate.
+        firstObsCoverage,
         configAttribution,
         banditEval,
         enb,
