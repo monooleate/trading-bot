@@ -1,4 +1,4 @@
-# CHANGELOG — 2026-09-09 (84. + 85. + 86. session)
+# CHANGELOG — 2026-09-09 (84-87. session)
 
 ## 84. session — a 10 bekapcsolt knob Edge-Tracker-kiértékelése (read-only) → P1 mérési hiba
 
@@ -124,3 +124,57 @@ A valós ledgeren mérve:
 A sports a ~0 körüli skilljével **érzéstelenítette** a mutatót. Kivéve látszik, milyen rosszul áll valójában a crypto+weather. Ez nem regresszió: eddig egy olyan bot maszkolta a képet, amelyik nem tud eltérni az ártól. (A −135% maga is még **pre-B53-szennyezett** — a valódi szám a tiszta forward-adattal jön.)
 
 **B37-nél visszavonandó:** amint a `pinnacleFairYes` fel van töltve, a sports forecastja független lesz az ártól → ki kell venni az `AGGREGATE_EXCLUDED`-ből.
+
+---
+
+## 87. session — crypto „lapos predikció" diagnózis (B56) + a júliusi knobok visszaállítása
+
+A user: „csináld a crypto diagnózist és állítsd vissza a júliusi knobokat." **Kód nem változott** — a diagnózis elemzés, a knob-visszaállítás futásidejű állapot.
+
+### ⚠ Korrekció: a 84. session aggregált megállapítása félrevezetett
+
+Tegnap ezt írtam: *„a crypto modell nem-informatív — `|p−0.5|` = 0.119 vs a piac 0.296"*. Ez igaz **átlagban**, de **két ellentétes rezsimet fed el**. Piac-típusonként bontva (98 ledger-sor, 91 rezolvált):
+
+| piac-típus | n | `|final−0.5|` | jel-szórás | `|ár−0.5|` | Brier | skill a base rate ellen |
+|---|---|---|---|---|---|---|
+| **threshold** (`above-K`) | 26 | **0.371** | 0.162 | 0.372 | **0.0226** | **+90.9%** (n=20) |
+| **up-or-down** | 49 | **0.037** | 0.113 | 0.267 | 0.2645 | **−6.5%** (n=48) |
+| other | 23 | 0.049 | 0.123 | 0.262 | 0.2790 | **−17.1%** (n=23) |
+
+A threshold-ág **kiváló**: olyan döntésképes, mint maga a piac, és a Brier-je a triviális 0.25 helyett **0.023**. Az up-or-down ág **rosszabb, mint a „mindig 0.5"**, és a kimenete gyakorlatilag konstans 0.5. *(Caveat: a threshold-minta részben „könnyű" — sok piac messze van a strike-tól —, tehát a +90.9% nem tiszta alfa; a kontraszt viszont valós.)*
+
+### A mechanizmus
+
+- **A threshold-ágnak strukturális horgonya van:** a `combinerKAnchorStrength` (default 1.0) a `vol_divergence` Black–Scholes digitális fair-value-jához horgonyoz, a többi jel csak igazít rajta → határozott, fizikailag megalapozott kimenet.
+- **A directional ágnak nincs horgonya:** 9 gyenge, egymásnak ellentmondó jel súlyozott átlaga — ami matematikailag 0.5 köré esik. A `combinerLogOddsStrength=1` ott aktív (a threshold-ágon a [`signal-combiner.mts:1518`](../../services/api/src/routes/signal-combiner.mts) szándékosan kihagyja), de nem segít: ellentmondó logitok súlyozott **átlaga** is 0 körül marad. **Nem a pooling romlott el — a bemenetek nem tudnak megegyezni.**
+- **A combiner súlyának ~⅓-a halott jelekre megy:** `cond_prob` `|s−0.5|`=**0.001** (0.500–0.613), `funding_rate` **0.002** (0.498–0.505), `oi_delta` **0.007** (0.352–0.533) — együtt **0.19/0.60 = a pool-súly 32%-a** gyakorlatilag konstans 0.5-tel, ami mechanikusan a 0.5 felé húz.
+
+### A trade-ek: a forecast jó, a szelekció nem
+
+Mind az 5 megkötött trade **YES**, 0.10–0.38 belépőn, **mind 0.000-ra rezolvált** (−$7…−$10). Ugyanaz a longshot-aláírás, mint a weathernél és a sportsnál. n=5, nem konkluzív, de egybevág a júliusi 37-trade audittal (a profit 4 longshoton ült).
+
+**A feszültség a lényeg:** a forecast a threshold-ágon kiváló, a trade-ek mégis buknak → a hiba a **szelekcióban/méretezésben**, nem az előrejelzésben (optimizer's curse: ott köt, ahol a modell a legjobban eltér a piactól, azaz ahol a legvalószínűbb, hogy téved). A weathernek van erre `selectionShrink`-je, a cryptónak **nincs**.
+
+**Mellék-lelet:** ugyanennek az 5 trade-nek a ledger-sora az élő bizonyíték a **B53**-ra — a ledger 0.001–0.004 árat mutat, miközben a tényleges belépők 0.10–0.38 voltak.
+
+Jelölt lépések (jóváhagyásra, egyik sincs implementálva): → [`sprints.md` B56](../roadmap/sprints.md).
+
+### A júliusi knobok visszaállítva
+
+A Phase-4 tiszta indulás a *history* mellett a **knob-override-okat is eldobta**; a boxon a `.env`-ben egyetlen bot-tuning változó sincs, a DB-ben pedig csak a 09-03-i 10 knob élt. Visszaállítva (a meglévő 10 megőrizve, a `trader-settings` POST-út pontos másával: merge → default-prune → save → `appendTrial` a DSR trial-számlálónak):
+
+| knob | vissza | default volt |
+|---|---|---|
+| `weatherSelectionShrink` | **1.0** | 0.5 |
+| `weatherMaxPositionUSD` | **15** | 25 |
+| `frMinSpreadHourly` | **0.00005** | 0.00002 |
+| `sportsSessionLossLimit` | **50** | 30 |
+| `sportsSessionLossLimitEnabled` | **1** | 0 |
+| `sessionLossLimit` (crypto) | **1000** | 20 |
+
+**Két knobot szándékosan NEM állítottam vissza:**
+
+- **`weatherInvertDirection` = 1** — a júliusi döntés akkor született, amikor a `forecast_edge` IC **−0.359** volt. A 07-23-i audit szerint az IC azóta **+0.393**-ra fordult, és a CLAUDE.md maga jelezte az ellentmondást (→ B40, sosem lezárva). Bekapcsolva a bot egy bizonyítottan **jó** irány ellen fogadna. Marad OFF.
+- **`combinerKBlindDownweight` = 0.5** — ez kizárólag a **threshold**-piacokra hat, azaz pontosan arra az ágra, amelyről a mai diagnózis kimutatta, hogy **a crypto bot egyetlen működő fele** (+90.9% skill), és ezt a mérést a jelenlegi 1.0 default mellett produkálta. A visszaállítása a működő felet módosítaná. Operátor-döntést kér.
+
+`frMinSpreadHourly` élő indoklás: a jelenleg nyitott AVAX F-arb pozíció **−0.000029** spreaddel lépett be — pont abban a churn-sávban, amit a júliusi 0.00005 bezárt.

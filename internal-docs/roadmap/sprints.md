@@ -658,6 +658,37 @@ A 2026-09-03 teljes audit (5 bot + infra + security) implementált fixei: [chang
 - **Session-reset:** a sports paper-session nullázva (bankroll $50, 0 trade); a **ledger NEM lett törölve** — az a mérési adat, és a reset a rendszerben sem érinti.
 - **B37-nél visszavonandó:** amint a `pinnacleFairYes` fel van töltve, a forecast független lesz a Polymarket ártól → a sportsot ki kell venni az `AGGREGATE_EXCLUDED`-ből.
 
+### B56 — Crypto: a „lapos predikció" diagnózisa → a directional ág az, ami nem működik 🟠 (87. session, 2026-09-09)
+
+- **Trigger:** a 84. session aggregált megállapítása („a crypto modell nem-informatív, `|p−0.5|`=0.119 vs a piac 0.296"). A user: „csináld a crypto diagnózist."
+- **⚠ Az aggregátum FÉLREVEZETETT — két ellentétes rezsimet fedett el.** Piac-típusonként bontva (98 ledger-sor, 91 rezolvált):
+
+  | piac-típus | n | `|final−0.5|` | jel-szórás | `|ár−0.5|` | Brier | skill a base rate ellen |
+  |---|---|---|---|---|---|---|
+  | **threshold** (`above-K`) | 26 | **0.371** | 0.162 | 0.372 | **0.0226** | **+90.9%** (n=20) |
+  | **up-or-down** | 49 | **0.037** | 0.113 | 0.267 | 0.2645 | **−6.5%** (n=48) |
+  | other | 23 | 0.049 | 0.123 | 0.262 | 0.2790 | **−17.1%** (n=23) |
+
+  A threshold-ág **kiváló** (a döntésképessége megegyezik a piacéval, a Brier-je a triviális 0.25 helyett 0.023); az up-or-down ág **rosszabb, mint a „mindig 0.5"** — és a kimenete gyakorlatilag konstans 0.5.
+  *(Caveat: a threshold-minta részben „könnyű" — sok piac messze van a strike-tól —, tehát a +90.9% nem tiszta alfa. De a kontraszt valós.)*
+- **Mechanizmus (kódból):** a threshold-ágnak van **strukturális horgonya** — a `combinerKAnchorStrength` (default 1.0) a `vol_divergence` Black–Scholes digitális fair-value-jához horgonyoz, a többi jel csak igazít rajta. A directional ágnak **nincs horgonya**: 9 gyenge, egymásnak ellentmondó jel súlyozott átlaga, ami matematikailag 0.5 köré esik. A `combinerLogOddsStrength=1` ott **aktív** (a threshold-ágon [`signal-combiner.mts:1518`](../../services/api/src/routes/signal-combiner.mts) szándékosan kihagyja), de nem segít: egymásnak ellentmondó logitok súlyozott **átlaga** is 0 körül marad.
+- **Ráadás: a combiner súlyának ~⅓-a halott jelekre megy.** Mért `|s−0.5|` a 98 soron:
+
+  | jel | `|s−0.5|` | tartomány | IC-súly |
+  |---|---|---|---|
+  | `cond_prob` | **0.001** | 0.500–0.613 | 0.07 |
+  | `funding_rate` | **0.002** | 0.498–0.505 | 0.05 |
+  | `oi_delta` | **0.007** | 0.352–0.533 | 0.07 |
+
+  Együtt **0.19 / 0.60 = a pool-súly ~32%-a**, gyakorlatilag konstans 0.5-tel — ez mechanikusan a 0.5 felé húzza az eredményt. (A `cond_prob` a B27 strike-szűrés óta csak azonos-strike párnál tüzel → ritkán; a `funding_rate` a ~0 funding mellett strukturálisan semleges; az `oi_delta` 09-03 óta él, eddig alig mozdul.)
+- **A 5 megkötött trade:** mind **YES**, 0.10–0.38 belépőn, **mind 0.000-ra rezolvált** (−$7…−$10). Vagyis a bot longshotot vesz és bukja — ugyanaz az aláírás, mint a weathernél/sportsnál. n=5, nem konkluzív, de egybevág a júliusi 37-trade audittal (a profit 4 longshoton ült). **A feszültség érdekes:** a forecast a threshold-ágon kiváló, a trade-ek mégis buknak → a hiba a **szelekcióban/méretezésben** van, nem az előrejelzésben (optimizer's curse — ott kereskedik, ahol a modell a legjobban eltér a piactól, azaz ahol a legvalószínűbb, hogy téved). A weathernek van erre `selectionShrink`-je, a cryptónak **nincs**.
+- **Mellék-lelet:** a 5 trade ledger-sora az élő bizonyíték a **B53**-ra — a ledger 0.001–0.004 árat mutat, miközben a tényleges belépők 0.10–0.38 voltak (utolsó-scan-ár).
+- **Jelölt lépések (jóváhagyásra, egyik sincs implementálva):**
+  1. **Directional piacok kapuzása vagy kihagyása** a scanből — 72/98 sor, 0 edge, közben hígítja a ledgert és az IC-kalibrációt. A `combinerConfidenceMin` (0.05) ma is kiszűri a legtöbbet (`|final−0.5|`=0.037), tehát a scan-idő és az adat-hígítás a valódi költség, nem a rossz trade.
+  2. **A 3 halott jel súlyának nullázása** (vagy kivezetése) amíg konstans 0.5-öt adnak — a ~32% súly felszabadítása magától élesíti a poolt.
+  3. **Selection-shrink a cryptóra** (a weather B23 mintájára), az optimizer's-curse ellen.
+  4. **Több threshold-piac** — pont ezt adja a **B51** (ETH/SOL `above-K`), tehát az már fut.
+
 ---
 
 ## ✅ Completed sprints (rolling 5 utolsó)
