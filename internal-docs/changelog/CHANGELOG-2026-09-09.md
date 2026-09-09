@@ -313,3 +313,47 @@ A σ-tágítás **monoton** transzformáció, ezért a `corr(predikció, kimenet
 2. **A knobok élesítése.** Mind default-OFF; a mért ajánlás: `weatherSigmaInflation` **2.25** + `weatherEmosSeedWeight` **0.1** (párban mérve). 
 3. **P3-16** (log-megőrzés deployok között) — infra-döntés, backlogban.
 4. **Deploy**: a `main`-re push automatikusan deployol; a munka jelenleg branchen áll.
+
+## 3. fázis — deploy + élesítés (operátor-jóváhagyás után, ugyanaznap)
+
+A user: *„igen pushold és állítsd le a sportsot, élesítsd a knobokat is ssh-zhatsz a szerverre"*.
+
+**⚠ A leállítás előtt találtam még egy hibát.** A sports `session.stopped` ága **a `resolvePendingSportsPositions` ELŐTT** tért vissza → egy leállított bot **soha nem rendezte** a nyitott pozícióit. A kért leállítás így **bennragasztotta volna a 3 nyitott pozíciót ($7,50)**, örökre lekötött cost basisszal. A settlement a stop- és a cron-kapu elé került (`9af4a2a`); a `sportsCronEnabled` ellenőrzése emiatt a dispatcherből a pillérbe költözött.
+
+**Deploy:** 9 commit → `main` (`878cede..9af4a2a`) → CI **success** → Deploy **success** (11:03). Deployolt kód == `main` (sorvég-normalizált hash 4 kulcsfájlon), konténerek fent.
+
+**A P0-3 élőben igazolva** — előtte 7 napon át minden tickben `BTC SHORT finalProb 0.0156 edge 0.9688` (a 40%-os cap blokkolta), utána:
+
+```
+BTC LONG  finalProb 0.5198  edge 4.0%
+ETH LONG  finalProb 0.5254  edge 5.1%     ← az ETH-nek ELŐSZÖR van jele
+```
+
+**Élesítés** (egyetlen tranzakcióban, a 15 meglévő override jsonb-merge-dzsel megőrizve + DSR-trial naplózva):
+
+| knob | érték | indok |
+|---|---|---|
+| `weatherSigmaInflation` | **2.25** | P0-1, a plató az élő (EMOS-be) úton |
+| `weatherEmosSeedWeight` | **0.1** | P0-2, LOO-val mérve; 0.03 alatt az effektív minta ~10-re esik |
+| `sportsCronEnabled` | **0** | sports leállítva |
+
++ a sports session `stopped=true`, `stopped_reason = "Manual stop - no odds feed (B37); system audit 2026-09-09"` — szándékosan **egyik** `isAutoStopReason` mintát sem tartalmazza, tehát a `paperNeverStop` nem oldja fel.
+
+**Élő verifikáció a következő tickben (11:13):**
+
+- **sports** → `action=skipped`, reason: *„Sports cron disabled (sportsCronEnabled = 0) — settled open positions, opened nothing"* ✓
+- **weather** → a predikciók behúzódtak a végekről, ahogy egy becsületes σ-tól várható (a mód-közeli bucketek mass-t adnak le, a tail-bucketek kapnak):
+
+| város | előtte | utána | Δ |
+|---|---|---|---|
+| munich | 0,0069 | **0,1109** | **+0,1040** |
+| london | 0,4209 | 0,2222 | −0,1987 |
+| paris | 0,3766 | 0,2172 | −0,1594 |
+| hong-kong | 0,4544 | 0,3033 | −0,1511 |
+| shanghai | 0,1826 | 0,2020 | +0,0194 |
+
+A **munich** a lényeg: 0,0069-ről kijött abból a `[0–0,15)` sávból, ami a valós belépőkön **71,4%-ban YES**-re rezolvált és a −$11,82-os összesből **−$20,68**-t vitt.
+
+**Egészség:** 0 hiba / 10 perc, 4 tick, a crypto 5 piacot scannel vegyes coinnal (BTC threshold 0,87 és 0,07 — a K-horgony dolgozik; a directional lapos 0,51, ahogy a B56 leírta).
+
+**Fontos részlet:** a `confidence` (1 − σ/4) **változatlan** maradt — a σ-infláció szándékosan az EMOS UTÁN, közvetlenül a `matchBucket` előtt hat, tehát a confidence-kaput **nem** mozgatja; a hatás az edge/Kelly úton jön. Ez a sebészi elhelyezés szándékos.
