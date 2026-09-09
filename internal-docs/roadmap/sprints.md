@@ -466,19 +466,48 @@ A korábbi B9 (Topup action) átkerült a "📋 Next sprint candidates" szekció
 - **Precondition:** friss 20–30 trade a knob-változtatások után (selectionShrink 1.0 + maxPos $15 már alkalmazva). **Becslés:** 2–3 nap.
 - **Feladat:** (1) a Kelly méret **leválasztása az ensemble-egyetértésről** — skill-alapú (realized reliability/Brier) shrinkage, hogy a legmagabiztosabban téves előrejelzés ne kapja a legnagyobb tétet; (2) σ-infláció ([B15](#b15--weather-bot-σ-calibration-refinement-)) — az alul-diszperz GFS σ nyersen megy a bucket-matcherbe; (3) **fee-modell parity**: a weather reconciler 0%, a gate 1% fee-t számol a 3.6% helyett → a paper-PnL felfelé torzul, javítandó az `applySettlementFee` mintára; (4) drága-favorit sapka (`weatherMaxPrice` vagy ár-skálázott edge-gate) — a ~0.68-áras favoritok a 2× nagyobb veszteségek forrása. Az irány JÓ (forecast_edge IC +0.393), a sizing a probléma.
 
-### B36 — HL Kelly win-prob mapping fix 🟠
+### B36 — HL Kelly win-prob mapping fix ✅ MÁR KÉSZ (2026-09-03, `534f637`) — a tracker volt elavult
 
-- **Becslés:** ~1 nap + walk-forward. **Feladat:** a [kelly-sizer.mts:60](../../netlify/functions/auto-trader/hyperliquid/kelly-sizer.mts) a Polymarket YES-resolution valószínűséget adja a perp **TP-before-SL** win-valószínűségének — ezek különböző események → ~13pp túlbizonyosság (pred 0.54 → realized 0.40), ~3× túlméretezés. Fix: geometria-tudatos `P(TP before SL) ≈ slPct/(tpPct+slPct)` driftless alap, edge-implikált drift-tilttel; edge=0 → Kelly≈0. Interim de-risk (már alkalmazható knob): `hlMaxLeverage` / `hlEdgeThresholdPaper` szigorítás.
-
+- **Megállapítva 2026-09-09 (91. session):** a fix **2026-09-03 óta a kódban van**, a tétel csak nem lett ✅-re állítva. A user „végezd el a B36-ot" kérésére a re-implementálás **duplikált, káros munka lett volna** — helyette verifikáltam.
+- **A kód** ([`kelly-sizer.mts`](../../services/worker/src/pillars/hyperliquid/kelly-sizer.mts)) pontosan a specifikált driftmentes horgonyt csinálja:
+  ```ts
+  const baseline    = 1 / (1 + rr);                 // rr = tpPct/slPct
+  const winBracket  = clamp(baseline + (dirProb - 0.5) * BRACKET_CONVICTION_SCALE);
+  rawKelly          = max(0, winBracket - (1 - winBracket) / rr);
+  ```
+  `1/(1+RR)` **azonos** a spec `slPct/(tpPct+slPct)` alakjával (tp=0.02, sl=0.01 → RR=2 → mindkettő **1/3**). A `BRACKET_CONVICTION_SCALE=0.5` az „edge-implikált drift-tilt".
+- **Az invariáns kézzel ellenőrizve:** dirProb=0.5 → winBracket=1/3, loss=2/3 → `1/3 − (2/3)/2 = 0` → **edge=0 ⇒ Kelly=0**, ahogy a spec kérte (a régi kód itt 0.25-öt adott → ~3× túlméretezés).
+- **Teszt-lefedettség:** [`kelly-sizer.test.mts`](../../services/worker/src/pillars/hyperliquid/kelly-sizer.test.mts) fejléce szó szerint *„pins the B36 fix"*; külön eset a nulla-edge → nulla méret és a baseline alatti dirProb → nulla (nincs negatív Kelly).
+- **Tanulság (a 9. audit-sáv osztálya):** a tracker és a valóság szétcsúszott — a `sprints.md` nyitottként mutatott egy hat napja élő fixet. Pont ezt a drift-osztályt fogja a **napi ellenőrzés** (91. session).
 ### B37 — Sports fair-value redesign (Pinnacle de-vig) 🔴 STRATÉGIA-ÁTÉPÍTÉS
 
 - **Állapot:** a sports bot **leállítva** (2026-07-23, operátor) — jelenleg NINCS edge-forrás. **Becslés:** több nap (külső adat + de-vig + kalibráció).
 - **Feladat:** a „fair value" jelenleg `predicted = 0.5 + (yesPrice−0.5)·0.55` ([sports/decision-engine.mts:60](../../netlify/functions/auto-trader/sports/decision-engine.mts)) — a Polymarket **saját árát** húzza 0.5 felé → strukturálisan minden olcsó longshotot túlbecsül (evGap −$2677, ~10% WR). Kell: valódi **de-viggelt Pinnacle/sharp-book** referencia, belépés csak `devigged_true − pm_price > fee` esetén. Sub-fixek: NO-oldali edge leg-mismatch (`|P(YES) − noPrice|` a helyes `|P(NO) − noPrice|` helyett, ~3× felfújt edge, [sports/decision-engine.mts:82](../../netlify/functions/auto-trader/sports/decision-engine.mts)); paper settlement fee-parity (jelenleg 0%). **Amíg ez nincs → a bot maradjon leállítva/loss-limit-capelve** (`sportsSessionLossLimitEnabled=1` már alkalmazva).
 
-### B38 — Crypto tail-de-selection + korreláció-tudatos aggregát pozíció-cap 🟡
+### B38 — Crypto tail-de-selection + korreláció-tudatos aggregát pozíció-cap 🟡 ELŐKÉSZÍTVE 2026-09-09 (91. session)
 
-- **Feladat:** a crypto profit 4 longshot-találaton ül (top-4 +$801, a maradék 33 trade −$111; evGap −$454). (1) `selectionShrink` a szélső bucketekre (marketPrice <0.20 / >0.80) a grossEdge előtt; (2) `cryptoMaxEdgeCap` 0.40→~0.22 + `btcMinPriceBand` >0.10 (a 12¢-os szerződésen a 40%-os „edge" ne legyen kereskedhető); (3) **korreláció-tudatos aggregát cap**: az azonos-underlying/azonos-resolution-window nyitott pozíciók összes költségalapja ≤ ~15–20% bankroll (jelenleg 8%×5 slot ≈ 34% egyetlen BTC-mozgásra). Precondition a tétemelésre: [B11](#b11--walk-forward-backtest-framework--kritikus-infra) walk-forward.
+> **Előkészítés, NEM implementáció.** A user kérése: „a B38-at készítsd elő." Az alábbi a végrehajtható terv, frissítve azzal, ami a 2026-07-23-i eredeti felvetés óta **már megépült**.
 
+**Eredeti feladat (2026-07-23):** a crypto profit 4 longshot-találaton ült (top-4 +$801, a maradék 33 trade −$111; evGap −$454). Három alpont: (1) `selectionShrink` a szélső bucketekre, (2) `cryptoMaxEdgeCap` + `btcMinPriceBand` szigorítás, (3) korreláció-tudatos aggregát cap.
+
+#### Mi változott azóta — mit NE építsünk újra
+
+- **(3) nagyrészt LEFEDVE.** A **B49 #2** [`checkBetaCap`](../../packages/core/src/portfolio-exposure.mts) él (`betaCapEnabled=1`, `betaCapFraction=0.25`): a crypto + HL **együttes** kitettséget capeli a kombinált bankroll 25%-ára. Ez **tágabb**, mint amit a B38 kért (csak crypto), és aktív.
+  **Maradék rés:** nem szegmentál **rezolúciós ablak** szerint — az azonos napra lejáró piacok egyetlen korrelált fogadás, amit a beta-cap nem lát. Ez az egyetlen valóban hiányzó darab a (3)-ból.
+- **Risk-overlay-ek élnek** (`riskVolTargetEnabled`, `riskDdKillEnabled`, B49 #8) — a drawdown-oldal is fedve.
+- **A (2) egyik fele megvan:** a `btcMinPriceBand` **0.10** default aktív (deep-OTM kizárva). A `maxEdgeCap` szigorítás nyitva.
+
+#### Friss bizonyíték (2026-09-09)
+
+- **Mind az 5 megkötött crypto trade** YES volt **0.10–0.38** belépőn, és **mind 0.000-ra rezolvált** (−$7…−$10). Ugyanaz a longshot-aláírás. **n=5 — nem elég egy live-feature-höz**, ezért ez a tétel előkészítés marad.
+- **A B56 kontextusa fontos:** a threshold-ág forecastja **jó** (+90.9% skill a base rate ellen, n=20), a trade-ek mégis buknak → a hiba a **szelekcióban**, nem az előrejelzésben (optimizer's curse). Ez pontosan a B38 tárgya, és megerősíti az (1) alpontot.
+
+#### Végrehajtási terv (mérés-first)
+
+1. **Előbb mérni, aztán építeni.** A **B56b** tanulsága: egy plauzibilis „nyilvánvaló" javítás a valós ledgeren szimulálva **rontott** (Brier 0.2696 → 0.2889). A `selectionShrink` hatását ugyanígy kell szimulálni a ledgeren, **mielőtt** kódba kerül.
+2. **Precondition: tiszta adat.** Ma **1** olyan rezolvált sor van az egész rendszerben, aminek a first-observationje tiszta (B53+B61). Az (1) alpont kalibrálása szennyezett baseline-on értelmetlen → **B53 után ≥30 tiszta crypto sor** a belépő.
+3. **Amikor van adat:** (1) `cryptoSelectionShrink` knob, **default 0 = no-op**, a grossEdge előtt, a szélső ár-bucketekre; (2) `maxEdgeCap` plateau-sweep (**nem** a csúcs — [`@core/plateau.mts`](../../packages/core/src/plateau.mts) `selectPlateau`); (3) rezolúciós-ablak-tudatos aggregát cap a meglévő `checkBetaCap` **mellé**, nem helyette.
+4. **Kimenet-ellenőrzés:** a promóciós kapu (B50 #1) döntse el, nem a PnL.
 ### B39 — evGap net-of-fee baseline 🟡
 
 - **Feladat:** a `tradeEv()` ([edge-tracker/statistics.mts](../../netlify/functions/edge-tracker/statistics.mts)) EV-baseline-ja **bruttó** a fee-re, miközben a realizált PnL nettó → az evGap fix ≈ −Σfee biast hordoz, ami összemossa a „modell-optimizmust" a puszta fee-drag-gel (a crypto/HL evGap-riasztások részben ez az artefakt). Fix: a fee levonása a `tradeEv`-ben (`max(proceeds,costBasis)·feePct` mintára), vagy a bias explicit dokumentálása a mezőn.

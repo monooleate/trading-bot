@@ -1,4 +1,4 @@
-# CHANGELOG — 2026-09-09 (84-89. session)
+# CHANGELOG — 2026-09-09 (84-91. session)
 
 ## 84. session — a 10 bekapcsolt knob Edge-Tracker-kiértékelése (read-only) → P1 mérési hiba
 
@@ -386,3 +386,34 @@ A `fc21251` BUILD_INFO-lépése `printf 'sha=%s\nbuiltAt=%s\n'`-t használt, de 
 ### Egészség a végén
 
 0 hiba, tickek futnak, sports `stopped=true` és kihagyva, HL mindkét coinon józan jel (`BTC LONG 0.524 / 4,8%`, `ETH LONG 0.5308 / 6,2%`), BUILD_INFO a konténerben.
+---
+
+## 91. session — B36 lezárva (már kész volt), B38 előkészítve, napi drift-ellenőrzés beállítva
+
+A user: „állítsd be a heti ellenőrzést, de most napi legyen amíg megbizonyosodunk hogy minden rendben! illetve végezd el a B36-ot és a B38-at készítsd elő."
+
+### B36 — nem elvégezni kellett, hanem lezárni
+
+**A fix 2026-09-03 óta a kódban van** (`534f637`, „audit batch 1: P0 HL persistence + P1 correctness fixes"), a `sprints.md` viszont nyitottként mutatta. A re-implementálás duplikált, káros munka lett volna — helyette **verifikáltam**:
+
+- [`kelly-sizer.mts`](../../services/worker/src/pillars/hyperliquid/kelly-sizer.mts): `baseline = 1/(1+rr)`, ami **azonos** a spec `slPct/(tpPct+slPct)` alakjával (tp=0.02, sl=0.01 → RR=2 → mindkettő **1/3**); a `BRACKET_CONVICTION_SCALE=0.5` az edge-implikált drift-tilt.
+- **Az invariáns kézzel ellenőrizve:** dirProb=0.5 → winBracket=1/3, loss=2/3 → `1/3 − (2/3)/2 = 0`, azaz **edge=0 ⇒ Kelly=0**. A régi kód itt 0.25-öt adott (~3× túlméretezés).
+- [`kelly-sizer.test.mts`](../../services/worker/src/pillars/hyperliquid/kelly-sizer.test.mts) fejléce szó szerint *„pins the B36 fix"*, külön esettel a nulla-edge → nulla méretre.
+
+**Ez maga is drift-lelet** (a 9. audit-sáv osztálya): a tracker hat napja élő fixet mutatott nyitottként.
+
+### B38 — előkészítve, nem implementálva
+
+A lényeg, ami a 2026-07-23-i felvetés óta változott: a **(3) alpont nagyrészt LEFEDVE**. A B49 #2 [`checkBetaCap`](../../packages/core/src/portfolio-exposure.mts) él (`betaCapEnabled=1`, 0.25), és a crypto+HL **együttes** kitettséget capeli — tágabban, mint amit a B38 kért. **Maradék rés:** nem szegmentál rezolúciós ablak szerint (az azonos napra lejáró piacok egyetlen korrelált fogadás). A `btcMinPriceBand=0.10` szintén aktív, a `maxEdgeCap` szigorítás nyitva.
+
+Friss bizonyíték: mind az 5 megkötött crypto trade YES volt 0.10–0.38 belépőn és mind 0.000-ra rezolvált — **n=5, nem elég** live-feature-höz, ezért marad előkészítés. A **B56** megerősíti az (1) alpontot: a threshold-forecast **jó** (+90.9%), a trade-ek mégis buknak → a hiba a szelekcióban van, nem az előrejelzésben.
+
+**Végrehajtási sorrend a tervben:** (1) előbb szimuláció a ledgeren — a **B56b** tanulsága, hogy egy plauzibilis javítás mérve **ronthat** (Brier 0.2696 → 0.2889); (2) precondition **≥30 tiszta crypto sor** (ma 1 van az egész rendszerben); (3) csak azután knob, default-0; (4) a döntést a promóciós kapu hozza, nem a PnL.
+
+### Napi drift-ellenőrzés
+
+Lokális ütemezett feladat (`edgecalc-drift-check`, minden nap 08:00 helyi idő). **Szándékosan NEM felhő-routine**: annak nincs SSH-ja a boxhoz, tehát pont az élő állapotot nem látná — márpedig a drift ott keletkezik.
+
+Nyolc read-only ellenőrzés: knob-override-ok vs. CLAUDE.md · session-állapotok (az F-Arb a `blob_kv`-ben, nem a normalizált táblában!) · bankroll-ugrás · **tiszta first-observation számláló** (ma 1, nőnie kell) · `codeVersion`-stamp vs. box `BUILD_INFO` · recorderek frissessége · deploy-szinkron · konténer-egészség. Csak eltérést jelent; nem javít, nem dönt.
+
+Amíg meg nem bizonyosodunk, hogy minden stabil, **napi**; utána heti.
