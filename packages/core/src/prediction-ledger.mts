@@ -25,6 +25,7 @@
 //    kept until capped out.
 
 import { getStore } from "@netlify/blobs";
+import { currentCodeVersion } from "./build-info.mts";
 
 const LEDGER_STORE = "prediction-ledger";
 const DEFAULT_CAP = 3000;             // records per category (append-only rolling)
@@ -62,6 +63,15 @@ export interface PredictionRecord {
   // observed case, 2412 scans after `firstTs` — so it is not a pre-convergence
   // horizon and must not be counted as clean evidence. Absent/false ⇒ genuine.
   firstBackfilled?: boolean;
+  // WHICH CODE produced this prediction. `configHash` above hashes the runtime
+  // KNOBS only — no commit, no build id — so two materially different code
+  // regimes share an arm whenever a deploy lands without a knob change.
+  // Measured live 2026-09-09: arm `e03b4835` spans 10:45:41 → 11:07:11, a window
+  // containing the audit deploy at 11:03 that rewrote the HL signal source, the
+  // ledger rules, the IC blend and the fill check. Latched with the rest of the
+  // first-sighting tuple, so it names the code that made the FIRST prediction,
+  // matching `firstConfigHash`. See @core/build-info.mts.
+  codeVersion?: string;
   direction: string;                  // side the bot took / would take (YES/NO/LONG/SHORT)
   taken: boolean;                     // did the bot ever open a position here?
   lastAction: string;                 // position_opened / skip / failed / error
@@ -172,6 +182,7 @@ export function upsertRecords(
         firstPredictedProb: inc.predictedProb,
         firstMarketPrice: inc.marketPrice,
         firstConfigHash: inc.configHash ?? null,
+        codeVersion: currentCodeVersion(),
         direction: inc.direction,
         taken: inc.taken,
         lastAction: inc.lastAction,
@@ -204,6 +215,11 @@ export function upsertRecords(
       // now tell a genuine first sighting from a laundered one and report or
       // exclude accordingly. See `isCleanFirstObservation` below.
       if (prev.firstPredictedProb == null) prev.firstBackfilled = true;
+      // Same write-once rule. A back-filled row gets the CURRENT build, which is
+      // not the one that made its first prediction — `firstBackfilled` already
+      // marks that whole tuple as untrustworthy, and codeVersionSpread treats a
+      // mix as mixed either way.
+      prev.codeVersion ??= currentCodeVersion();
       prev.firstPredictedProb ??= prev.predictedProb;
       prev.firstMarketPrice ??= prev.marketPrice;
       prev.firstConfigHash ??= prev.configHash ?? null;

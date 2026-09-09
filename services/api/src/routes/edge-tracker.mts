@@ -39,6 +39,7 @@ import {
   firstObservationCoverage,
   type LedgerStats,
 } from "@core/prediction-ledger.mts";
+import { codeVersionSpread } from "@core/build-info.mts";
 import {
   computeWalkForward,
   ledgerPointsFromRecords,
@@ -419,6 +420,7 @@ export default async function handler(req: Request, _ctx: Context) {
     // baseline, per chronological block. Reuses the records loaded for stats.
     let walkForward: WalkForwardResult | null = null;
     let firstObsCoverage: ReturnType<typeof firstObservationCoverage> | null = null;
+    let codeSpread: ReturnType<typeof codeVersionSpread> | null = null;
     // B50 #4: per-config forecast-quality A/B from the config-fingerprint stamped
     // on each ledger record. Groups resolved predictions by config → Brier skill.
     let configAttribution: ConfigAttributionRow[] | null = null;
@@ -454,6 +456,12 @@ export default async function handler(req: Request, _ctx: Context) {
           walkForward = computeWalkForward(ledgerPointsFromRecords(allRecs), { blockCount: 5 });
           const attr = computeConfigAttribution(allRecs as any[]);
           configAttribution = attr.length > 0 ? attr : null;
+          // Peer finding (2026-09-09, lane 7): `configHash` hashes the runtime
+          // KNOBS only, so an arm silently spans every deploy that landed without
+          // a knob change. Report which arms mix code regimes rather than letting
+          // an A/B verdict be read off a pool that is not an A/B at all.
+          const spread = codeVersionSpread(allRecs as any[]);
+          codeSpread = spread.length > 0 ? spread : null;
           // #8: unify the forgetting half-life with the icHalfLifeTrades knob
           // (>0), else a sensible default of 75 resolved predictions.
           let halfLifeSteps = 75;
@@ -630,6 +638,8 @@ export default async function handler(req: Request, _ctx: Context) {
         walkForward,
         // Audit P1-4: provenance of the ledger pool behind walkForward/promotionGate.
         firstObsCoverage,
+        // Peer finding: which attribution arms mix >1 code regime.
+        codeSpread,
         configAttribution,
         banditEval,
         enb,

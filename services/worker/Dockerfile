@@ -10,6 +10,10 @@ RUN bun install
 
 # source
 COPY tsconfig.json ./
+# Provenance for the prediction ledger: the box tree has no .git, so the running
+# code cannot identify itself otherwise. CI overwrites this file with the
+# deployed commit before rsync; the tracked placeholder reads sha=dev.
+COPY BUILD_INFO ./
 COPY packages/ ./packages/
 COPY services/ ./services/
 

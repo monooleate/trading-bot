@@ -59,6 +59,23 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
+      # The box tree has no `.git` (excluded from the rsync below), so the running
+      # code cannot identify itself after the fact. Without this, the prediction
+      # ledger's `configHash` — which hashes runtime KNOBS only — is the sole
+      # provenance on a row, and two different code regimes silently share one
+      # attribution arm whenever a deploy lands without a knob change. Measured
+      # 2026-09-09: arm `e03b4835` spanned the audit deploy that rewrote the HL
+      # signal source, the ledger rules, the IC blend and the fill check.
+      - name: Stamp BUILD_INFO with the deployed commit
+        if: steps.chk.outputs.configured == 'true'
+        run: |
+          set -euo pipefail
+          SHA="${{ github.event.workflow_run.head_sha || github.sha }}"
+          printf 'sha=%s
+builtAt=%s
+' "$SHA" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > BUILD_INFO
+          echo "BUILD_INFO:"; cat BUILD_INFO
+
       - name: Rsync + rebuild over SSH
         if: steps.chk.outputs.configured == 'true'
         env:
