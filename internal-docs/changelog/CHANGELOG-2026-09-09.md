@@ -1,4 +1,4 @@
-# CHANGELOG — 2026-09-09 (84-88. session)
+# CHANGELOG — 2026-09-09 (84-89. session)
 
 ## 84. session — a 10 bekapcsolt knob Edge-Tracker-kiértékelése (read-only) → P1 mérési hiba
 
@@ -216,3 +216,43 @@ Ráadásul kevésbé döntésképes kimenetet ad (0.032 vs 0.041), ami a `combin
 A mérés **crypto** directional sorokon készült; a knob **globális**, tehát a HL-t is érinti — ott viszont mindössze **2 ledger-sor** van, azaz mérhetetlen. Ezért ez **nem új fogadás, hanem visszaállás a kód-defaultra** az egyetlen létező bizonyíték alapján. A minta pre-B53 (szennyezett piaci ár), de a modell-oldali `|p−0.5|` és a base-rate-skill ettől független.
 
 **Élő knob-állapot 15 override:** a 09-03-i 10-ből 9 marad (a `combinerLogOddsStrength` kivezetve) + a 6 visszaállított júliusi.
+
+---
+
+## 89. session — B57: coin-diverzifikált crypto scan-slotok, ablak 3 → 5
+
+A user: „a threshold piacokra fókuszáljunk, mit tehetünk még? illetve mi kell hogy a BTC is szállítsa amit az ETH/SOL már szállít?" majd: „csináld az 1-est, ablak 5-re, illetve a többit ha javaslod."
+
+### A premissza fordítva volt
+
+A B51 (multi-coin) deploy óta eltelt 26 órában a crypto ledger: **BTC threshold 25 sor, ETH threshold 1, SOL 0.** Nem a BTC-vel van baj — az **ETH/SOL soha nem került a scan-ablakba**.
+
+Ok: [`pillars/index.mts`](../../services/worker/src/pillars/index.mts) `markets.slice(0, 3)` — top-3 nyers 24h-volumen szerint. Az élő Gamma-rangsor (2026-09-09): **171 crypto piac, ebből 154 threshold** (bitcoin 77 · ethereum 44 · solana 33; up-or-down mindössze **6**), és a **BTC birtokolja az első ötöt** — az ETH legjobbja a #6, a SOL a top 12-ben sem szerepel. A B51 helyesen coin-aware-ré tette a kódot, de a volumen-rangsor minden slotot a BTC-nek adott.
+
+### A fix
+
+Új pure modul [`@core/scan-slots.mts`](../../packages/core/src/scan-slots.mts): `selectScanSlots(markets, {windowSize, minPerCoin})`. A volumen marad az **elsődleges** rangsor (likviditás-proxy, amitől a B49 #1 fill-modell függ), de **minden jelen lévő coin kap egy fenntartott slotot**; a maradékot szigorúan volumen tölti. Round-robin a tartalék-osztásnál (több coin mint slot esetén se egyen fel egy coin mindent), a kimenet volumen-sorrendben marad. **Egyetlen coin vagy `minPerCoin=0` esetén bit-azonos a régi `slice(0,N)`-nel.**
+
+[24 pinelt assert](../../packages/core/src/scan-slots.test.mts), köztük a valós 2026-09-09-es rangsor regressziós esete.
+
+**Ablak 3 → 5**, új Settings-knob `cryptoScanWindow` (default 5, 1–12) + env `CRYPTO_SCAN_WINDOW`. Azért Settings-tunable, mert **ez a bot fő külső-API tárcsája**: minden slot egy TELJES signal-combiner futás ~8 külső fetch-csel, tehát 3 → 5 ≈ **+67% külső hívás**; rate-limit esetén deploy nélkül visszavehető.
+
+**Élő szimuláció a valós rangsoron:**
+
+```
+RÉGI (top-3):   BTC:above-82k  BTC:above-74k  BTC:above-72k
+ÚJ  (5, kvóta): BTC:above-82k  BTC:above-74k  BTC:above-72k  ETH:above-2600  SOL:above-110
+```
+
+A 3 BTC slot **változatlan** → nulla regresszió a bot egyetlen működő ágán.
+
+### Amit szándékosan NEM csináltam
+
+- **„Okosabb" rangsor a volumen helyett (a saját #3 javaslatom) — elvetve.** Egy bizonyíték nélküli opportunity-score pontosan az a plauzibilis heurisztika, amiről a **B56b** mérése kimutatta, hogy árt (a „nyilvánvaló" combiner-tisztítás Brier 0.2696 → 0.2889). A slot-fenntartás **lefedettségi** döntés, nem új alfa-állítás.
+- **SOL kizárása a gyengébb σ miatt (#4).** Deribit-opció csak BTC/ETH-re van, a SOL horgonya modell-σ-ra épül — de ez nem ok a kizárásra: a `combinerConfidenceMin` + `resolution-risk` kapuk kezelik a gyenge predikciót, a logolt sor pedig értékes adat. A kvóta coinonként **1** maradt, hogy a SOL ne kapjon aránytalan súlyt.
+
+### ⚠ Őszinte korlát a „threshold-fókuszhoz"
+
+A threshold-ág a base rate-et fényesen veri (**+90.9%**, n=20), **de a piaci árat nem**: Brier modell **0.0226** vs piac **0.0166**; a nem-konvergált 17 soron **−23.9%**. A piaci baseline B53-szennyezett (tehát a valós szám ennél jobb), de **bizonyítottan pozitív edge NINCS**.
+
+Ezért a lefedettség-bővítés indoka elsősorban a **bizonyíték-gyűjtés üteme**, nem egy ismert profit. A kérdést a B53 tiszta mérése fogja eldönteni — most 3 helyett 5 piac/tick és 3 coin táplálja.

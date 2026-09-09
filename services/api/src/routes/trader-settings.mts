@@ -56,6 +56,7 @@ const SCHEMA: Record<string, FieldSpec> = {
   // resolution, no simulator. Old Blobs overrides are silently ignored
   // by `loadRuntimeOverrides()` since the keys are no longer in SCHEMA.
   btcMinPriceBand:      { default: 0.10,    min: 0.02,    max: 0.30,    label: "Min YES price (deep-OTM cut)", step: 0.01, unit: "frac", category: "crypto", group: "Market finder", help: "Az olyan piacokat skippeljük, ahol a YES ár 0.10 alatt vagy 0.90 felett van — ezeken a depth alig 1-2 share, nem realisztikus paper-ben filltetni. A 141 paper trade $0.01 entry probléma fő javítása." },
+  cryptoScanWindow:     { default: 5,       min: 1,       max: 12,      label: "Scan window (markets / tick)", step: 1, unit: "count", category: "crypto", group: "Market finder", help: "Hány crypto piacot néz a bot tickenként. A slotok COIN-DIVERZIFIKÁLTAK (B57): a 24h-volumen rangsorol, de minden jelen lévő coin kap egy fenntartott slotot — enélkül a BTC vinné mindet (2026-09-09 mérés: 171 élő piacból a BTC birtokolta a top ötöt, az ETH legjobbja a #6, a SOL a top 12-ben sem volt, így a B51 multi-coin scan 26 óra alatt 1 ethereum és 0 solana sort adott). ⚠ KÖLTSÉG: minden slot egy TELJES signal-combiner futás ~8 külső fetch-csel, tehát ez a bot fő külső-API tárcsája — 3-ról 5-re emelés ~+67% hívás. Csökkentsd, ha rate-limitbe futsz." },
   // ─── Decision-engine gate knobs (2026-05-11 audit fixes) ─────────
   // The legacy $1 minimum position size silently padded sub-Kelly sizes
   // up to $1 — a 13× over-sizing for 0.03% Kelly fractions on a $250

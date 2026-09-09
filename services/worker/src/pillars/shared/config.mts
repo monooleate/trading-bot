@@ -130,6 +130,25 @@ export async function getEffectiveBetaCap(): Promise<{ enabled: boolean; fractio
   }
 }
 
+// B57: how many crypto markets the runner scans per tick. Each slot costs a
+// FULL signal-combiner run (~8 external fetches), so this is the bot's main
+// external-API dial — Settings-tunable so the operator can trade coverage
+// against API load without a deploy. The slots are coin-diversified
+// (@core/scan-slots.mts): volume still ranks, but every coin present gets one
+// reserved slot, otherwise BTC takes them all.
+export async function getEffectiveCryptoScanWindow(): Promise<number> {
+  const envN = parseInt(process.env.CRYPTO_SCAN_WINDOW || "5", 10);
+  const fallback = Number.isFinite(envN) && envN > 0 ? envN : 5;
+  try {
+    const mod: any = await import("@api/routes/trader-settings.mts");
+    const ov = await mod.loadRuntimeOverrides();
+    const n = ov.cryptoScanWindow;
+    return typeof n === "number" && Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 // Portfolio risk overlays (B49 #8): vol-target + drawdown kill-switch. Env
 // defaults OFF; `common` Blobs knobs override. Read once per tick by the runner.
 export async function getEffectiveRiskOverlay(): Promise<{

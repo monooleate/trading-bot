@@ -7,7 +7,9 @@
 
 import type { Context } from "@netlify/functions";
 import { checkAuth } from "@api/routes/_auth-guard.ts";
-import { CORS, getTraderConfig, getEffectiveTraderConfig, getEffectiveBtcExitConfig, getBtcExitConfig, getEffectiveBetaCap, getEffectiveRiskOverlay } from "./shared/config.mts";
+import { CORS, getTraderConfig, getEffectiveTraderConfig, getEffectiveBtcExitConfig, getBtcExitConfig, getEffectiveBetaCap, getEffectiveRiskOverlay,
+  getEffectiveCryptoScanWindow,
+} from "./shared/config.mts";
 import { loadPortfolioBetaSnapshot } from "./shared/portfolio-exposure.mts";
 import { cryptoExposureUsd, checkBetaCap } from "@core/portfolio-exposure.mts";
 import { realisedVol, volTargetMultiplier, drawdownKill } from "@core/risk-overlay.mts";
@@ -29,6 +31,7 @@ import { computeLiveReadiness, shouldForcePaper, type LiveReadinessReport } from
 import { appendPredictions, reconcileLedger } from "@core/prediction-ledger.mts";
 import { PAPER_SIM_VERSION } from "./crypto/session-manager.mts";
 import { findBtcMarkets } from "./crypto/btc-market-finder.mts";
+import { selectScanSlots } from "@core/scan-slots.mts";
 import { aggregateSignals } from "./crypto/signal-aggregator.mts";
 import { makeDecision, setCooldown, padCryptoGates, warmCooldownCache } from "./crypto/decision-engine.mts";
 import { placeBuyOrder } from "./crypto/execution.mts";
@@ -547,19 +550,24 @@ async function runCryptoTrader(
   const riskOverlay = await getEffectiveRiskOverlay();
   const results: any[] = [];
   // Build the scan list:
-  //   - top 3 by Gamma's volume24hr ranking (the bot's normal entry universe)
-  //   - PLUS any open-position market not in top 3 (so the open position's
-  //     Why? Live-Gates panel renders fresh data even when the market
-  //     slipped below top 3 — typical once the position is in profit / deep
-  //     OTM after BTC's intraday move)
-  const top3 = markets.slice(0, 3);
-  const top3Slugs = new Set(top3.map((m) => m.slug));
-  const extraOpen = markets.filter((m) => activeOpenSlugs.includes(m.slug) && !top3Slugs.has(m.slug));
-  const scanList = [...top3, ...extraOpen];
-  // Dropped list = markets below top 3 AND not an open-position carve-out.
-  // The carve-outs are scanned, just for live-gate purposes, not for new entries.
+  //   - `cryptoScanWindow` slots, COIN-DIVERSIFIED (B57): still ranked by
+  //     Gamma's volume24hr, but each coin present is guaranteed one slot first.
+  //     A pure volume cut handed every slot to BTC — measured 2026-09-09, BTC
+  //     owned the top FIVE of 171 live markets, so the B51 multi-coin scan
+  //     produced 1 ethereum and 0 solana rows in its first 26 hours.
+  //   - PLUS any open-position market outside the window (so the open
+  //     position's Why? Live-Gates panel renders fresh data even when the
+  //     market slipped down the ranking — typical once the position is in
+  //     profit / deep OTM after an intraday move)
+  const scanWindow = await getEffectiveCryptoScanWindow();
+  const topN = selectScanSlots(markets, { windowSize: scanWindow, minPerCoin: 1 });
+  const topNSlugs = new Set(topN.map((m) => m.slug));
+  const extraOpen = markets.filter((m) => activeOpenSlugs.includes(m.slug) && !topNSlugs.has(m.slug));
+  const scanList = [...topN, ...extraOpen];
+  // Dropped list = markets outside the window AND not an open-position
+  // carve-out. The carve-outs are scanned for live-gate purposes, not entries.
   const droppedMarkets = markets
-    .slice(3)
+    .filter((m) => !topNSlugs.has(m.slug))
     .filter((m) => !activeOpenSlugs.includes(m.slug))
     .map((m) => ({
       slug: m.slug,

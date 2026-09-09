@@ -372,7 +372,21 @@ edge-tracker storage-ba kerülnek.
 
 ---
 
-## 10. Crypto bot tunable-ok (11 db)
+### `CRYPTO_SCAN_WINDOW` 🟢 OPCIONÁLIS (default 5) — B57
+
+- **Mire való:** hány crypto piacot néz a runner tickenként. A slotok
+  **coin-diverzifikáltak**: a 24h-volumen rangsorol, de minden jelen lévő coin
+  kap egy fenntartott slotot ([`@core/scan-slots.mts`](../../packages/core/src/scan-slots.mts))
+  — enélkül a BTC vinné mindet (2026-09-09: 171 élő piacból a BTC birtokolta a
+  top ötöt, az ETH legjobbja #6, a SOL a top 12-ben sem volt).
+- **⚠ Költség:** minden slot egy **teljes signal-combiner futás ~8 külső
+  fetch-csel** → ez a bot fő külső-API tárcsája. 3 → 5 ≈ **+67% hívás**.
+- **Settings-knob:** `cryptoScanWindow` (1–12) — deploy nélkül állítható, ha
+  rate-limitbe futsz.
+
+---
+
+## 10. Crypto bot tunable-ok (12 db)
 
 A crypto bot kereskedési paraméterei. Mind override-olható a Settings
 tab-ról redeploy nélkül.
