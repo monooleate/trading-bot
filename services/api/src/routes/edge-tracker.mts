@@ -570,7 +570,8 @@ export default async function handler(req: Request, _ctx: Context) {
         const settings: any = await import("./trader-settings.mts");
         const ov = await settings.loadRuntimeOverrides();
         const k = typeof ov.calibrationShrinkageK === "number" ? ov.calibrationShrinkageK : 30;
-        const useRealizedIC = ov.useRealizedIC === 1;
+        // Audit P1-6: honour the SCHEMA default (see trader-settings.effectiveFlag).
+        const useRealizedIC = settings.effectiveFlag(ov, "useRealizedIC");
         const effective = record
           ? computeEffectiveICs(SIGNAL_ICS_PRIORS, record, k)
           : { ...SIGNAL_ICS_PRIORS };

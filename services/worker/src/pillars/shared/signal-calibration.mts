@@ -52,6 +52,9 @@ type SignalName = (typeof SIGNALS)[number];
 
 export interface SignalCalibration {
   ic: number;          // Pearson(score, win) on closedTrades
+  /** Audit P1-5: true ⇒ `ic: 0` means UNMEASURABLE (no variance on one side),
+   *  not "measured zero skill". Consumers must not treat it as evidence. */
+  degenerate?: boolean;
   n:  number;          // # closed trades where this signal had a non-null score
 }
 
@@ -130,6 +133,19 @@ export function computeRealizedICs(
     const n = scores.length;
     if (n < 4) {
       out[name] = { ic: 0, n };
+      continue;
+    }
+    // Audit P1-5: distinguish "measured no correlation" from "could not measure".
+    // Pearson needs variance on BOTH sides; with a constant outcome vector (every
+    // trade a win, every trade a loss, or — as in the HL pnl-mapping bug — every
+    // trade mislabelled) the denominator is zero and the correlation comes back
+    // as a clean-looking 0. That reads downstream as "this signal has no skill",
+    // which is a much stronger and quite different claim. Flag it instead, so a
+    // broken pipe cannot masquerade as evidence.
+    const outcomeVaries = outcomes.some((o) => o !== outcomes[0]);
+    const scoreVaries = scores.some((v) => v !== scores[0]);
+    if (!outcomeVaries || !scoreVaries) {
+      out[name] = { ic: 0, n, degenerate: true };
       continue;
     }
     let ic: number;
@@ -236,6 +252,13 @@ export function effectiveICs(
   for (const [name, prior] of Object.entries(priors)) {
     const cal = (calibration.perSignal as any)[name];
     if (!cal || typeof cal.ic !== "number" || typeof cal.n !== "number") continue;
+    // Audit P1-5: a degenerate record carries ic 0 because it could not be
+    // measured, not because the signal has no skill. Blending it would shrink a
+    // perfectly good academic prior toward zero on the strength of no evidence
+    // at all — which is precisely what the HL pnl-mapping bug would have done
+    // to all eight signals the moment `useRealizedIC` was switched on. Keep the
+    // prior instead.
+    if (cal.degenerate === true) continue;
     out[name] = shrinkageBlend(cal.ic, prior, cal.n, k);
   }
   return out;

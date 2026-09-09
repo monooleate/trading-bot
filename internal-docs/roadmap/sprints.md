@@ -772,6 +772,21 @@ A 2026-09-03 teljes audit (5 bot + infra + security) implementált fixei: [chang
 - **Teszt:** [`prediction-ledger.test.mts`](../../packages/core/src/prediction-ledger.test.mts) — új sor **nem** kap flaget; rescan **nem** teszi utólag piszkossá; egy 2412-scanes pre-B53 sor back-fillje **kötelezően flagelt**, miközben az érték a refresh ELŐTTI marad; a flag maga is write-once; és a coverage a **három valós állapotot** külön bontja.
 - **Következmény, amit tudni kell:** a jelenlegi `cleanFraction` gyakorlatilag **0** — a tiszta mérés csak az innen induló, újonnan nyíló piacoktól tölt fel. A promóciós kapu addig **nem** hozhat érvényes „beats market" verdiktet.
 
+### B62 — HL realized-IC strukturálisan 0 + a `useRealizedIC` default inert (audit P1-5 + P1-6) ✅ IMPLEMENTED 2026-09-09 (90. session)
+
+**P1-5 — a mérés törött volt.** Az élő `signal-calibration-v1` store a hyperliquidre **mind a 8 jelnél pontosan `{"ic":0,"n":10}`**-t tartalmazott — miközben a 10 HL trade **6 nyerő / 4 vesztő**. Nyolc független jelnél a *pontosan* 0,0 nem mérés, hanem törött cső.
+
+- **Ok:** a [`HlClosedTrade`](../../services/worker/src/pillars/hyperliquid/types.mts) `pnlUSDC`-t hordoz, **`pnl` mezője nincs**; a [`computeRealizedICs`](../../services/worker/src/pillars/shared/signal-calibration.mts) viszont `t.pnl > 0`-t értékel → `undefined > 0` = false → **minden trade veszteségnek címkézve** → konstans outcome-vektor → Pearson nevezője 0. A runner `genericTrades` mappingje (`{...t, direction, category}`) csak az irányt fordította le. **Ugyanez a hiba-osztály**, amit a fölötte lévő komment már egyszer javított a `t.side`-ra — ugyanabban a függvényben, élőben.
+- **Fix:** `pnl: Number(t.pnlUSDC ?? 0)` a mappingbe.
+- **+ Új „degenerate" jelzés.** A `computeRealizedICs` mostantól megkülönbözteti a **„mértük, nincs korreláció"**-t a **„nem tudtuk mérni"**-től: ha az outcome- VAGY a score-vektor konstans, `{ic: 0, n, degenerate: true}`. Eddig mindkettő tiszta 0-ként jött ki, amit a downstream „ennek a jelnek nincs skillje"-ként olvas — jóval erősebb és teljesen más állítás.
+- **+ Az `effectiveICs` nem kever be degenerate rekordot** → egy akadémiai priort nem húz a nullába **bizonyíték nélkül**. Pont ez történt volna mind a 8 jellel, amint a `useRealizedIC` bekapcsol.
+
+**P1-6 — a knob dokumentált defaultja soha nem érvényesült.** A `loadRuntimeOverrides()` a **NYERS** mentett mapet adja vissza, defaultok nélkül; a fogyasztók viszont `ov.useRealizedIC === 1`-et teszteltek → mentett override hiányában `undefined === 1` = **false**. Élőben a 15 override között **nincs** `useRealizedIC`, tehát a B34 (2026-09-01) óta „ON (default)"-ként dokumentált realized-IC blend **egyszer sem futott le**.
+
+- **Fix:** új `effectiveKnob` / `effectiveFlag` a [`trader-settings`](../../services/api/src/routes/trader-settings.mts)-ben (mentett override → különben a SCHEMA default), és mindkét olvasóhely (`signal-combiner`, `edge-tracker`) erre vált.
+- **⚠ Miért biztonságos MOST bekapcsolni.** A P1-5 degenerate-őre miatt a mai hatás **nulla**: a HL-rekord degenerate (a törött pnl miatt), a crypto pedig 5/5 vesztő trade → szintén konstans outcome → degenerate. Mindkettő kimarad a blendből, tehát a helyes default érvényesítése **ma no-op**, és csak akkor kezd hatni, amikor valódi IC-adat keletkezik. E nélkül az őr nélkül ugyanez a változtatás mind a 8 jel súlyát a nullába lapította volna.
+- **Teszt:** új [`signal-calibration-pnl.test.mts`](../../services/worker/src/pillars/shared/signal-calibration-pnl.test.mts) — a **valós** 10 HL PnL-lel: a régi mapping bizonyítottan 0-t ad (és most **flagelve**), a javított erősen nem-nulla IC-t; a konstans `cond_prob` **is** degenerate (score-oldali variancia-hiány — ez külön valós lelet, nem szabad összemosni a törött pnl-lel); és a degenerate rekord **nem** módosítja a priort, míg egy valódi mérés igen.
+
 ---
 
 ## ✅ Completed sprints (rolling 5 utolsó)

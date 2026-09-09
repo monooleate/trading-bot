@@ -1732,7 +1732,13 @@ export default async function handler(req: Request, _ctx: Context) {
       try {
         const settings: any = await import("./trader-settings.mts");
         const ov = await settings.loadRuntimeOverrides();
-        const useRealized = ov.useRealizedIC === 1;
+        // Audit P1-6: `loadRuntimeOverrides` returns the RAW saved map with no
+        // defaults merged, so the old `ov.useRealizedIC === 1` was
+        // `undefined === 1` whenever the operator had not explicitly saved the
+        // knob — which is the live state. A knob whose SCHEMA default is 1 and
+        // whose help text has said "ON (default 2026-09-01, B34)" for over a
+        // week had therefore never run once.
+        const useRealized = settings.effectiveFlag(ov, "useRealizedIC");
         const k = typeof ov.calibrationShrinkageK === "number" ? ov.calibrationShrinkageK : 30;
         if (useRealized) {
           const cal: any = await import("@worker/pillars/shared/signal-calibration.mts");

@@ -739,6 +739,17 @@ async function runHyperliquidTraderInner(
       // the generic YES/NO frame. The prior `t.side` read was always undefined
       // → every trade mislabeled "YES" (audit P2).
       direction: (t.direction === "SHORT" ? "NO" : "YES") as "YES" | "NO",
+      // Audit P1-5 (2026-09-09) — the SAME class of bug as the `t.side` line
+      // above, still live in this very function. HlClosedTrade carries
+      // `pnlUSDC`; it has no `pnl` field. computeRealizedICs scores
+      // `t.pnl > 0`, and `undefined > 0` is false, so EVERY HL trade was
+      // labelled a loss. A constant outcome vector gives Pearson a zero
+      // denominator, so the persisted record read `{"ic":0,"n":10}` for all
+      // eight signals — while the actual trades were 6 wins / 4 losses.
+      // Exactly-zero IC across eight independent signals is not a measurement,
+      // it is a broken pipe, and `useRealizedIC` would have fed it into the
+      // live combiner weights.
+      pnl: Number(t.pnlUSDC ?? 0),
       category: "hyperliquid" as any,
     }));
     // Half-life from Settings (default null = uniform). When set, recent

@@ -552,6 +552,34 @@ function validate(body: unknown): { ok: true; overrides: Overrides } | { ok: fal
 
 // ─── Public helpers used by other functions ───────────────────────────
 
+/**
+ * The effective value of a knob: the saved override if there is one, otherwise
+ * the SCHEMA default.
+ *
+ * Audit P1-6 (2026-09-09). `loadRuntimeOverrides()` returns the RAW saved map
+ * with no defaults merged, and several call sites tested it with a strict
+ * `ov.someKnob === 1`. When no override was saved that is `undefined === 1`,
+ * i.e. false — so a knob documented as "default 1, ON" was silently OFF.
+ * Measured live: `useRealizedIC` (SCHEMA default 1, documented ON since B34 on
+ * 2026-09-01) was not among the 15 saved overrides, so the realized-IC blend had
+ * never once run in production despite the changelog saying it had.
+ *
+ * Use this rather than reading the raw map whenever a knob has a non-zero
+ * default. Pure apart from the SCHEMA lookup.
+ */
+export function effectiveKnob(ov: Overrides | null | undefined, key: string): number | undefined {
+  const raw = (ov as any)?.[key];
+  if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+  const spec = SCHEMA[key];
+  return spec && typeof spec.default === "number" ? spec.default : undefined;
+}
+
+/** Boolean form of `effectiveKnob` — a knob is ON when its effective value ≥ 0.5. */
+export function effectiveFlag(ov: Overrides | null | undefined, key: string): boolean {
+  const v = effectiveKnob(ov, key);
+  return typeof v === "number" && v >= 0.5;
+}
+
 export async function loadRuntimeOverrides(): Promise<Overrides> {
   try {
     const store = getStore(STORE_NAME);
