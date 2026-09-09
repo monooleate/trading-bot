@@ -256,3 +256,60 @@ A 3 BTC slot **változatlan** → nulla regresszió a bot egyetlen működő ág
 A threshold-ág a base rate-et fényesen veri (**+90.9%**, n=20), **de a piaci árat nem**: Brier modell **0.0226** vs piac **0.0166**; a nem-konvergált 17 soron **−23.9%**. A piaci baseline B53-szennyezett (tehát a valós szám ennél jobb), de **bizonyítottan pozitív edge NINCS**.
 
 Ezért a lefedettség-bővítés indoka elsősorban a **bizonyíték-gyűjtés üteme**, nem egy ismert profit. A kérdést a B53 tiszta mérése fogja eldönteni — most 3 helyett 5 piac/tick és 3 coin táplálja.
+
+---
+
+# 90. session (2026-09-09) — Teljes rendszer-audit a charta szerint → 16 lelet, 15 javítva
+
+A user a [`playbooks/system-audit.md`](../playbooks/system-audit.md) charta szerinti **teljes rendszer-auditot** kérte, majd: *„csináld sorba a javításokat kezd a p0-1-el és haladj sorban"*.
+
+## 1. fázis — audit (read-only)
+
+A charta két alapszabálya szerint: **adat-first** (előbb élő adat, csak utána kód), és **szegmentálás átlagolás előtt**. Élő adatforrás: a Hetzner-box Postgresa (`blob_kv`, `pillar_*`), a konténer-logok és a valós Gamma/Open-Meteo válaszok. A kód-magyarázatot 4 párhuzamos read-only ágens adta — de **minden lelet mérésből indult**, nem kódolvasásból.
+
+**Eredmény: 16 lelet — P0×3, P1×5, P2×5, P3×3.** Mindegyik mellett mérés (explicit n-nel), `fájl:sor`, hatókör és **ellen-hipotézis**.
+
+### A charta §6 csapdái, amikbe tényleg bele lehetett volna esni
+
+- **Szennyezett baseline.** A B53 előtti ledger-sorok az utolsó scan árát hordozzák. Mérve: a weather 52 rezolvált sorából **21 (40%)** ára 0.02-n belül van a kimenettől, a konvergált részhalmazon a „piac Brier"-je **0.0001** → a skill-szám (−937462%) értelmetlen. Ezért a weather végső mérése **nem a ledgerből**, hanem a `pillar_closed_trade` **belépéskor befagyasztott** mezőiből készült (n=28) — amit előbb igazoltam is (5-ből 4 sor eltér a ledger utolsó scanjétől).
+- **Saját magam is beleestem egyszer.** Az EMOS-residualok összevont var-ratio-ja 1.30-nak jött — de a store **99,3%-a seedelt** backfill. Csak forwardra: **10.04**. Ez lett a P0-1.
+
+### Amit ellenőriztem és RENDBEN volt (a charta szerint ezt is ki kell mondani)
+
+Deployolt kód **== `main`** (sorvég-normalizált hash 6 kulcsfájlon); mind a 15 élő override létezik a SCHEMA-ban és van fogyasztója; a crypto/weather bankroll centre rekonciliál; a B57 élőben helyesen működik (3 BTC + 1 ETH + 1 SOL); a sports longshot-floor élőben blokkolt egy 2,9¢-es belépőt; a `paperNeverStop` helyesen **nem** oldja fel a manuális stopot.
+
+### Megcáfolt saját hipotézisek
+
+„A trade-tábla is felülíródik, mint a ledger" (nem — 5-ből 4 sor bizonyítja, hogy befagy; **ez adta a tiszta P0-1 mérést**); „a weather-forecast cache-elt" (nem — METAR °F kvantálás); „a HL/F-Arb nem ad PnL-t az ENB-nek" (adnak, payloadon át); „a ~19,5%-os belépő-edge-ek capeltnek tűnnek" (nem — a 15% + 3,6% kapu határa).
+
+## 2. fázis — javítás (jóváhagyás után, prioritási sorrendben)
+
+**8 commit, egyenként `tsc` 0 + teljes teszt-suite + build zöld.** Minden viselkedés-változás **default-OFF** knob mögött; minden fix mellé a **mérést** pinelő regressziós teszt (charta §7.2). Teszt-suite **49 → 52**.
+
+| # | lelet | commit | knob |
+|---|---|---|---|
+| P0-1 | weather σ 1,8–3,2× túl kicsi | `74bfc6a` | `weatherSigmaInflation` (1.0=KI) |
+| P0-2 | EMOS seed-dominancia 4887:35 | `d02b229` | `weatherEmosSeedWeight` (1.0=KI) |
+| P0-3 | HL perp-irány threshold-piacból | `afef04a` | — (egyértelmű bugfix) |
+| P1-4 | B53 back-fill „mosott" adatot ad ki | `bd41602` | — |
+| P1-5/6 | HL realized-IC ≡ 0; `useRealizedIC` inert | `21d5279` | — |
+| P1-7/8 | fél sports-kizárás; HL-ledger 2 sor | `930bbaf` | — |
+| P2-9…13, P3-14/15 | lásd B64/B65 | `bb0f5c3` | `sportsCronEnabled`, `weatherShrinkSizing` |
+
+Részletek: [`sprints.md` B58–B65](../roadmap/sprints.md) · [`math/38`](../math/38-weather-dispersion.md) · [`math/23 §6`](../math/23-emos.md).
+
+### Két eset, ahol a mérés megfordította a saját narratívámat
+
+1. **A P0-2 audit-megfogalmazása részben téves volt.** „Az EMOS rossz eloszláson illeszkedik → nem megbízható" túlbecsülte a kárt: forward adaton az EMOS **javít** (var-ratio 10,04 → 5,96). Amit tényleg nem javít, az a **torzítás** (+0,497 → +0,55 °C). A tétel szűkebb lett, nem tágabb.
+2. **λ path-függő.** A σ-szorzó optimuma nyers ensemble-on 2,0–2,5, az **élő** (EMOS-be) úton **2,25** — és az irány a nem-nyilvánvaló: az élő út **kevesebb** inflációt kér. A teszt ezt explicit pineli, hogy senki ne olvassza egy konstansba.
+
+### ⚠ Amit a P0-1 NEM old meg
+
+A σ-tágítás **monoton** transzformáció, ezért a `corr(predikció, kimenet)` = **−0,316** (n=28) előjelét nem tudja megfordítani, és a Brier **minden λ-nál 0,25 fölött marad**. **Kár-csökkentés, nem edge.** A naiv „flippeljük meg" **szintén nem működik** (Brier(1−p) = 0,2753) — ugyanaz a csapda, mint a B56b-nél. Az előjel-probléma nyitva marad.
+
+## Operátor-döntést kér
+
+1. **A sports élőben FUT** (3 nyitott pozíció), szemben a 2026-07-23-i dokumentált stoppal. A kód-oldali okokat javítottam (a stop már túléli a hibát és a séma-bumpot, és van tartós `sportsCronEnabled` knob), de az **élő session-höz nem nyúltam** — az live-state változtatás.
+2. **A knobok élesítése.** Mind default-OFF; a mért ajánlás: `weatherSigmaInflation` **2.25** + `weatherEmosSeedWeight` **0.1** (párban mérve). 
+3. **P3-16** (log-megőrzés deployok között) — infra-döntés, backlogban.
+4. **Deploy**: a `main`-re push automatikusan deployol; a munka jelenleg branchen áll.
