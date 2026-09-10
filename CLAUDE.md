@@ -402,12 +402,33 @@ Minden parancs élőben kipróbálva.
 
 **Bot-állapot (read-only ellenőrzés):** mind az 5 fut. Az F-Arb „beragadt pozíció" riasztásom téves volt, mind a 6 pozíció `CLOSED`.
 
-**Nyitva: B70.** A sports bankroll **+$7,50 fantomot** hordoz: 43,00 a 35,50 helyett, így a Kelly ~21%-kal túlméretez.
-- Ok: 3 pozíció a P2-10 fix előtti könyveléssel nyílt, és a fix után zárult, így a veszteségük sosem terhelte a bankrollt.
-- ⚠ A reggeli kiértékelésben ezt tévesen „reset-szivárgásnak" írtam, és a bankrollt helyesnek mondtam.
-- Kódváltozás nem kell. Egyszeri korrekció vagy későbbi reset kell — operátor-döntés, alacsony prioritás.
+**B68/B69 felderítve**, három csak-olvasó ágenssel, primer forráson ellenőrizve. Egyik sem indult még.
+- **B69 (offline ensemble-értékelés):** megvalósítható.
+  - Adat: dynamical.org Icechunk (Python ≥ 3.12). A GEFS-nél valódi intervallum-maximum is van.
+  - Költség: ~74 GB olvasás a 2025-07-től induló ablakra; ezt a kört az operátor választotta.
+  - Megfigyelés: IEM METAR a rezolúciós állomásokra.
+- **B68 (fill-kalibráció):** a Pendulum Flow v3 alkalmas: teljes könyv és trade-ek, ~17 MB lekérésenként. Két akadály van: a saját trade-jeinken nincs token-id, és a weather ág eldobja a fill-modell eredményét (33-ból 6 trade érintett). Ezért előbb két könyvelési javítás kell.
 
-`tsc` 0 · **53/53** teszt · build zöld · pusholva. Doksi: [changelog](internal-docs/changelog/CHANGELOG-2026-09-10.md) · [sprints B67/B70](internal-docs/roadmap/sprints.md).
+**B71 — 5 városban rossz volt a rezolúciós állomás; javítva.** A piacok szabálya szerint:
+
+| város | régi állomás | helyes állomás | átlagos napi-max eltérés |
+|---|---|---|---|
+| Houston | KIAH | Hobby | +0,95 °C |
+| Szöul | RKSS | Incheon | +1,24 °C |
+| Hongkong | reptéri METAR | Hong Kong Observatory | +0,55 °C |
+| Denver | KDEN | Buckley SFB | — |
+| Párizs | LFPG | Le Bourget | — |
+
+- Javítva a [`station-config`](services/worker/src/pillars/weather/station-config.mts).
+- Hongkong saját HKO-megfigyelési forrást kapott ([`station-obs.mts`](services/worker/src/pillars/weather/station-obs.mts)).
+- Új őr jelzi, ha egy listing más állomást nevez meg: `SETTLEMENT_STATION_MISMATCH` log.
+- Ezekben a városokban megváltozott a live weather bemenete. Az 5 állomás EMOS-előzményének újratöltése a deploy után történik (→ changelog).
+
+**B70 — a sports bankroll +$7,50 fantomja korrigálva**, operátor-jóváhagyással: 43,00 → 35,50, és a következő tick után is tartós. A reggeli „reset-szivárgás" magyarázatom téves volt.
+
+**Backlog:** **B72** — az EMOS megfigyelt napi maximumának begyűjtése nem robusztus. A mérés szerint ma kicsi a hatása.
+
+`tsc` 0 · **54/54** teszt · build zöld · pusholva. Doksi: [changelog](internal-docs/changelog/CHANGELOG-2026-09-10.md) · [sprints B67–B72](internal-docs/roadmap/sprints.md).
 
 ### Korábbi munka (91. session, 2026-09-09) — B36 lezárva (már kész volt), B38 előkészítve, napi drift-ellenőrzés
 

@@ -26,7 +26,7 @@ import { log } from "../shared/logger.mts";
 import { closePosition, loadSession, saveSession } from "../crypto/session-manager.mts";
 import { recordDebSample } from "./deb.mts";
 import { getStation } from "./station-config.mts";
-import { fetchMetarDailyMax } from "./metar-fetcher.mts";
+import { fetchStationDailyMax } from "./station-obs.mts";
 import { fetchPolymarketResolution } from "./polymarket-resolver.mts";
 import type { Position, ClosedTrade } from "@core/types.mts";
 
@@ -145,7 +145,7 @@ export async function runWeatherReconciler(paperMode: boolean = true): Promise<R
         try {
           const station = getStation(meta.city);
           if (station) {
-            const metar = await fetchMetarDailyMax(meta.stationIcao, meta.date, station.tz);
+            const metar = await fetchStationDailyMax(meta.stationIcao, meta.date, station.tz);
             if (metar) {
               const f = metar.dailyMaxC * 9 / 5 + 32;
               const settlementC = parseFloat((((Math.round(f) - 32) * 5) / 9).toFixed(2));
@@ -189,7 +189,7 @@ export async function runWeatherReconciler(paperMode: boolean = true): Promise<R
         continue;
       }
 
-      const metar = await fetchMetarDailyMax(meta.stationIcao, meta.date, station.tz);
+      const metar = await fetchStationDailyMax(meta.stationIcao, meta.date, station.tz);
       if (!metar) {
         failed++;
         details.push({
@@ -197,7 +197,7 @@ export async function runWeatherReconciler(paperMode: boolean = true): Promise<R
           bucketLabel: meta.bucketLabel, predictedMaxC: meta.predictedMaxC,
           direction: pos.direction,
           status: "fetch-failed",
-          reason: `Polymarket pending and METAR fetch failed for ${meta.stationIcao}`,
+          reason: `Polymarket pending and settlement-obs fetch failed for ${meta.stationIcao}`,
         });
         continue;
       }
@@ -297,7 +297,7 @@ export async function runWeatherReconciler(paperMode: boolean = true): Promise<R
       try {
         const station = getStation(meta.city);
         if (station) {
-          const metar = await fetchMetarDailyMax(meta.stationIcao, meta.date, station.tz);
+          const metar = await fetchStationDailyMax(meta.stationIcao, meta.date, station.tz);
           if (metar && Number.isFinite(metar.dailyMaxC)) {
             await recordDebSample(
               meta.city, meta.date, metar.dailyMaxC,

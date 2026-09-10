@@ -13,7 +13,7 @@
 
 import { getStore } from "@netlify/blobs";
 import { fitEmos, type EmosFit, type EmosSample } from "@core/emos.mts";
-import { fetchMetarDailyMax } from "./metar-fetcher.mts";
+import { fetchStationDailyMax } from "./station-obs.mts";
 
 const STORE = "weather-emos";
 const CAP = 400;            // residual records per station (rolling)
@@ -125,7 +125,8 @@ export async function logForecast(station: string, date: string, ensMean: number
 }
 
 /**
- * Fill realised daily-max from METAR for pending residuals (obs=null, date < today)
+ * Fill realised daily-max from the station's settlement source (METAR, or the HKO
+ * daily report for Hong Kong — B71) for pending residuals (obs=null, date < today)
  * and refit. UNBIASED: fills every logged station+date, not just traded markets.
  * Budgeted per call to respect the function timeout. Best-effort, non-throwing.
  */
@@ -137,7 +138,7 @@ export async function reconcileEmosObs(station: string, tz: string, budget = 6):
     const pending = s.residuals.filter((r) => r.obs === null && r.date < today);
     if (pending.length === 0) return { filled: 0 };
     for (const rec of pending.slice(0, budget)) {
-      const metar = await fetchMetarDailyMax(station, rec.date, tz).catch(() => null);
+      const metar = await fetchStationDailyMax(station, rec.date, tz).catch(() => null);
       if (metar && Number.isFinite(metar.dailyMaxC)) {
         rec.obs = metar.dailyMaxC;
         filled++;

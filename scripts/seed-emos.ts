@@ -8,8 +8,9 @@
 // the seeds age out of the rolling window as production-matched pairs accumulate.
 //
 // Run ON THE BOX (needs DATABASE_URL so the store writes hit Postgres):
-//   docker compose exec workers bun scripts/seed-emos.ts [months]
-//   (months default 6)
+//   docker compose exec workers bun scripts/seed-emos.ts [months] [ID,ID,…]
+//   (months default 6; the optional id list — e.g. KHOU,RKSI,HKO,KBKF,LFPB after
+//   the B71 station fix — seeds only those stations and leaves the rest as is)
 //
 // Safe to re-run: idempotent (skips dates already stored). Read-only against
 // Open-Meteo; writes only the weather-emos store. Zero trading impact.
@@ -19,11 +20,18 @@ import { setBlobsDb } from "@core/blobs-compat.ts";
 import { seedAllStations } from "@worker/pillars/weather/emos-seed.mts";
 
 const months = Number(process.argv[2] ?? 6) || 6;
+const only = String(process.argv[3] ?? "")
+  .split(",")
+  .map((s) => s.trim().toUpperCase())
+  .filter(Boolean);
 
 setBlobsDb(await pool());
-console.log(`[seed-emos] seeding ${months} months of Open-Meteo history per station…`);
+console.log(
+  `[seed-emos] seeding ${months} months of Open-Meteo history for ` +
+  `${only.length ? only.join(", ") : "every station"}…`,
+);
 
-const results = await seedAllStations(months);
+const results = await seedAllStations(months, only);
 for (const r of results) {
   const err = r.error ? `  (${r.error})` : "";
   console.log(`  ${r.station}: +${r.added} residuals → total ${r.total}, fitted=${r.fitted}${err}`);

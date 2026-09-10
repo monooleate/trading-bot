@@ -211,7 +211,7 @@ export interface Position {
 export interface WeatherPositionMeta {
   city:         string;          // e.g. "hong-kong"
   date:         string;          // YYYY-MM-DD in station tz
-  stationIcao:  string;          // e.g. "VHHH" — METAR query target
+  stationIcao:  string;          // settlement-station id: ICAO (METAR) or "HKO" (Hong Kong Observatory) — obs query target
   bucketLabel:  string;          // e.g. "21°C", "27°C or higher"
   bucketTempC:  number;          // bucket center temperature in °C
   predictedMaxC: number;         // our forecast (after corrections)
@@ -270,6 +270,7 @@ export type LogEvent =
   | "SIGNAL"
   | "DECISION_SKIP"
   | "DECISION_TRADE"
+  | "SETTLEMENT_STATION_MISMATCH"  // B71: a weather listing names a different station than our config
   | "ORDER_PLACED"
   | "ORDER_FILLED"
   | "ORDER_EXPIRED"

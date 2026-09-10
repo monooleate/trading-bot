@@ -268,6 +268,7 @@ A korábbi B9 (Topup action) átkerült a "📋 Next sprint candidates" szekció
 - **Mit ad:** HL live trade-flip enabler — `HL_PRIVATE_KEY` env, `@nktkas/hyperliquid` npm install + audit, `HL_PAPER_MODE=false`. Polymarket live trade-flip enabler — `POLY_PRIVATE_KEY`, `POLY_FUNDER_ADDRESS`, `@polymarket/clob-client` audit, `PAPER_MODE=false`. **Erre live trade nem indítható** — minden live módra váltás előfeltétele ez a setup.
 - **Anti-sprint védőháló**: a meglévő anti-sprint lista tiltja a live-flip-et amíg a paper validation gate-ek nem teljesülnek; ez a backlog tétel **csak akkor megy "Next candidates"-be**, ha a gate-ek mind ✓.
 - **⚠ Új blokkoló — joghatóság (2026-09-10, API-felmérés, élőben mérve).** A box IP-je Polymarket-oldalon **geoblockolt**: `GET https://polymarket.com/api/geoblock` a boxról → `{"blocked":true,"country":"DE","region":"SN"}` (Hetzner, Szászország). A [Polymarket geoblock-doksi](https://docs.polymarket.com/api-reference/geoblock) szerint **DE = close-only**: meglévő pozíció zárható, **új nem nyitható** — frontenden és API-n is. A Polymarket live-flip (`PAPER_MODE=false`) tehát a mostani boxról **technikailag sem működne**; a paper-mód (read-only piaci adat) nem érintett. Emellett **(a)** az SZTFH 2026 januárja óta ISP-szinten blokkoltatja a polymarket.com-ot Magyarországon, tiltott szerencsejáték gyanújával (ideiglenes intézkedés, a végleges határozat a [CMS](https://cms.law/en/hun/legal-updates/hungary-temporarily-blocks-access-to-polymarket-over-alleged-illegal-gambling) szerint függőben); **(b)** az [ESMA 2026-07-03-i statementje](https://www.esma.europa.eu/sites/default/files/2026-07/ESMA35-243228190-8148_Public_Statement_on_the_application_of_the_national_product_intervention_measures_on_binary_options_to_event_contracts.pdf) szerint a MiFID II Annex I C(4)–(10) alapmutatójú event contract pénzügyi eszköz, így a bináris-opciós retail-tilalom alá esik (a C(10) a klimatikus változókat is lefedi → a weather-piacok valószínűleg érintettek). **Új precondition:** jogi tisztázás a Polymarket live-flip előtt; a geoblock megkerülése (VPN, más régiós szerver) **nem opció**. A HL/F-Arb live-útját a Polymarket-geoblock nem érinti (külön venue). Részletek: [changelog 2026-09-10](../changelog/CHANGELOG-2026-09-10.md).
+- **Élesítés előtt ellenőrizni — live-order mértékegység (2026-09-10, 93. session, kódból, NEM igazolt).** A crypto live-út a `createAndPostOrder` `size` mezőjébe `sizeUSDC`-t tesz ([`crypto/execution.mts`](../../services/worker/src/pillars/crypto/execution.mts):177). A `@polymarket/clob-client`-ben ez a mező valószínűleg részvényszám. Ha így van, a live megbízás `sizeUSDC` darab részvényt venne, vagyis ár-szorzónyira alulméretezve, és a fill-részletek a `size_matched`-et USDC-nek olvassák. A paper-út nem érintett.
 
 ### B11 — Walk-forward backtest framework 🟠 KRITIKUS INFRA
 
@@ -906,6 +907,16 @@ A 2026-09-03 teljes audit (5 bot + infra + security) implementált fixei: [chang
 - **Közben van ingyenes, teljes-piacos archívum.** A [Pendulum Flow](https://archive.pendulumflow.com/) **minden** Polymarket-könyvet rögzít 2026-02-21 óta (CC BY 4.0, regisztráció nélkül); a [Tardis.dev](https://docs.tardis.dev/historical-data-details/polymarket) 2026-05-25 óta viszi (`book_snapshot_5/25` + incremental L2).
 - **Javaslat:** a B49 #1 fill-modell (participáció-cap, slippage) és a Kyle-λ/VPIN kalibrációja ebből készüljön, ne a saját szűk streamből. A saját recorder élő-kontrollnak maradhat, de a cap-et és a hatókört ehhez kell igazítani.
 - **Precondition:** operátor-döntés. A CC BY 4.0 forrásmegjelölést kér.
+- **Felderítés (2026-09-10, 93. session — primer forráson ellenőrizve):**
+  - **Formátum:** a v3 archívum (2026-08-18T06-tól) óránkénti Parquet, ~1,1 GiB/óra (~22–29 GiB/nap). Benne teljes mélységű könyv-snapshotok, szintenkénti változások (`price_change`) és trade-ek, tranzakció-hash-sel. A fájl eseménytípus, majd condition id szerint rendezett, így egy (token, perc) lekérés ~17 MB range-olvasás; 100 lekérés ~1–2,5 GB.
+  - **Lyukak:** 2026-08-15T10 és 08-18T05 között (68 óra) nincs adat. A 08-10–15 közti AG6-tükörnek nincs licence, ezért nem használjuk. Az Aug 1–9 közti rész PMXT v2, más sémával.
+  - **Azonosítók:** `market` = condition id, `asset_id` = token id; mindkettő 32 bájtos bináris, hex-kódolni kell. Egy snapshot érvényességi idejét a `timestamp_received` adja; az exchange-timestamp hónapokkal régebbi lehet.
+  - **A saját trade-jeink nem jók alapnak.** A zárt trade-eken nincs token-id: a crypto és a sports a slugból visszanyerhető, a weathernél a fogadott bucket sem. Összesen 8 köthető trade marad, ezért a kalibráció az archívumból vett mintán fut: ~200 (piac, perc) a mi piactípusainkból.
+  - **Mit mér:** mélység a legjobb árnál, VWAP-csúszás $5/$15/$50-ra, a kijelzett mélység tartóssága 1/5/30 s múlva. Ezt vetjük össze a 20%-os részvételi plafonnal, a +2%-os tartalékkal és a 0,10-es plauzibilitási sávval.
+- **Előfeltételek (kódhibák, 2026-09-10 igazolva):**
+  - **(a) A weather ág eldobja a fill-modell eredményét.** A pozíció a kért USDC-t és a jegyzett árat (+1¢) könyveli, nem a VWAP-ot és a teljesült összeget ([`weather/index.mts`](../../services/worker/src/pillars/weather/index.mts):614-616). 33 zárt trade-ből 6-nál tér el a könyvelt költség a részvény × belépő szorzattól (arány 1,09–1,49).
+  - **(b) A pozíció és a zárt trade nem őrzi a token-id-t és a fill-részleteket** (VWAP, teljesült USDC, részleges-e), így a fill-ek utólag nem auditálhatók.
+- **Státusz:** felderítve; az operátor 2026-09-10-én még nem indította (a B71-et választotta előbb).
 
 ### B69 — B52 offline előkiértékelés historikus ensemble-archívumon 🔵 JELÖLT (2026-09-10, API-felmérés)
 
@@ -913,8 +924,23 @@ A 2026-09-03 teljes audit (5 bot + infra + security) implementált fixei: [chang
 - **Javaslat:** a GEFS vs IFS-ENS vs AIFS-ENS összevetés (CRPS, var-ratio, coverage a megfigyelt napi max ellen) már most elvégezhető ~14 hónapon × a bot állomásain; Python + xarray kell hozzá. A forward log a WN2 miatt ettől még kell, mert az nincs benne.
 - **Caveat:** a `temperature_2m` 3/6-órás pillanatérték, nem napi max, ezért a csúcsot alulbecsli (ugyanaz a caveat, amit a B52 a WN2/AIFS 6-órás felbontásánál jelzett). A torzítást (bias) az EMOS korrigálja, a szórás-szerkezetet csak részben.
 - **Precondition:** operátor-döntés.
+- **Felderítés (2026-09-10, 93. session — primer forráson ellenőrizve):**
+  - **Elérés:** csak Icechunk 2-vel (Python ≥ 3.12; a gépen 3.14, minden csomaghoz van Windows-wheel). A régi `data.dynamical.org` Zarr-URL-ek 2026-09-30-tól leállnak.
+  - **Adatkészletek:**
+    - GEFS: 00z, 31 tag, 3 órás lépés. **Van `maximum_temperature_2m`**, azaz valódi intervallum-maximum, így a GEFS-nél nincs csúcs-alulbecslés.
+    - IFS-ENS: 00z, 51 tag, 3 órás lépés, 2024-04-01-től.
+    - AIFS-ENS: 6 óránként, 51 tag, 6 órás lépés, 2025-07-02-től.
+    - Az ECMWF-eknél csak `temperature_2m` van. Ezért két változatban pontozunk: közös 6 órás mintavétellel, és a legjobb elérhető felbontással.
+  - **Költség:** a közös ablakra (2025-07-től, 00z) ~74 GB olvasás, ebből <0,5 GB marad. **Operátor-döntés: ez a kör**; 2024-04-től ~124 GB lenne.
+  - **Megfigyelés:** IEM METAR (`asos.py`, `report_type=3,4`) a **rezolúciós** állomásokra (→ B71), Hongkongnál a HKO. Az ERA5 −0,7…−1,4 °C-kal hidegebb a METAR-nál, megfigyelésnek nem jó.
+  - **Pontozás:** a `multi-model-eval.mts` definícióival, állomás-naponként egy mintával. A live `eval-multimodel.ts` három hibáját nem örökli:
+    - az elavult „POOLED (4 systems)" címkét;
+    - a negatív lead beengedését;
+    - a korrelált snapshotok külön mintaként számolását.
+  - **Korlát:** a live keverék 6–8 modelljével szemben itt csak 3 van, így a B52-flipre csak részleges választ ad.
+- **Státusz:** felderítve, a kör eldöntve. A futtatás (csomagtelepítés + ~74 GB) indításra vár.
 
-### B70 — Sports: a bankroll +$7,50 fantomot hordoz (a P2-10 fix átmenete) 🟢 BACKLOG (alacsony, operátor-döntés)
+### B70 — Sports: a bankroll +$7,50 fantomot hordoz (a P2-10 fix átmenete) ✅ KORRIGÁLVA 2026-09-10 (operátor-jóváhagyással)
 
 - **Tünet (élő, 2026-09-10 ~16 UTC).** A sports session `bankroll_current` **43,00**, de az invariáns (`bankrollStart + sessionPnL − nyitott költség`) szerint **35,50** kellene: 50 − 7,5 − 7,0. A különbség pontosan **+$7,50**.
 - **Mechanizmus (adatból és kódból igazolva).**
@@ -925,7 +951,55 @@ A 2026-09-03 teljes audit (5 bot + infra + security) implementált fixei: [chang
 - **⚠ Korrekció.** A drift-check kiértékelésekor (93. session) ezt „a reset előtti pozíciók átszivárogtak az új sessionbe" formában írtam le, és a bankrollt helyesnek mondtam. **Mindkettő téves volt**: nem volt reset, a −7,5 ennek a sessionnek a valódi vesztesége, és a bankroll a hibás.
 - **Hatás.** A sports Kelly **~21%-kal** túlbecsült bankrollra méretez (43,00 vs 35,50). Paper, és a sports ki van zárva a cross-bot aggregátumból, ezért alacsony. A `session_pnl` (−7,5) és a `session_loss` (7,5) helyes.
 - **Mellék-tünet (nem igazolt).** A `pillar_session.trade_count` sportsnál 0, miközben 3 zárt trade van; a többi botnál az oszlop egyezik. A runner a `tradeCount`-ot a `closedTrades` hosszából számolja ([`sports/index.mts`](../../services/worker/src/pillars/sports/index.mts), ~392. sor), tehát valószínűleg csak a normalizált oszlop nem töltődik.
-- **Javítás.** Kódváltozás nem kell, mert a P2-10 óta nyitott pozíciókra a könyvelés helyes. Két út van, mindkettő operátor-döntés: egyszeri, jóváhagyott korrekció (`bankroll_current` −7,50), vagy reset, miután a mostani 3 pozíció rendeződött. A napi drift-check ismert eltérésként kezeli.
+- **Javítás — elvégezve 2026-09-10 18:06 UTC.** Kódváltozás nem kellett, mert a P2-10 óta nyitott pozíciókra a könyvelés helyes. Egyszeri, védett UPDATE futott, ami csak akkor ír, ha a rés pontosan 7,50: 43,00 → 35,50. A következő sports tick (18:08:42) után is tartós, az invariáns-rés 0,0000. A `trade_count` mellék-tünet nyitva marad (nem igazolt, alacsony).
+
+### B71 — Weather: 5 városban nem azon az állomáson mértünk, amelyiken a piac rezolvál ✅ IMPLEMENTED 2026-09-10 (93. session)
+
+- **Forrás.** A B69 felderítése: az offline értékeléshez a rezolúciós állomások kellettek. Minden piac szabálya név szerint megadja az állomást („recorded by NOAA at the X Station"). Mind a 26 aktív várost ellenőriztem, a boxról, mert a Gamma helyben blokkolt.
+- **Lelet.** Mérve 2026-08-01 és 09-09 között, IEM METAR napi maximummal, helyi napra; Hongkongnál HKO open data:
+
+| város | volt | a piac szerint | átlag (volt − piac) | ≥1 °C eltérés |
+|---|---|---|---|---|
+| Houston | KIAH | KHOU (William P. Hobby) | **+0,95 °C** | 28/41 nap |
+| Szöul | RKSS (Gimpo) | RKSI (Incheon) | **+1,24 °C** | 28/41 nap |
+| Hongkong | VHHH (reptér) | Hong Kong Observatory | +0,55 °C | 14/31 nap |
+| Denver | KDEN | KBKF (Buckley SFB) | −0,43 °C | 13/41 nap |
+| Párizs | LFPG (CDG) | LFPB (Le Bourget) | −0,20 °C | 12/41 nap |
+
+- **Mit érintett:**
+  - az előrejelzés helyét Houstonban, Denverben, Párizsban és Hongkongban (Szöulnál a koordináta már Incheoné volt);
+  - az EMOS megfigyelt adatát;
+  - a METAR-os rendezési tartalékot.
+  - A trade-ek elszámolása a Gamma kimenetéből jön, az helyes volt.
+  - 33 zárt weather trade-ből 14 esett ezekre a városokra (Párizs 6, Hongkong 5, Szöul 3); ennyiből a PnL-hatás nem mondható meg.
+  - Mellékes: a math/38 „egyoldalú" RKSS-hibájának (+2,3…+2,8 °C) részben ez volt az oka.
+- **Fix:**
+  - [`station-config.mts`](../../services/worker/src/pillars/weather/station-config.mts): az 5 állomás ICAO-ja és koordinátája, az IEM állomás-metaadataiból. Hongkong azonosítója `HKO`, a HKO-székház koordinátáival, `obsSource: "hko"`.
+  - Új [`station-obs.mts`](../../services/worker/src/pillars/weather/station-obs.mts): `fetchStationDailyMax` METAR-t, Hongkongnál pedig a HKO `RYES` napi riport `HKOReadingsMaxTemp` mezőjét adja. A D-napi riport D maximumát tartalmazza; 5/5 augusztusi napon egyezett a hivatalos CLMMAXT-tal. A havi CLMMAXT szeptemberre még üres volt, ezért nem az a forrás. Erre vált az EMOS-reconcile és a reconciler METAR-tartaléka.
+  - **Visszaesés elleni őr:** minden ellenőrzött város `settlementKey`-t kapott (a szabályszöveg normalizált állomásnév-töredéke). A market-finder minden szkennelt listingnél összeveti, és eltérésnél `SETTLEMENT_STATION_MISMATCH` logot ír, városonként naponta egyszer, blokkolás nélkül. A napi drift-check ezt is figyeli.
+  - A seed-szkript opcionális állomás-listát kap (`seed-emos.ts 6 KHOU,RKSI,HKO,KBKF,LFPB`), így a többi 22 állomás illesztése érintetlen marad.
+- **Teszt:**
+  - [`station-config.test.mts`](../../services/worker/src/pillars/weather/station-config.test.mts): az 5 új elvárás a tiltott régi ICAO-val; a detektor a valós szabályszövegeken; a „William P. Hobby" eset, ahol pont van a névben; lefedettség; egyedi azonosítók.
+  - [`station-obs.test.mts`](../../services/worker/src/pillars/weather/station-obs.test.mts): a HKO-mezőt olvassa, nem a reptérit.
+  - Élő próba a deploy előtt: HKO 09-09 → 32,2 °C, 09-10 → 31,9 °C; a METAR RKSI-re, KHOU-ra és LFPB-re rendben.
+- **Operatív:** a deploy után az 5 új állomás EMOS-előzményét újra kell tölteni, mert a régi azonosítókon gyűlt adat a rossz állomásról szólt. A régi store-kulcsok (`v1:KDEN` stb.) árván maradnak, ártalmatlanok.
+- **Nyitva:** a `lagos` állomás nem ellenőrizhető (nincs aktív piac), ezért nincs `settlementKey`-e.
+
+### B72 — EMOS: a megfigyelt napi maximum begyűjtése nem robusztus 🟡 BACKLOG (mérés-first)
+
+- **Kódból igazolva** ([`emos-store.mts`](../../services/worker/src/pillars/weather/emos-store.mts) `reconcileEmosObs` + [`metar-fetcher.mts`](../../services/worker/src/pillars/weather/metar-fetcher.mts)):
+  1. A dátum UTC-éjfélkor lesz esedékes. UTC-től nyugatra ezért részleges helyi napot kér le: Los Angelesben és Seattle-ben 17:00, Chicagóban 19:00, New Yorkban 20:00 helyi időig.
+  2. Egyetlen METAR-riport is elég egy értékhez.
+  3. Az érték egyszer íródik, és soha nem frissül. A 36 órás ablak után pótolni sem lehet.
+- **Mérve (2026-09-10, a tárolt megfigyelés vs. az IEM teljes napi maximuma):**
+  - nyugat: n=6 állomás-nap, 1 napon ≥0,5 °C-kal alacsony (KLGA 09-06 −3,3 °C);
+  - kelet (kontroll): n=39, 2 napon (EDDM 09-09 −3,0, VHHH 09-06 −2,0).
+  - A hiba tehát nem csak a nyugati időzítésből jön, van más kiesés is, és n kicsi.
+- **Javaslat:**
+  - az esedékesség legyen a helyi nap vége + puffer;
+  - legyen minimális riportszám;
+  - a 36 órás ablakon belül legyen újraellenőrzés.
+  - Az EMOS élesben be van kapcsolva (`weatherUseEmos` = 1), ezért a javítás előtt meg kell mérni a hatását.
 
 ---
 

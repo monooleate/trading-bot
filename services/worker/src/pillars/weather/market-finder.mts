@@ -1,6 +1,11 @@
-import { SETTLEMENT_STATIONS, getStation } from "./station-config.mts";
+import { SETTLEMENT_STATIONS, getStation, settlementStationMismatch } from "./station-config.mts";
+import { log } from "../shared/logger.mts";
 
 const GAMMA_API = "https://gamma-api.polymarket.com";
+
+// B71: one SETTLEMENT_STATION_MISMATCH line per city per UTC day. The finder runs
+// every tick; the daily key keeps the warning visible after a deploy wipes logs.
+const warnedStationMismatch = new Set<string>();
 
 export interface WeatherMarket {
   slug: string;
@@ -296,6 +301,22 @@ export async function findWeatherMarketsDetailed(): Promise<FindResult> {
     if (!station) {
       dropped.push({ slug, title, reason: "no-station", vol24h: vol });
       continue;
+    }
+
+    // B71: the rules name the settlement station ("recorded by NOAA at the X
+    // Station"). Five cities pointed at the wrong one until 2026-09-10 — Houston
+    // KIAH vs Hobby ran +0.95 °C on the daily max. Say so when a listing
+    // disagrees with the config; non-blocking, once per city per UTC day.
+    const rulesText = [evt.description, evt.markets?.[0]?.description].filter(Boolean).join(" ");
+    const namedStation = settlementStationMismatch(rulesText, station);
+    if (namedStation) {
+      const warnKey = `${city}|${new Date().toISOString().slice(0, 10)}`;
+      if (!warnedStationMismatch.has(warnKey)) {
+        warnedStationMismatch.add(warnKey);
+        log("SETTLEMENT_STATION_MISMATCH", process.env.PAPER_MODE !== "false", {
+          city, configured: station.icao, marketRules: namedStation, slug,
+        });
+      }
     }
 
     const date = parseDateFromSlug(slug) || parseDateFromSlug(t.replace(/\s+/g, "-"));

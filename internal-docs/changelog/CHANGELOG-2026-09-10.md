@@ -114,3 +114,65 @@ Ez lokális ütemezett feladat (`edgecalc-drift-check`), nincs a repóban. A vá
 - **`playbooks/system-audit.md` §6:** új anti-pattern, „provenancia-jelzőt csak előre bevezetni".
 
 **Verifikáció:** `tsc` 0 · **53/53** teszt · build zöld. Pusholva `main`-re → auto-deploy.
+
+---
+
+## 93. session (folytatás) — B68/B69 felderítés → B71 állomás-fix (5 város) + B70 bankroll-korrekció
+
+A user a párhuzamos session két jelöltjét adta következő feladatnak: B68 (fill-kalibráció külső könyv-archívumból) és B69 (offline ensemble-értékelés). Előbb felderítés jött, három csak-olvasó ágenssel, primer forráson ellenőrizve. Utána a döntések (AskUserQuestion):
+- **B71 most;**
+- B69 köre 2025-07-től (később);
+- **B70 korrekció most;**
+- B68 később.
+
+### 1. Felderítés
+
+- **B69 — megvalósítható:**
+  - dynamical.org Icechunk (Python ≥ 3.12); a régi Zarr-URL-ek 2026-09-30-tól leállnak;
+  - GEFS 00z, **valódi intervallum-maximummal**; IFS-ENS 00z 2024-04-től; AIFS-ENS 6 óránként 2025-07-től;
+  - ~74 GB olvasás a 2025-07-től induló közös ablakra, ebből <0,5 GB marad;
+  - megfigyelés: IEM METAR. Az ERA5 −0,7…−1,4 °C-kal hideg, nem használható.
+- **B68 — a Pendulum Flow v3 alkalmas:** teljes könyv, szintváltozások és trade-ek; ~17 MB range-olvasás lekérésenként.
+  - 08-15 és 08-18 között 68 órás lyuk van. Az AG6-tükörnek nincs licence.
+  - A saját trade-jeink nem köthetők: nincs token-id, a weathernél bucket sem.
+- **A kód-térkép leletei, amiket saját forrásolvasással ellenőriztem:**
+  - a weather ág eldobja a fill-modell eredményét (33-ból 6 trade érintett) → B68 előfeltétel;
+  - az EMOS megfigyelés begyűjtése nem robusztus → **B72**, mérve ma kicsi;
+  - a crypto live-order `size: sizeUSDC` gyanús → B10.
+- A részletek a [sprints B68/B69/B72](../roadmap/sprints.md)-ben.
+
+### 2. B71 — 5 városban rossz rezolúciós állomás
+
+A B69-hez a rezolúciós állomások kellettek, ezért a boxról (a Gamma innen blokkolt) mind a 26 aktív város szabályát ellenőriztem. Az eltérés 2026-08-01…09-09 között, IEM METAR napi maximummal, helyi napra (Hongkongnál HKO open data):
+
+| város | volt | a piac szerint | átlag (volt − piac) | ≥1 °C |
+|---|---|---|---|---|
+| Houston | KIAH | KHOU (Hobby) | **+0,95 °C** | 28/41 nap |
+| Szöul | RKSS | RKSI (Incheon) | **+1,24 °C** | 28/41 nap |
+| Hongkong | VHHH | Hong Kong Observatory | +0,55 °C | 14/31 nap |
+| Denver | KDEN | KBKF (Buckley SFB) | −0,43 °C | 13/41 nap |
+| Párizs | LFPG | LFPB (Le Bourget) | −0,20 °C | 12/41 nap |
+
+**Fix:**
+- **[`station-config.mts`](../../services/worker/src/pillars/weather/station-config.mts):** 5 állomás ICAO-ja és koordinátája (az IEM metaadataiból). Hongkong azonosítója `HKO`, `obsSource: "hko"`.
+- **[`station-obs.mts`](../../services/worker/src/pillars/weather/station-obs.mts):** METAR, vagy HKO `RYES` (`HKOReadingsMaxTemp`). A riport D-napi értéke = D maximuma, 5/5 augusztusi napon egyezik a CLMMAXT-tal. Erre vált az EMOS-reconcile és a reconciler tartalék-ága.
+- **Visszaesés elleni őr:** `settlementKey` minden ellenőrzött városra. A market-finder minden szkennelt listingnél összeveti, és eltérésnél `SETTLEMENT_STATION_MISMATCH` logot ír, városonként naponta egyszer, blokkolás nélkül.
+- **Seed:** a seed-szkript állomás-listát kap, így a többi 22 állomás illesztése érintetlen marad.
+
+**Teszt és próba:**
+- A `station-config.test.mts` és az új `station-obs.test.mts` 54/54 zöld.
+- Élő próba deploy előtt: HKO 09-09 = 32,2 °C, 09-10 = 31,9 °C; a METAR RKSI, KHOU és LFPB állomásra rendben.
+
+### 3. B70 — sports bankroll-korrekció (operátor-jóváhagyással)
+
+Védett UPDATE: csak akkor fut, ha a rés pontosan 7,50.
+- 18:06 UTC: 43,00 → 35,50.
+- A 18:08:42-es tick után is tartós, az invariáns-rés 0,0000.
+
+### 4. Doksi
+
+- **`sprints.md`:** B68/B69 kiegészítve, B70 ✅, **B71** ✅, **B72** 🟡, B10 kiegészítve.
+- **CLAUDE.md:** 93. session bejegyzés.
+- **`math/16`:** HKO-forrás és állomás-őr.
+
+**Verifikáció:** `tsc` 0 · **54/54** teszt · build zöld.

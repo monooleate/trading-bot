@@ -69,13 +69,19 @@ export async function seedStationEmos(
   return { station: icao, ...r };
 }
 
-/** Seed every settlement station. Sequential (polite to Open-Meteo's free tier). */
-export async function seedAllStations(months = 6): Promise<SeedStationResult[]> {
+/**
+ * Seed every settlement station, or only the ids in `only` (e.g. the stations a
+ * config fix just introduced — B71 — so every other station's fit stays as it
+ * is). Sequential (polite to Open-Meteo's free tier).
+ */
+export async function seedAllStations(months = 6, only?: string[]): Promise<SeedStationResult[]> {
   const out: SeedStationResult[] = [];
   const seen = new Set<string>();
+  const wanted = only && only.length > 0 ? new Set(only) : null;
   for (const cfg of Object.values(SETTLEMENT_STATIONS)) {
     if (seen.has(cfg.icao)) continue;   // several city keys can map to one ICAO
     seen.add(cfg.icao);
+    if (wanted && !wanted.has(cfg.icao)) continue;
     out.push(await seedStationEmos(cfg.icao, cfg.lat, cfg.lon, cfg.tz, months));
   }
   return out;

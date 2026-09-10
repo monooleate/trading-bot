@@ -53,7 +53,7 @@ A Polymarket napi-max hőmérsékleti piacai **negRisk események**: egy `(váro
 │   3. detectModelLag() — skip ha 15 perc-en belül lesz új run         │
 │   4. findWeatherMarketsDetailed() → Gamma /events?limit=500          │
 │   5. for each market in markets.slice(0, 5):                         │
-│      a. getStation(city) — settlement station ICAO + city_offset     │
+│      a. getStation(city) — settlement station id (ICAO/HKO), B71     │
 │      b. getForecast(city, station, date, opts):                      │
 │         - GFS + ECMWF Open-Meteo párhuzamos fetch                    │
 │         - NOAA api.weather.gov fetch (csak US tz-k)                  │
@@ -79,7 +79,7 @@ A Polymarket napi-max hőmérsékleti piacai **negRisk események**: egy `(váro
 │         1. fetchPolymarketResolution(pos.conditionId)                │
 │            ↑ (lásd 13. szekció — itt van a kritikus bug!)            │
 │         2. ha Polymarket nem resolve: várj 6h-t METAR fallback előtt │
-│         3. fetchMetarDailyMax() → bucketFromDailyMax()               │
+│         3. fetchStationDailyMax() → bucketFromDailyMax()             │
 │         4. closePosition() — exit 0 vagy 1, ClosedTrade rögzítés     │
 │         5. recordDebSample() — DEB súlyok frissítése                 │
 └──────────────────────────────────────────────────────────────────────┘
@@ -97,6 +97,9 @@ A Polymarket napi-max hőmérsékleti piacai **negRisk események**: egy `(váro
 | **Open-Meteo Ensemble** | `ensemble-api.open-meteo.com/v1/ensemble` | 31-tagú GFS perturbed ensemble | `models=gfs_seamless`, `forecast_days=7`. `temperature_2m_member01..member30` + control |
 | **NOAA** | `api.weather.gov/points/{lat,lon}` → `forecastHourly` | Csak US-i városokra extra signal | `User-Agent` header kötelező, °F-ban ad értéket |
 | **Aviation Weather METAR** | `aviationweather.gov/api/data/metar` | Fallback settlement, DEB feedback | `ids=<ICAO>&format=json&hours=36`. T-group remark-ban van a precíz tenths-°C érték |
+| **Hong Kong Observatory** | `data.weather.gov.hk/weatherAPI/opendata/opendata.php?dataType=RYES` | Hongkong megfigyelt napi max (B71) | `date=YYYYMMDD`; a `HKOReadingsMaxTemp` a HKO-székház D-napi maximuma — a piac erre rezolvál, nem a reptéri METAR-ra |
+
+> **Rezolúciós állomás (B71, 2026-09-10):** minden piac szabálya név szerint megadja az állomást („recorded by NOAA at the X Station"). Mind a 26 aktív városra ellenőrizve; 5 volt rossz. Houston, Szöul, Hongkong, Denver és Párizs átlagos napi-max eltérése −0,43 és +1,24 °C között volt. A [`station-config`](../../services/worker/src/pillars/weather/station-config.mts) `settlementKey`-e alapján a market-finder minden listingnél ellenőriz, és eltérésnél `SETTLEMENT_STATION_MISMATCH` logot ír. A megfigyelt napi max forrását a [`station-obs.mts`](../../services/worker/src/pillars/weather/station-obs.mts) választja: METAR, Hongkongnál HKO. → [sprints B71](../roadmap/sprints.md)
 
 > **Megjegyzés:** **Minden 4 forrás public + zéró-auth** — egyetlen API-kulcs sem szükséges. Open-Meteo: 10 000 hívás/nap/IP rate limit (bőven elég 24 város × 4 tick/óra = 2 304 hívás/nap). NOAA + METAR: `User-Agent` header kötelező (hardcoded `"EdgeCalc-AutoTrader/1.0"`), különben 403. A `USE_ENSEMBLE` env nem auth, csak feature-flag.
 
