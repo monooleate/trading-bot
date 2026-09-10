@@ -2,6 +2,8 @@
 
 > Frissítve: 2026-05-09. Forrás: `auto-trader/index.mts` + `netlify.toml` cron config + `execution.mts` clob-client integráció.
 
+> **⚠ 2026-09-10 — a Polymarket live-flip a mostani boxról nem működne.** A box IP-je (Hetzner, DE) a Polymarket geoblock-listáján **close-only** (`/api/geoblock` → `blocked:true, country:DE`): új pozíció nem nyitható. A paper-mód (read-only piaci adat) nem érintett. Emellett a polymarket.com Magyarországon SZTFH-blokk alatt áll (2026 január óta). Részletek és az új precondition: [sprints B10](../roadmap/sprints.md). Az alábbi, 2026-05-09-es leírás még a Netlify-korszakot írja le.
+
 ---
 
 ## TL;DR

@@ -1,5 +1,43 @@
 # CHANGELOG — 2026-09-10
 
+## API-szolgáltatás felmérés (read-only) + mellék-lelet: a box nem nyithat Polymarket-pozíciót
+
+A user: *„erre amit most a robotok tudnak és amit gyűjtenek adatot nem lehetne api szolgáltatást építeni. lenne erre kereslet?"* **Kód nem változott, deploy nem volt.** Módszer: read-only leltár a boxon (Postgres + az élő Edge Tracker promóciós kapuja), 3 párhuzamos webes kutató-ág (piaci körkép · licenc és szabályozás · rés-kereslet), majd a döntő állítások szúrópróbája primer forráson. A szúrópróba két ágens-állítást **cáfolt**: az ICE a saját sajtóközleménye szerint nem „exkluzív", hanem *„a global distributor"* a Polymarket-adatnak; és az ESMA-statement nem nevesíti külön a weathert/cryptót (egy WebFetch-összefoglaló ezt állította, a PDF-ben nincs benne).
+
+### Verdikt: most nem — nem az ötlet rossz, hanem a sorrend
+
+**1. A „tudás" (predikciók, jelek) ma negatív értékű egy vevőnek.** Az élő promóciós kapu (`/api/edge-tracker`, 2026-09-10):
+
+| Bot | Kapu | Brier-skill a piaci ár ellen (walk-forward, OOS) | Rezolvált ledger-sor |
+|---|---|---|---|
+| crypto | INSUFFICIENT_DATA | −61% | 108 |
+| weather | HOLD | −124% | 64 |
+| sports | INSUFFICIENT_DATA | −6% | 167 |
+| hyperliquid | INSUFFICIENT_DATA | +7% | 10 |
+
+A piaci ár ingyen elérhető, így a nála rosszabb előrejelzés eladása negatív értéket ad el. Ha lesz edge, az eladás a vékony könyvekben (B49 #1) maga emésztené fel. Piaci háttér: rengeteg $15–100/hó signal-termék, auditált track recorddal egyet sem találtunk; a generikus AI-előrejelzés a [ForecastBench](https://forecastingresearch.substack.com/p/ai-models-have-likely-reached-parity) szerint (2026-07-16) már superforecaster-szinten van.
+
+**2. Az adat kicsi, rövid, és a szegmens telített.** A teljes `edgecalc` DB **11 MB**. OI: 650 snapshot/coin (09-03 óta, 15 perc). `clob-book`: 5000 snapshot / 15 token, ~2 napos ablak (→ B68). Ledger: 406 sor (crypto 125 · sports 190 · weather 79 · HL 12). Weather-multimodel: 101 snapshot, ebből 36 obs-szal. A piacon ingyenes, teljes könyv-archívum van ([Pendulum Flow](https://archive.pendulumflow.com/), CC BY 4.0, 2026-02-21 óta), a [Tardis.dev](https://docs.tardis.dev/historical-data-details/polymarket) 2026-05-25 óta viszi a Polymarketet, a [Predexon](https://predexon.com/pricing) historikus könyvet minden tieren ingyen ad. A Polymarket [megvette a Dome-ot](https://crypto.news/polymarket-acquires-prediction-market-api-startup-dome/) (2026-02-19), az [ICE](https://ir.theice.com/press/news-details/2025/ICE-Announces-Strategic-Investment-in-Polymarket/default.aspx) pedig legfeljebb $2B befektetés mellett globális disztribútora a Polymarket-adatnak.
+
+**3. Licenc.** A [Polymarket intézményi oldala](https://institutional.polymarket.com/) szerint egy „Capital Markets Entity" (bróker, market maker, prop trading, indexszámító, ETF-kibocsátó) **bármilyen** Polymarket-adatot — nyers, derived, aggregált — csak Polymarket + ICE licenccel használhat, és a nekik való továbbértékesítés is licenc-köteles. Pont ők lennének a derived adat vevői. A kutató-ág szerint a Kalshi, Binance, Bybit és Deribit feltételei is tiltják az adat továbbértékesítését (a Deribit a derived adatét is), az Open-Meteo ingyenes API-ja pedig non-commercial — ezeket nem szúrópróbáztam.
+
+**4. Az egyetlen rés fizetési hajlandósággal: weather.** A Kalshi weather-volumen ~500%-kal nőtt év/év alatt, 2026-ra ~$1,1B várható ([WSJ, 2026-08-27](https://finance.yahoo.com/markets/options/articles/kalshi-weather-co-join-forces-110000142.html)). A [wethr.net](https://wethr.net/subscribe) $14,99 / $24,99 / $99 havidíjat kér (modell-pontosság dashboard + API). A rés (gyenge bizonyítékkal): a piac **tényleges rezolúciós forrásához** illesztett eloszlás (Wunderground napi tábla vs NOAA órás idősor vs NWS CLI) + point-in-time archívum (forecast vs piaci ár vs rezolúciós obs). A B52 + EMOS + B53 ennek pont a váza. A belépő egy nyilvános, auditált track record — a weather modell ma −124% a piac ellen.
+
+**5. Szabályozás (nem jogi tanács).** [ESMA, 2026-07-03](https://www.esma.europa.eu/sites/default/files/2026-07/ESMA35-243228190-8148_Public_Statement_on_the_application_of_the_national_product_intervention_measures_on_binary_options_to_event_contracts.pdf): a MiFID II Annex I C(4)–(10) alapmutatójú event contract pénzügyi eszköz, retail felé a marketingje és értékesítése tilos (a C(10) a klimatikus változókat is lefedi). MiCA: személyre szabott crypto-tanácsadást csak engedélyes cég adhat; egy mindenkinek azonos jelfolyam valószínűleg nem tanácsadás, de a saját nyitott pozíció melletti vélemény-közlés piacbefolyásolásnak minősülhet. HU: SZTFH ISP-blokk a polymarket.com-ra 2026 január óta (tiltott szerencsejáték gyanúja); az engedély nélküli szerencsejáték reklámozása legalább 10M Ft bírság, egyetemlegesen a reklámozóra, a közzétevőre és a reklámban szereplőre is ([SZTFH](https://sztfh.hu/tevekenysegek/szerencsejatek-felugyelet/szerencsejatekot-nepszerusito-reklam-kozzetetelenek-alapveto-feltetelei/), Szjtv. 2. § (7a)).
+
+### ⚠ Mellék-lelet: a box nem nyithat Polymarket-pozíciót
+
+`GET https://polymarket.com/api/geoblock` a boxról → `{"blocked":true,"country":"DE","region":"SN"}`. A [Polymarket-doksi](https://docs.polymarket.com/api-reference/geoblock) szerint DE = close-only: új pozíció nem nyitható, se frontenden, se API-n. A paper-mód nem érintett; a Polymarket live-flip (B10) viszont a mostani boxról nem működne. A repóban eddig sehol nem szerepelt (a `geo-block` találatok a Binance/Bybit Netlify-fallbackre vonatkoznak). → **B10**: új precondition.
+
+### Felvéve
+
+- **B10** — új blokkoló: geoblock + HU/ESMA jogi precondition.
+- **B68** — fill-modell kalibráció külső, teljes-piacos könyv-archívumból (jelölt).
+- **B69** — B52 offline előkiértékelés dynamical.org IFS-ENS/AIFS-ENS archívumon (jelölt).
+- [`current-state/trading-status.md`](../current-state/trading-status.md) — geoblock-figyelmeztetés a tetején.
+
+---
+
 ## 93. session — a drift-check kiértékelése → B67 (a tiszta-számláló provenanciája) + a drift-check prompt pontosítása
 
 A user sorban: „nézd meg a drift-check eredményét és minden rendben van-e a kereskedő botokkal" → „csináld a kettő kicsit" (a számláló-fix és a drift-check prompt) → „pusholhatsz is a mainre".

@@ -267,6 +267,7 @@ A korábbi B9 (Topup action) átkerült a "📋 Next sprint candidates" szekció
 - **Doksi:** master-plan.md P1.1 / P1.2 (HL + Polymarket live deps)
 - **Mit ad:** HL live trade-flip enabler — `HL_PRIVATE_KEY` env, `@nktkas/hyperliquid` npm install + audit, `HL_PAPER_MODE=false`. Polymarket live trade-flip enabler — `POLY_PRIVATE_KEY`, `POLY_FUNDER_ADDRESS`, `@polymarket/clob-client` audit, `PAPER_MODE=false`. **Erre live trade nem indítható** — minden live módra váltás előfeltétele ez a setup.
 - **Anti-sprint védőháló**: a meglévő anti-sprint lista tiltja a live-flip-et amíg a paper validation gate-ek nem teljesülnek; ez a backlog tétel **csak akkor megy "Next candidates"-be**, ha a gate-ek mind ✓.
+- **⚠ Új blokkoló — joghatóság (2026-09-10, API-felmérés, élőben mérve).** A box IP-je Polymarket-oldalon **geoblockolt**: `GET https://polymarket.com/api/geoblock` a boxról → `{"blocked":true,"country":"DE","region":"SN"}` (Hetzner, Szászország). A [Polymarket geoblock-doksi](https://docs.polymarket.com/api-reference/geoblock) szerint **DE = close-only**: meglévő pozíció zárható, **új nem nyitható** — frontenden és API-n is. A Polymarket live-flip (`PAPER_MODE=false`) tehát a mostani boxról **technikailag sem működne**; a paper-mód (read-only piaci adat) nem érintett. Emellett **(a)** az SZTFH 2026 januárja óta ISP-szinten blokkoltatja a polymarket.com-ot Magyarországon, tiltott szerencsejáték gyanújával (ideiglenes intézkedés, a végleges határozat a [CMS](https://cms.law/en/hun/legal-updates/hungary-temporarily-blocks-access-to-polymarket-over-alleged-illegal-gambling) szerint függőben); **(b)** az [ESMA 2026-07-03-i statementje](https://www.esma.europa.eu/sites/default/files/2026-07/ESMA35-243228190-8148_Public_Statement_on_the_application_of_the_national_product_intervention_measures_on_binary_options_to_event_contracts.pdf) szerint a MiFID II Annex I C(4)–(10) alapmutatójú event contract pénzügyi eszköz, így a bináris-opciós retail-tilalom alá esik (a C(10) a klimatikus változókat is lefedi → a weather-piacok valószínűleg érintettek). **Új precondition:** jogi tisztázás a Polymarket live-flip előtt; a geoblock megkerülése (VPN, más régiós szerver) **nem opció**. A HL/F-Arb live-útját a Polymarket-geoblock nem érinti (külön venue). Részletek: [changelog 2026-09-10](../changelog/CHANGELOG-2026-09-10.md).
 
 ### B11 — Walk-forward backtest framework 🟠 KRITIKUS INFRA
 
@@ -898,6 +899,20 @@ A 2026-09-03 teljes audit (5 bot + infra + security) implementált fixei: [chang
   - Az epoch-konstans pinelve.
   - A meglévő „friss sor" fixture a deploy elé volt dátumozva. Áttettem utánra, mert a jelenlegi kód élesben ilyen sort sosem hoz létre.
 - **A drift-check promptja** erre a szabályra állt át, és négy további pontosítást kapott → [changelog 2026-09-10](../changelog/CHANGELOG-2026-09-10.md).
+
+### B68 — Fill-modell kalibráció külső, teljes-piacos Polymarket könyv-archívumból 🔵 JELÖLT (2026-09-10, API-felmérés)
+
+- **Lelet (élőben mérve).** A saját `clob-book` recorder (B50 #2) csak a **saját nyitott** crypto+weather pozíciók könyvét rögzíti, és az 5000-es rolling cap miatt gyakorlatilag **~2 napos ablak**: 2026-09-10-én 5000 snapshot / 15 token, 09-07 15:05 → 09-09 18:59. A 09-03 óta rögzített korábbi részt a cap már felülírta, és 09-09 19:00 óta nincs nyitott crypto/weather pozíció, így új snapshot sincs. A B50 doktrína („minden nem-logolt nap elveszett") erre a streamre így nem teljesül.
+- **Közben van ingyenes, teljes-piacos archívum.** A [Pendulum Flow](https://archive.pendulumflow.com/) **minden** Polymarket-könyvet rögzít 2026-02-21 óta (CC BY 4.0, regisztráció nélkül); a [Tardis.dev](https://docs.tardis.dev/historical-data-details/polymarket) 2026-05-25 óta viszi (`book_snapshot_5/25` + incremental L2).
+- **Javaslat:** a B49 #1 fill-modell (participáció-cap, slippage) és a Kyle-λ/VPIN kalibrációja ebből készüljön, ne a saját szűk streamből. A saját recorder élő-kontrollnak maradhat, de a cap-et és a hatókört ehhez kell igazítani.
+- **Precondition:** operátor-döntés. A CC BY 4.0 forrásmegjelölést kér.
+
+### B69 — B52 offline előkiértékelés historikus ensemble-archívumon 🔵 JELÖLT (2026-09-10, API-felmérés)
+
+- **Lelet.** A B52 flip-döntése (`weatherUseMultiModel`) ma 2-3 hét forward-adatra vár, mert az Open-Meteo historical-forecast API-ban nincs AIFS-ENS archívum, a WN2 pedig csak ~2026-09-04-től érhető el. A [dynamical.org](https://dynamical.org/catalog/) viszont ingyen adja az **ECMWF IFS-ENS**-t 2024-04-01 óta és az **AIFS-ENS**-t 2025-07-02 óta (51 tag, `temperature_2m`, Icechunk Zarr az AWS Open Data-n, CC BY 4.0 + ECMWF Terms of Use), és a GEFS-t is.
+- **Javaslat:** a GEFS vs IFS-ENS vs AIFS-ENS összevetés (CRPS, var-ratio, coverage a megfigyelt napi max ellen) már most elvégezhető ~14 hónapon × a bot állomásain; Python + xarray kell hozzá. A forward log a WN2 miatt ettől még kell, mert az nincs benne.
+- **Caveat:** a `temperature_2m` 3/6-órás pillanatérték, nem napi max, ezért a csúcsot alulbecsli (ugyanaz a caveat, amit a B52 a WN2/AIFS 6-órás felbontásánál jelzett). A torzítást (bias) az EMOS korrigálja, a szórás-szerkezetet csak részben.
+- **Precondition:** operátor-döntés.
 
 ### B70 — Sports: a bankroll +$7,50 fantomot hordoz (a P2-10 fix átmenete) 🟢 BACKLOG (alacsony, operátor-döntés)
 
