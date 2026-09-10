@@ -374,13 +374,38 @@ netlify deploy --prod --dir=dist
 
 ---
 
-## AKTUÁLIS ÁLLAPOT (2026-09-09)
+## AKTUÁLIS ÁLLAPOT (2026-09-10)
 
-> **⚡ Élő knob-állapot (elavult, 2026-09-04 — a friss állapot a 90. session alatt):** a B50 után **10 knob BE van kapcsolva** a boxon (paper): `fillModelEnabled`, `betaCapEnabled` (09-03 10:50), + `weatherUseEmos`, `oiDeltaEnabled`, `useHarRv`, `useFirstPassage`, `useDeribitIV`, `riskVolTargetEnabled`, `riskDdKillEnabled`, `combinerLogOddsStrength=1` (09-03 22:09). A **#2 recorderek ON** (`RECORD_OI=1`/`RECORD_CLOB_BOOK=1` → OI + PM-könyv gyűlik), a **weather EMOS seed lefuttatva** (27/27 állomás fittelve). Élő trade-audit (80. session) **PASS** — fill-modell/PnL/config-stamp/guardrailek helyesek. Az override a `blob_kv` `runtime-overrides-v1`-ben (nem a default-OFF a régi mondat lentebb — az a B49-deploy pillanatára vonatkozott).
+> **⚡ ÉLŐ knob-állapot — a drift-ellenőrzés referencia-listája (2026-09-10, 17 override, élőben verifikálva; `blob_kv` / `trader-settings` / `runtime-overrides-v1`):** `fillModelEnabled` 1 · `betaCapEnabled` 1 · `weatherUseEmos` 1 · `oiDeltaEnabled` 1 · `useHarRv` 1 · `useFirstPassage` 1 · `useDeribitIV` 1 · `riskVolTargetEnabled` 1 · `riskDdKillEnabled` 1 *(a 09-03-i B50-batch; a 10. kulcs, `combinerLogOddsStrength`, 09-09-én visszavonva — B56b)* · `weatherSelectionShrink` 1 · `weatherMaxPositionUSD` 15 · `frMinSpreadHourly` 0.00005 · `sportsSessionLossLimit` 50 · `sportsSessionLossLimitEnabled` 1 · `sessionLossLimit` 1000 *(a 6 visszaállított júliusi — B56)* · `weatherSigmaInflation` 2.25 · `weatherEmosSeedWeight` 0.1 *(a 90. session auditjából — párban mérve, egyiket se hangold a másik újramérése nélkül)*. **Szándékosan NINCS override-ban** (= kód-default): `sportsCronEnabled` (a 92. sessionben törölve → a sports fut), `weatherInvertDirection`, `combinerKBlindDownweight`, `combinerLogOddsStrength`. **Aki knobot vált, ezt a listát frissíti** — a napi `edgecalc-drift-check` kulcsonként ehhez hasonlít. A recorderek ON (`RECORD_OI=1`/`RECORD_CLOB_BOOK=1`), a weather EMOS seed lefuttatva (27/27 állomás).
 
 **Élő deploy:** **`https://trade.jmeszaros.dev`** — a Hetzner `analytics` Docker co-host (workers+api+model), **ÉL paper módban** (2026-09-02, Phase 5 kész). **Deploy módja (2026-09-03 frissítve):** a box **AUTO-DEPLOYOL** a GitHub Actions-ön át — push `main`-re → `ci.yml` (tsc+teszt+build) zöld → `deploy.yml` (workflow_run) **rsync-eli** a CI-validált commitot a runnerről a boxra (`rsync -rlptz --delete`, a box-lokális `.env`/`data`/`logs`/`dist`/`.git`/`.claude` kizárva) → `docker compose up -d --build` (+`.env`-őr). Ez leváltotta a box-oldali `git pull`-t (az anonim-HTTPS git rate-limit néha 401-elt). Kézi fallback: `ssh analytics` → `git pull --ff-only && docker compose up -d --build` (de utána a fa „dirty" lehet a rsync-hez képest → inkább a Deploy workflow újrafuttatása). **A teljes B49 A-lépcső (#1–#9) + a 67. session audit-fixek (`d2143f5`) DEPLOYOLVA és élnek** (2026-09-03, paper, verifikálva: publikus HTTP 200, workers tick 5s), a knobok default-OFF (0 viselkedés-változás). Memória: `hetzner-box-deploy`. A régi `mj-trading.netlify.app` Netlify-build a `main`-en törött (a monorepo-restruktúra óta), a Netlify **nyugdíjazásra vár** (a user törli — Phase 6 — de előbb a Phase 4 adat-export döntés). Paper mode végig.
 
-### Legutóbbi munka (91. session, 2026-09-09) — B36 lezárva (már kész volt), B38 előkészítve, napi drift-ellenőrzés
+### Legutóbbi munka (93. session, 2026-09-10) — drift-check kiértékelve → B67 számláló-fix + a drift-check prompt pontosítva
+
+**A drift-check első ütemezett futása valódi hibát talált.** A tiszta first-observation számláló túlszámolt. A B61 `firstBackfilled` jelzés csak a saját deployjától (09-09 11:04) jelöl, ezért a B53 óta (05:25) addig back-fillelt sorok jelöletlenek maradtak. Emiatt **25 rezolvált sor „tisztának" látszott**: 63 számolt vs **38** valódi (2026-09-10, 15:44 UTC).
+
+**Fix (B67):** `FIRST_TUPLE_EPOCH` + [`firstObservationProvenance`](packages/core/src/prediction-ledger.mts). Tiszta csak az a sor, amit a B53 deploy UTÁN láttunk először; a `firstTs` sosem íródik felül. Tiszta függvény, adatmigráció nélkül.
+
+⚠ **A hatás mérete.** A pontszámok nem változnak, mert a fogyasztók minden sort pontoznak; csak a tisztaság-állítás változik. A walk-forward banner `category=all` esetén 30% → **25%**, és a rés-soroknak csak 2/25-e konvergált ár.
+
+**A drift-check promptja:**
+- a CLAUDE.md-t tekinti referenciának (fent új, kulcsonkénti knob-lista, **17 override**);
+- az F-Arbnál `status = OPEN`-t számol;
+- kiszűri a „likely model error" skip-sorokat;
+- a codeVersion-t csak a legutóbbi deploy utáni sorokon várja.
+
+Minden parancs élőben kipróbálva.
+
+**Bot-állapot (read-only ellenőrzés):** mind az 5 fut. Az F-Arb „beragadt pozíció" riasztásom téves volt, mind a 6 pozíció `CLOSED`.
+
+**Nyitva: B70.** A sports bankroll **+$7,50 fantomot** hordoz: 43,00 a 35,50 helyett, így a Kelly ~21%-kal túlméretez.
+- Ok: 3 pozíció a P2-10 fix előtti könyveléssel nyílt, és a fix után zárult, így a veszteségük sosem terhelte a bankrollt.
+- ⚠ A reggeli kiértékelésben ezt tévesen „reset-szivárgásnak" írtam, és a bankrollt helyesnek mondtam.
+- Kódváltozás nem kell. Egyszeri korrekció vagy későbbi reset kell — operátor-döntés, alacsony prioritás.
+
+`tsc` 0 · **53/53** teszt · build zöld · pusholva. Doksi: [changelog](internal-docs/changelog/CHANGELOG-2026-09-10.md) · [sprints B67/B70](internal-docs/roadmap/sprints.md).
+
+### Korábbi munka (91. session, 2026-09-09) — B36 lezárva (már kész volt), B38 előkészítve, napi drift-ellenőrzés
 
 **B36 — nem elvégezni kellett, hanem lezárni.** A HL Kelly win-prob fix **2026-09-03 óta a kódban van** (`534f637`), a `sprints.md` viszont nyitottként mutatta → a re-implementálás duplikált munka lett volna. Verifikálva: [`kelly-sizer.mts`](services/worker/src/pillars/hyperliquid/kelly-sizer.mts) `baseline = 1/(1+rr)` **azonos** a spec `slPct/(tpPct+slPct)` alakjával (tp 0.02 / sl 0.01 → RR 2 → **1/3**), és az invariáns is áll: dirProb=0.5 → `1/3 − (2/3)/2 = 0`, azaz **edge=0 ⇒ Kelly=0** (a régi kód 0.25-öt adott, ~3× túlméretezés). A [teszt](services/worker/src/pillars/hyperliquid/kelly-sizer.test.mts) fejléce szó szerint *„pins the B36 fix"*. **Ez maga is drift-lelet** — a tracker hat napja élő fixet mutatott nyitottként.
 
@@ -424,7 +449,7 @@ A user: „a B56 javaslatokat is csináld meg, **ha jobb lesz tőle minden bot**
 
 **A #2 saját javaslatomat ELVETETTEM** — rontana. Ok: a directional ág élő jelei *tévednek*, tehát a 3 konstans-0.5 jel 0.5 felé húzása **véletlenül védelmet adott**; a kimenet határozottabbá tétele csak a hibát nagyítja. **Helyette: `combinerLogOddsStrength` 1 → 0 (default) ✅ alkalmazva** — a knobot 09-03-án a B50-batch kapcsolta ON-ra bizonyíték nélkül, az első mérés szerint ront (Brier 0.2630 vs 0.2696), és a kevésbé döntésképes kimenet (0.032 vs 0.041) a `combinerConfidenceMin`=0.05 kapun **több rossz directional trade-et blokkol** → implicit módon teljesíti a **#1** javaslatot is, kódváltozás nélkül. **#1** (directional scan-kihagyás) és **#3** (crypto selection-shrink) szándékosan NEM implementálva (az előbbi értékes unbiased ledger-adatot semmisítene meg; az utóbbihoz n=5 trade kevés). **Korlát:** a mérés crypto-sorokon készült, a knob globális (a HL-en 2 ledger-sor = mérhetetlen) — ezért ez visszaállás a kód-defaultra, nem új fogadás. Részletek: [sprints B56b](internal-docs/roadmap/sprints.md) · [changelog](internal-docs/changelog/CHANGELOG-2026-09-09.md).
 
-> **⚡ ÉLŐ knob-állapot (2026-09-09, a 90. session rendszer-audit után): 18 override, DEPLOYOLVA + alkalmazva.** A korábbi **15** megőrizve (a 09-03-i 9 + a 6 visszaállított júliusi), plusz **3 új az auditból**: **`weatherSigmaInflation` 2.25** (P0-1 — a forward-residualokon mért σ-alul-diszperzió korrekciója; a mért plató az élő EMOS-be úton) · **`weatherEmosSeedWeight` 0.1** (P0-2 — a seedelt residualok leszavazták ~40:1-ben az élő adatot; LOO-val mérve a 0.1 javít, a 0.03 alatt az effektív minta ~10-re esik) · **`sportsCronEnabled` 0** (a sports leállítva — lásd lent). ⚠ A két weather-knob **párban van mérve**: jobb EMOS-fit → kevesebb σ-infláció kell; egyiket se hangold a másik újramérése nélkül. NEM visszaállítva: `weatherInvertDirection` (a σ-fix nem oldja meg az előjel-problémát, és a naiv flip **mérve sem** működik — Brier(1−p)=0,2753 > 0,2500) és `combinerKBlindDownweight`. DSR-trial naplózva. **Élőben verifikálva** (11:13 tick): a weather predikciók behúzódtak a végekről (munich 0,0069 → **0,1109** — pont a −$20,68-ot vivő `[0–0,15)` sávból ki), a sports `skipped` + „settled open positions, opened nothing", 0 hiba / 4 tick.
+> **Knob-állapot a 90. session auditja után (2026-09-09): 18 override, DEPLOYOLVA + alkalmazva** — ⚠ azóta **17** (a 92. sessionben a `sportsCronEnabled` törölve); az aktuális referencia-lista az AKTUÁLIS ÁLLAPOT elején. A korábbi **15** megőrizve (a 09-03-i 9 + a 6 visszaállított júliusi), plusz **3 új az auditból**: **`weatherSigmaInflation` 2.25** (P0-1 — a forward-residualokon mért σ-alul-diszperzió korrekciója; a mért plató az élő EMOS-be úton) · **`weatherEmosSeedWeight` 0.1** (P0-2 — a seedelt residualok leszavazták ~40:1-ben az élő adatot; LOO-val mérve a 0.1 javít, a 0.03 alatt az effektív minta ~10-re esik) · **`sportsCronEnabled` 0** (a sports leállítva — lásd lent). ⚠ A két weather-knob **párban van mérve**: jobb EMOS-fit → kevesebb σ-infláció kell; egyiket se hangold a másik újramérése nélkül. NEM visszaállítva: `weatherInvertDirection` (a σ-fix nem oldja meg az előjel-problémát, és a naiv flip **mérve sem** működik — Brier(1−p)=0,2753 > 0,2500) és `combinerKBlindDownweight`. DSR-trial naplózva. **Élőben verifikálva** (11:13 tick): a weather predikciók behúzódtak a végekről (munich 0,0069 → **0,1109** — pont a −$20,68-ot vivő `[0–0,15)` sávból ki), a sports `skipped` + „settled open positions, opened nothing", 0 hiba / 4 tick.
 
 ### Korábbi munka (87. session, 2026-09-09) — crypto-diagnózis (B56) + a júliusi knobok visszaállítva
 

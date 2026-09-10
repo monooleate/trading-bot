@@ -61,7 +61,10 @@ export interface PredictionRecord {
   // already existed (written before B53 shipped), rather than captured at the
   // row's first sighting. Such a value was measured mid-life — for the worst
   // observed case, 2412 scans after `firstTs` — so it is not a pre-convergence
-  // horizon and must not be counted as clean evidence. Absent/false ⇒ genuine.
+  // horizon and must not be counted as clean evidence.
+  // Absent/false does NOT prove the opposite: rows back-filled before this flag
+  // shipped never received it. Ask `firstObservationProvenance`, which also
+  // checks `firstTs` against FIRST_TUPLE_EPOCH (B67).
   firstBackfilled?: boolean;
   // WHICH CODE produced this prediction. `configHash` above hashes the runtime
   // KNOBS only — no commit, no build id — so two materially different code
@@ -452,29 +455,70 @@ export function computeLedgerStats(category: string, records: PredictionRecord[]
 }
 
 /**
- * Does this record carry a GENUINE first-sighting observation?
+ * When B53 went live: the moment the deploy that shipped the write-once
+ * first-sighting tuple finished (deploy run for `0ed3f93`, which carried
+ * `89fccc4`). From here on a NEW row latches the tuple at its first scan.
  *
- * Audit P1-4. Three states exist in the live ledger and the measurement layer
- * must not treat them alike:
+ * A row whose `firstTs` is earlier was created by the old code, so whatever
+ * tuple it carries was filled in afterwards — mid-life — whatever
+ * `firstBackfilled` says. The flag cannot vouch for such a row: it shipped with
+ * B61 at 11:04 UTC, six hours later, and it is only set while the tuple is
+ * still EMPTY. Every pre-B53 row rescanned inside that window had already been
+ * back-filled, so no later scan can flag it. B67: the 2026-09-10 drift check
+ * found 25 such resolved rows counted as clean, with more of the set still
+ * open. The same data shows no flagged row first seen after this instant, so
+ * the epoch alone separates the two populations; the flag stays as a record.
  *
- *   1. `firstPredictedProb` set, `firstBackfilled` unset  → clean. Captured at
- *      the row's first scan, before the market price converged.
- *   2. `firstPredictedProb` set, `firstBackfilled` true    → laundered. Frozen at
- *      B53-deploy time, potentially thousands of scans into the row's life.
- *   3. `firstPredictedProb` unset                          → pre-B53 row not yet
- *      rescanned; consumers fall back to the LATEST fields, which is the fully
- *      converged value the whole fix exists to avoid.
- *
- * Only (1) is clean. Consumers should keep scoring every row — dropping (2) and
- * (3) today would leave almost nothing — but they must be able to say how much
- * of a verdict rests on contaminated evidence. Pure.
+ * `firstTs` is written when a row is created and never rewritten, so comparing
+ * it with this instant settles provenance for every row, old or new. It is a
+ * historical fact, not a tunable: moving it silently reclassifies evidence.
+ * (Measured 2026-09-10: no ledger row has a `firstTs` within ten minutes of it,
+ * so the deploy's own few seconds of ambiguity decide nothing.)
  */
-export function isCleanFirstObservation(r: {
+export const FIRST_TUPLE_EPOCH = "2026-09-09T05:25:24Z";
+const FIRST_TUPLE_EPOCH_MS = Date.parse(FIRST_TUPLE_EPOCH);
+
+export type FirstObservationProvenance = "clean" | "backfilled" | "missing";
+
+/** The fields provenance is decided from — all present on a PredictionRecord. */
+export interface FirstObservationFields {
+  firstTs: string;
   firstPredictedProb?: number;
   firstBackfilled?: boolean;
-} | null | undefined): boolean {
-  if (!r) return false;
-  return typeof r.firstPredictedProb === "number" && r.firstBackfilled !== true;
+}
+
+/**
+ * Classify a record's first-sighting tuple (audit P1-4 + B67). Three states
+ * exist in the live ledger and the measurement layer must not treat them alike:
+ *
+ *   "clean"      tuple set, not flagged, row first seen at/after
+ *                FIRST_TUPLE_EPOCH → captured at the row's first scan, before
+ *                the market price had time to converge.
+ *   "backfilled" tuple set, but flagged OR first seen before FIRST_TUPLE_EPOCH
+ *                → frozen whenever the new code first reached an existing row,
+ *                potentially thousands of scans into its life. An unparseable
+ *                `firstTs` lands here too: a row whose age cannot be
+ *                established cannot be vouched for.
+ *   "missing"    no tuple → pre-B53 row never rescanned; consumers fall back to
+ *                the LATEST fields, the converged value the fix exists to avoid.
+ *
+ * Only "clean" is clean. Consumers should keep scoring every row — dropping the
+ * other two today would leave little — but they must be able to say how much
+ * of a verdict rests on contaminated evidence. Pure.
+ */
+export function firstObservationProvenance(
+  r: FirstObservationFields | null | undefined,
+): FirstObservationProvenance {
+  if (!r || typeof r.firstPredictedProb !== "number") return "missing";
+  if (r.firstBackfilled === true) return "backfilled";
+  const firstSeen = Date.parse(r.firstTs);
+  if (!Number.isFinite(firstSeen) || firstSeen < FIRST_TUPLE_EPOCH_MS) return "backfilled";
+  return "clean";
+}
+
+/** Does this record carry a GENUINE first-sighting observation? Pure. */
+export function isCleanFirstObservation(r: FirstObservationFields | null | undefined): boolean {
+  return firstObservationProvenance(r) === "clean";
 }
 
 /**
@@ -483,16 +527,14 @@ export function isCleanFirstObservation(r: {
  * can never again be asserted on a pool whose baseline is the outcome itself.
  */
 export function firstObservationCoverage(
-  records: readonly {
-    firstPredictedProb?: number;
-    firstBackfilled?: boolean;
-  }[],
+  records: readonly FirstObservationFields[],
 ): { total: number; clean: number; backfilled: number; missing: number; cleanFraction: number } {
   let clean = 0, backfilled = 0, missing = 0;
   for (const r of records ?? []) {
-    if (typeof r?.firstPredictedProb !== "number") missing++;
-    else if (r.firstBackfilled === true) backfilled++;
-    else clean++;
+    const p = firstObservationProvenance(r);
+    if (p === "clean") clean++;
+    else if (p === "backfilled") backfilled++;
+    else missing++;
   }
   const total = clean + backfilled + missing;
   return { total, clean, backfilled, missing, cleanFraction: total ? clean / total : 0 };

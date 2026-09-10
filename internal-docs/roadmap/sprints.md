@@ -505,7 +505,8 @@ A korábbi B9 (Topup action) átkerült a "📋 Next sprint candidates" szekció
 #### Végrehajtási terv (mérés-first)
 
 1. **Előbb mérni, aztán építeni.** A **B56b** tanulsága: egy plauzibilis „nyilvánvaló" javítás a valós ledgeren szimulálva **rontott** (Brier 0.2696 → 0.2889). A `selectionShrink` hatását ugyanígy kell szimulálni a ledgeren, **mielőtt** kódba kerül.
-2. **Precondition: tiszta adat.** Ma **1** olyan rezolvált sor van az egész rendszerben, aminek a first-observationje tiszta (B53+B61). Az (1) alpont kalibrálása szennyezett baseline-on értelmetlen → **B53 után ≥30 tiszta crypto sor** a belépő.
+2. **Precondition: tiszta adat.** 2026-09-09-én **1** olyan rezolvált sor volt az egész rendszerben, aminek a first-observationje tiszta. Az (1) alpont kalibrálása szennyezett baseline-on értelmetlen, ezért a belépő: **B53 után ≥30 tiszta crypto sor**.
+   *Állás 2026-09-10 ~16 UTC: **19** tiszta crypto sor. B67-szabállyal számolva; a jelzés-alapú régi szabály túlszámolt.*
 3. **Amikor van adat:** (1) `cryptoSelectionShrink` knob, **default 0 = no-op**, a grossEdge előtt, a szélső ár-bucketekre; (2) `maxEdgeCap` plateau-sweep (**nem** a csúcs — [`@core/plateau.mts`](../../packages/core/src/plateau.mts) `selectPlateau`); (3) rezolúciós-ablak-tudatos aggregát cap a meglévő `checkBetaCap` **mellé**, nem helyette.
 4. **Kimenet-ellenőrzés:** a promóciós kapu (B50 #1) döntse el, nem a PnL.
 ### B39 — evGap net-of-fee baseline 🟡
@@ -861,6 +862,55 @@ A 2026-09-03 teljes audit (5 bot + infra + security) implementált fixei: [chang
 - **⚠ Egy fogás menet közben, ugyanabból az osztályból.** Az első implementáció `eval("require")`-rel töltötte be lustán a `node:fs`-t. ESM alatt ez **dob**, tehát minden hívás a catch-be esett és `"dev"`-et adott — **ami történetesen ugyanaz, mint a placeholder értéke**, így a hiba láthatatlan volt: egy hihető érték állt egy meg nem történt olvasás helyén. Statikus importra váltva javítva, és a teszt most **valódi fájl-olvasást pinel** ideiglenes könyvtárban.
 - **Forward-only**, mint a B53 — a már kiírt sorok nem attribuálhatók újra. A `codeVersionSpread` a **címkézetlen** sort is `mixed`-nek számolja egy címkézett mellett: a kódja genuinely ismeretlen, és a hallgatást egyetértésnek olvasni pontosan az a csapda, amiről a lelet szól.
 - **Teszt:** [`build-info.test.mts`](../../packages/core/src/build-info.test.mts) — az élő kevert arm pinelve, a címkézetlen sor `mixed`, az arm-kulcs a `firstConfigHash`, a verzió stabil egy processzen belül (nem nyit armot restartonként), és a fájl-olvasás **tényleg megtörténik**.
+
+### B67 — A tiszta first-observation számláló túlszámolt: a B53→B61 ablak back-filljei jelöletlenek ✅ IMPLEMENTED 2026-09-10 (93. session)
+
+- **Forrás.** A napi `edgecalc-drift-check` első ütemezett futása (2026-09-10 06:03 UTC) — a 9. sáv automatizált változata. A javítás előtt a boxról lehúzott ledgeren függetlenül reprodukálva.
+- **Lelet.** A B61 `firstBackfilled` jelzés csak a **saját deployjától** (09-09 11:04 UTC) jelöl, és csak akkor, ha a first-tuple az upsertkor még **üres**. A B53 viszont már 05:25-kor élesedett, és az addig újrascannelt pre-B53 sorokat a `??=` kitöltötte. Ezek **soha nem kaphatnak jelzést**, a régi `isCleanFirstObservation` (tuple jelen van + nincs jelzés) pedig tisztának mondta őket. **Ugyanaz az osztály, mint a B53 és a B66:** a mező hiánya nem azt jelenti, amit a fogyasztója hisz róla.
+- **Mérés** (élő ledger-dump, 2026-09-10 15:44 UTC). A szállított függvény és egy független inline-újraimplementáció számra egyezik:
+
+| | rezolvált | tiszta (csak jelzés) | tiszta (provenancia) | rés |
+|---|---|---|---|---|
+| crypto | 108 | 16 | 13 | 3 |
+| weather | 64 | 7 | **2** | 5 |
+| sports | 167 | 31 | 15 | 16 |
+| hyperliquid | 10 | 9 | 8 | 1 |
+| **össz.** | **349** | **63** | **38** | **25** |
+
+  A rés-sorok a befagyasztáskor mediánban **14–32 órásak** voltak; a HL-sor 150 órás (a B61-ben leírt `hyperliquid/BTC`). ~16 UTC-kor egy további crypto-sor rezolvált, és 3 sports-sor még nyitott. A rés tehát legfeljebb **29** lesz, utána a ledger-cap kiöregíti.
+- **⚠ Mekkora a hatás: provenancia- és számlálási hiba, nem nagy pontszám-torzítás.**
+  - A 25 rés-sorból csak **2** ára volt a kimenettől 0,02-n belül; a valódi soroknál ez 1/38.
+  - A fogyasztók továbbra is **minden** sort pontoznak (`first ?? latest`), tehát a walk-forward, a config-attribúció és a bandit **számai nem változnak**.
+  - Egy dolog változik: a walk-forward kártya bannerje (`category=all`, sports nélkül, 216 sor) **30% → 25%** tisztát mutat.
+- **Fix — tiszta függvény, adatmigráció nélkül** ([`prediction-ledger.mts`](../../packages/core/src/prediction-ledger.mts)):
+  - Új `FIRST_TUPLE_EPOCH` = `2026-09-09T05:25:24Z`. Ez a B53-at (`89fccc4`) vivő deploy-run vége (`0ed3f93`, `gh run list`).
+  - Új `firstObservationProvenance()` → `clean | backfilled | missing`. `clean` csak akkor, ha van tuple, nincs jelzés, **és** `firstTs ≥ epoch`. A `firstTs` a létrehozáskor íródik, és soha nem íródik felül, ezért minden sorra eldönti az eredetet.
+  - Az `isCleanFirstObservation` és a `firstObservationCoverage` erre vált. Az edge-tracker és a UI változtatás nélkül követi.
+- **Robusztusság.**
+  - Élőben **0** jelzett sor jött létre az epoch után, tehát az epoch egyedül is elválasztja a két populációt.
+  - Az epoch ±10 percében egyetlen sor sem jött létre, így a deploy pár másodperces bizonytalansága semmit nem dönt el.
+  - A `firstBackfilled` doc-ja („Absent/false ⇒ genuine") **hamis volt** — javítva.
+- **Teszt** ([`prediction-ledger.test.mts`](../../packages/core/src/prediction-ledger.test.mts)):
+  - Egy élő rés-sor pontos mása. A mai upsert **nem** tudja jelölni (maga a hiba pinelve), és a sor **nem** tiszta.
+  - Határeset: az epochkor elsőként látott sor tiszta, az 1 ms-mal korábbi nem.
+  - Hiányzó vagy olvashatatlan `firstTs` → nem tiszta.
+  - A coverage a négy élő alakot külön bontja.
+  - Az epoch-konstans pinelve.
+  - A meglévő „friss sor" fixture a deploy elé volt dátumozva. Áttettem utánra, mert a jelenlegi kód élesben ilyen sort sosem hoz létre.
+- **A drift-check promptja** erre a szabályra állt át, és négy további pontosítást kapott → [changelog 2026-09-10](../changelog/CHANGELOG-2026-09-10.md).
+
+### B70 — Sports: a bankroll +$7,50 fantomot hordoz (a P2-10 fix átmenete) 🟢 BACKLOG (alacsony, operátor-döntés)
+
+- **Tünet (élő, 2026-09-10 ~16 UTC).** A sports session `bankroll_current` **43,00**, de az invariáns (`bankrollStart + sessionPnL − nyitott költség`) szerint **35,50** kellene: 50 − 7,5 − 7,0. A különbség pontosan **+$7,50**.
+- **Mechanizmus (adatból és kódból igazolva).**
+  - A session 2026-09-09 06:00:19-kor indult (a 86. session resetje). A [`freshSession`](../../services/worker/src/pillars/sports/session-manager.mts) ekkor írja a `startedAt`-ot, azóta nem volt reset.
+  - 06:01:25-kor 3 pozíció nyílt ($7,50) a **P2-10 fix előtti** kóddal, ami a költséget nem vonta le a bankrollból. Az audit ezt mérte: 50,00 látszott 7,50 lekötött tőke mellett.
+  - A P2-10 fix 11:04-kor élesedett; azóta a zárás `costBasis + pnl`-t ír jóvá.
+  - A 3 pozíció 18:56–21:17 UTC között 0-ra rezolvált (3 × −2,50). A jóváírás 2,50 − 2,50 = **0**, tehát a veszteség sosem terhelte a bankrollt. A fix a már nyitott, régi könyvelésű pozíciókat nem kezelte.
+- **⚠ Korrekció.** A drift-check kiértékelésekor (93. session) ezt „a reset előtti pozíciók átszivárogtak az új sessionbe" formában írtam le, és a bankrollt helyesnek mondtam. **Mindkettő téves volt**: nem volt reset, a −7,5 ennek a sessionnek a valódi vesztesége, és a bankroll a hibás.
+- **Hatás.** A sports Kelly **~21%-kal** túlbecsült bankrollra méretez (43,00 vs 35,50). Paper, és a sports ki van zárva a cross-bot aggregátumból, ezért alacsony. A `session_pnl` (−7,5) és a `session_loss` (7,5) helyes.
+- **Mellék-tünet (nem igazolt).** A `pillar_session.trade_count` sportsnál 0, miközben 3 zárt trade van; a többi botnál az oszlop egyezik. A runner a `tradeCount`-ot a `closedTrades` hosszából számolja ([`sports/index.mts`](../../services/worker/src/pillars/sports/index.mts), ~392. sor), tehát valószínűleg csak a normalizált oszlop nem töltődik.
+- **Javítás.** Kódváltozás nem kell, mert a P2-10 óta nyitott pozíciókra a könyvelés helyes. Két út van, mindkettő operátor-döntés: egyszeri, jóváhagyott korrekció (`bankroll_current` −7,50), vagy reset, miután a mostani 3 pozíció rendeződött. A napi drift-check ismert eltérésként kezeli.
 
 ---
 

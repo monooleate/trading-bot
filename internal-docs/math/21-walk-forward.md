@@ -101,3 +101,20 @@ változatlanul viselkednek (élőben verifikálva: a fenti számok a fix után b
 „nem backfillelhető" logika, mint a B50 #2 / B52 recordereknél) → a tiszta mérés a deploytól indul.
 A B53 **nem** trading-hiba: a bot belépéskor mindig a valós árral dolgozott, csak a mérési réteg
 olvasott rossz mezőt. Tracker: [`sprints.md` B53](../roadmap/sprints.md).
+
+**Provenancia (B61 → B67).** A „first" mező **jelenléte** nem azonos az **eredetével**. A B53 `??=`
+a már létező sorokat is kitöltötte, a befagyasztás pillanatában, akár napokkal a sor születése után.
+Ezért kapott a B61 egy `firstBackfilled` jelzést. A B67 aztán kimutatta, hogy ez a jelzés a saját
+deployja (09-09 11:04) előtti hat óra back-filljeit **nem** látja: 25 rezolvált sor tisztának
+látszott (63 számolt vs 38 valódi, 2026-09-10).
+
+A mérvadó szabály ma: egy sor akkor tiszta first-observation, ha
+- van tuple,
+- nincs jelzés,
+- **és** `firstTs ≥ FIRST_TUPLE_EPOCH` (2026-09-09T05:25:24Z, a B53 deploy vége).
+
+Implementáció: [`firstObservationProvenance`](../../packages/core/src/prediction-ledger.mts).
+
+A kártya **továbbra is minden sort pontoz**. A provenancia csak a „Baseline only N% clean"
+figyelmeztetést táplálja: `category=all` esetén 30% → **25%**. Tracker:
+[`sprints.md` B61 / B67](../roadmap/sprints.md).

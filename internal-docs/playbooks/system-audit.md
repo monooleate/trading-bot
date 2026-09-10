@@ -134,6 +134,7 @@ Nem sávonkénti riportok — egy összefésült lista, súlyosság szerint.
 - ❌ **„Nyilvánvaló" javítást mérés nélkül szállítani.** B56b: mérve rontott.
 - ❌ **Auditálás közben javítani.** Előbb a lista, aztán a jóváhagyás, aztán a fix.
 - ❌ **Feltételezni, hogy az élő állapot = a doksi.** Pont ez a 9. sáv.
+- ❌ **Provenancia-jelzőt csak előre bevezetni.** A B61 `firstBackfilled` jelzés csak a saját deployjától (09-09 11:04) jelölt; a B53-deploy (05:25) óta addig back-fillelt sorok jelöletlenek maradtak, és 25 rezolvált sor „tisztának" számított (→ B67 — a napi drift-check, azaz a 9. sáv automatizált változata fogta meg). Ha egy jelzés egy jövőbeli eseménynél íródik, a már megtörtént eseményeket egy **soha felül nem írt időbélyeg + rögzített epoch** zárja ki — a jelzés hiányából ne következtess tisztaságra.
 
 ---
 

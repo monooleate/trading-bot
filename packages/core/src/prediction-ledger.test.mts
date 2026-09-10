@@ -19,7 +19,12 @@ import {
   computeLedgerStats,
   type PredictionRecord,
 } from "./prediction-ledger.mts";
-import { isCleanFirstObservation, firstObservationCoverage } from "./prediction-ledger.mts";
+import {
+  isCleanFirstObservation,
+  firstObservationCoverage,
+  firstObservationProvenance,
+  FIRST_TUPLE_EPOCH,
+} from "./prediction-ledger.mts";
 import { ledgerPointsFromRecords } from "./walk-forward.mts";
 import { computeConfigAttribution } from "./config-fingerprint.mts";
 import { banditArmsFromRecords } from "./thompson.mts";
@@ -333,13 +338,15 @@ function expect(cond: boolean, test: string, message: string) {
       ts, cfg,
     );
 
-  // A brand-new row: latched at first sighting, so NOT back-filled.
-  const fresh = upsertRecords([], inc(0.40, 0.30, "2026-09-09T00:00:00Z", "cfgA"), "crypto");
+  // A brand-new row: latched at first sighting, so NOT back-filled. Dated after
+  // the B53 deploy, as every row the current code creates in production is —
+  // a row first seen earlier cannot be clean (B67, see the epoch block below).
+  const fresh = upsertRecords([], inc(0.40, 0.30, "2026-09-10T00:00:00Z", "cfgA"), "crypto");
   expect(fresh[0].firstBackfilled !== true, t, "a genuinely new row must not be flagged as back-filled");
   expect(isCleanFirstObservation(fresh[0]), t, "a first-sighting row is clean evidence");
 
   // Re-scanning it must NOT retroactively flag it.
-  const rescanned = upsertRecords(fresh, inc(0.95, 0.97, "2026-09-09T09:00:00Z", "cfgB"), "crypto");
+  const rescanned = upsertRecords(fresh, inc(0.95, 0.97, "2026-09-10T09:00:00Z", "cfgB"), "crypto");
   expect(rescanned[0].firstPredictedProb === 0.40, t, "first-tuple stays write-once across rescans");
   expect(rescanned[0].predictedProb === 0.95, t, "latest fields still refresh");
   expect(isCleanFirstObservation(rescanned[0]), t, "a rescan must not turn a clean row dirty");
@@ -375,6 +382,69 @@ function expect(cond: boolean, test: string, message: string) {
     `coverage must separate all three states, got ${JSON.stringify(cov)}`);
   expect(Math.abs(cov.cleanFraction - 1 / 3) < 1e-9, t, "cleanFraction must be clean/total");
   expect(firstObservationCoverage([]).cleanFraction === 0, t, "empty pool must not divide by zero");
+}
+
+// ── B67: the flag alone misses every row back-filled BEFORE the flag shipped ──
+// B53 went live at 05:25 UTC on 2026-09-09, the `firstBackfilled` flag (B61) at
+// 11:04 — and the flag is only set while the tuple is still EMPTY. A pre-B53
+// row rescanned in between was back-filled unflagged, and no later scan can
+// flag it. The 2026-09-10 drift check found 25 such resolved rows counted as
+// clean. Provenance has to come from `firstTs`, which is never rewritten.
+{
+  const t = "first-tuple-epoch";
+  const incG = (ts: string) =>
+    buildIncoming(
+      [{ market: "g1", action: "skip", reason: "r", predictedProb: 0.31, marketPrice: 0.64, direction: "NO", endDate: "2026-09-20T00:00:00Z" }],
+      [{ slug: "g1", conditionId: "0xg" }],
+      ts, "cfgNow",
+    );
+
+  expect(FIRST_TUPLE_EPOCH === "2026-09-09T05:25:24Z", t,
+    `the epoch is a historical fact (end of the B53 deploy run), got ${FIRST_TUPLE_EPOCH}`);
+
+  // A gap row exactly as the live ones looked at 11:04: first seen before B53,
+  // tuple already filled in inside the window, and no flag.
+  const gapRow: any = {
+    slug: "g1", category: "weather", firstTs: "2026-09-08T11:00:00Z",
+    ts: "2026-09-09T10:57:00Z", conditionId: "0xg", endDate: "2026-09-20T00:00:00Z",
+    predictedProb: 0.30, marketPrice: 0.62, edge: 0.32,
+    firstPredictedProb: 0.29, firstMarketPrice: 0.61, firstConfigHash: "cfgGap",
+    direction: "NO", taken: false, lastAction: "skip", skipReason: null, signalBreakdown: null,
+    scans: 449, outcome: null, resolvedAt: null, configHash: "cfgGap",
+  };
+  const after = upsertRecords([gapRow], incG("2026-09-10T06:00:00Z"), "weather");
+  expect(after[0].firstBackfilled !== true, t,
+    "precondition (the bug itself): today's upsert cannot flag a tuple filled in before the flag existed");
+  expect(after[0].firstMarketPrice === 0.61, t, "the tuple itself stays write-once");
+  expect(!isCleanFirstObservation(after[0]), t, "a row first seen before B53 is never clean, flagged or not");
+  expect(firstObservationProvenance(after[0]) === "backfilled", t,
+    `the gap row must classify as backfilled, got ${firstObservationProvenance(after[0])}`);
+
+  // Boundary: a first sighting AT the epoch is clean; a millisecond earlier is not.
+  const atEpoch = upsertRecords([], incG(FIRST_TUPLE_EPOCH), "weather");
+  expect(isCleanFirstObservation(atEpoch[0]), t, "a row first seen at the epoch is clean");
+  const earlier = new Date(Date.parse(FIRST_TUPLE_EPOCH) - 1).toISOString();
+  expect(!isCleanFirstObservation(upsertRecords([], incG(earlier), "weather")[0]), t,
+    "one millisecond before the epoch is not");
+
+  // A tuple whose row age cannot be established is not vouched for.
+  expect(firstObservationProvenance({ firstTs: "not-a-date", firstPredictedProb: 0.5 }) === "backfilled", t,
+    "an unparseable firstTs is not clean");
+  expect(firstObservationProvenance({ firstPredictedProb: 0.5 } as any) === "backfilled", t,
+    "an absent firstTs is not clean");
+  expect(firstObservationProvenance(null) === "missing" && !isCleanFirstObservation(undefined), t,
+    "null/undefined → missing, never clean");
+
+  // Coverage over the four shapes the live ledger holds.
+  const genuine = upsertRecords([], incG("2026-09-10T07:00:00Z"), "weather")[0];
+  const cov = firstObservationCoverage([
+    genuine,
+    { ...genuine, firstTs: "2026-09-02T00:00:00Z", firstBackfilled: true }, // flagged (after B61)
+    after[0],                                                               // unflagged (the B67 gap)
+    { firstTs: "2026-09-01T00:00:00Z" },                                    // never rescanned: no tuple
+  ]);
+  expect(cov.clean === 1 && cov.backfilled === 2 && cov.missing === 1, t,
+    `the gap row must count as backfilled, not clean, got ${JSON.stringify(cov)}`);
 }
 
 // ─── CLI report ───────────────────────────────────────────────────────────
