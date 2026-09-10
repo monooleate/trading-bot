@@ -982,7 +982,12 @@ A 2026-09-03 teljes audit (5 bot + infra + security) implementált fixei: [chang
   - [`station-config.test.mts`](../../services/worker/src/pillars/weather/station-config.test.mts): az 5 új elvárás a tiltott régi ICAO-val; a detektor a valós szabályszövegeken; a „William P. Hobby" eset, ahol pont van a névben; lefedettség; egyedi azonosítók.
   - [`station-obs.test.mts`](../../services/worker/src/pillars/weather/station-obs.test.mts): a HKO-mezőt olvassa, nem a reptérit.
   - Élő próba a deploy előtt: HKO 09-09 → 32,2 °C, 09-10 → 31,9 °C; a METAR RKSI-re, KHOU-ra és LFPB-re rendben.
-- **Operatív:** a deploy után az 5 új állomás EMOS-előzményét újra kell tölteni, mert a régi azonosítókon gyűlt adat a rossz állomásról szólt. A régi store-kulcsok (`v1:KDEN` stb.) árván maradnak, ártalmatlanok.
+- **Operatív — elvégezve 2026-09-10.**
+  - Deployolva: `a6c47e5`, 18:30 UTC.
+  - Az 5 új állomás EMOS-előzménye újratöltve (`seed-emos.ts 6 KHOU,RKSI,HKO,KBKF,LFPB`): 905 seed-sor, mind az 5 illesztve. A többi 22 állomás érintetlen.
+  - Élőben: 0 `SETTLEMENT_STATION_MISMATCH`, 0 valódi hiba. A runner már az új azonosítókkal logol (az RKSI első élő sora). A seedelt sorok a következő tick után is megvannak.
+  - A régi store-kulcsok (`v1:KDEN` stb.) árván maradnak, ártalmatlanok.
+  - A HKO-megfigyelés élesben az első lezárult hongkongi dátumnál fut először.
 - **Nyitva:** a `lagos` állomás nem ellenőrizhető (nincs aktív piac), ezért nincs `settlementKey`-e.
 
 ### B72 — EMOS: a megfigyelt napi maximum begyűjtése nem robusztus 🟡 BACKLOG (mérés-first)

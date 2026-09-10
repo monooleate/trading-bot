@@ -176,3 +176,8 @@ Védett UPDATE: csak akkor fut, ha a rés pontosan 7,50.
 - **`math/16`:** HKO-forrás és állomás-őr.
 
 **Verifikáció:** `tsc` 0 · **54/54** teszt · build zöld.
+
+**Deploy és élő ellenőrzés:**
+- `a6c47e5`: a CI és a deploy zöld (18:30 UTC); a box `BUILD_INFO` egyezik, a konténerben az új `station-config` fut.
+- EMOS-újratöltés a boxon: 905 seed-sor, mind az 5 állomás illesztve. A többi 22 érintetlen, és a seedelt sorok a következő tick után is megvannak.
+- Élőben 0 `SETTLEMENT_STATION_MISMATCH`, 0 valódi hiba. A runner már az új azonosítókkal logol (az RKSI első élő sora).

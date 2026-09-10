@@ -422,7 +422,7 @@ Minden parancs élőben kipróbálva.
 - Javítva a [`station-config`](services/worker/src/pillars/weather/station-config.mts).
 - Hongkong saját HKO-megfigyelési forrást kapott ([`station-obs.mts`](services/worker/src/pillars/weather/station-obs.mts)).
 - Új őr jelzi, ha egy listing más állomást nevez meg: `SETTLEMENT_STATION_MISMATCH` log.
-- Ezekben a városokban megváltozott a live weather bemenete. Az 5 állomás EMOS-előzményének újratöltése a deploy után történik (→ changelog).
+- Ezekben a városokban megváltozott a live weather bemenete. Deployolva (`a6c47e5`), és az 5 állomás EMOS-előzménye újratöltve: 905 seed-sor, mind az 5 illesztve. Élőben 0 eltérés-jelzés, 0 hiba.
 
 **B70 — a sports bankroll +$7,50 fantomja korrigálva**, operátor-jóváhagyással: 43,00 → 35,50, és a következő tick után is tartós. A reggeli „reset-szivárgás" magyarázatom téves volt.
 
