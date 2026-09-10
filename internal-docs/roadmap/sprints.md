@@ -1005,6 +1005,10 @@ A 2026-09-03 teljes audit (5 bot + infra + security) implementált fixei: [chang
   - legyen minimális riportszám;
   - a 36 órás ablakon belül legyen újraellenőrzés.
   - Az EMOS élesben be van kapcsolva (`weatherUseEmos` = 1), ezért a javítás előtt meg kell mérni a hatását.
+- **A seed megfigyelési oldala is torzít (2026-09-10, a B69 felderítéséből).**
+  - A seed ([`emos-seed.mts`](../../services/worker/src/pillars/weather/emos-seed.mts)) az ERA5 napi maximumát használja megfigyelésként. Ez a METAR-hoz képest hideg: 2026 augusztusában EGLC −0,67, RJTT −1,37, VHHH −0,84 °C (31 nap/állomás).
+  - Amíg egy állomásnak kevés az élő sora, az EMOS átlag-korrekciója ezt a hideg torzítást tanulja. A B71 5 új állomásánál ez most teljes egészében így van, mert csak seedjük van.
+  - **Javaslat:** a seed megfigyelése IEM METAR legyen (`asos.py`, `report_type=3,4`, helyi nap), Hongkongnál HKO. Utána újra-seedelés, és lemérni, változik-e a CRPS.
 
 ---
 
