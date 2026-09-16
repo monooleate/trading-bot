@@ -1010,6 +1010,23 @@ A 2026-09-03 teljes audit (5 bot + infra + security) implementált fixei: [chang
   - Amíg egy állomásnak kevés az élő sora, az EMOS átlag-korrekciója ezt a hideg torzítást tanulja. A B71 5 új állomásánál ez most teljes egészében így van, mert csak seedjük van.
   - **Javaslat:** a seed megfigyelése IEM METAR legyen (`asos.py`, `report_type=3,4`, helyi nap), Hongkongnál HKO. Utána újra-seedelés, és lemérni, változik-e a CRPS.
 
+### B73 — Crypto threshold offline backtest ⛔ NEGATÍV EREDMÉNY 2026-09-16 (94. session) — nem elvégezhető
+
+- **Cél volt:** a threshold-ág edge-jelének (+8%, de n=23) mintáját bővíteni historikus lezárt above-K piacokra, a bot fair-value-jának hű rekonstrukciójával (N(d₂), σ = HAR-RV — az élő út, `useHarRv=1`).
+- **Az első futás +92% skillt adott — ARTEFAKT.** Elkapva szállítás előtt: a Gamma `tag_id=21` lezárt above-K univerzuma (2026-05-15 óta, n=108) **mind órás strike-létra** (`…-Npm-et`), **valós ár-idősor nélkül** — 108-ból **74 a 0,5-ös mag-placeholderen** ül, a `prices-history` 4 napra is 1 pontot ad ~1 órával a lejárat előtt. A spotból számolt N(d₂) tehát egy **hamis 0,5-ös baseline** ellen „nyert", és a mély ITM/OTM kimenetet triviálisan eltalálta.
+- **Verdikt:** offline threshold-backtest nem elvégezhető — nincs valós piaci ár, amit verni lehetne. A threshold-edge **csak forward-logolt likvid sorokból** mérhető (n=23, +8%, CI [−5%,+23%]). **Kód nem változott.** A napi drift-check követi a tiszta sorok gyűlését. Ugyanaz az osztály, mint a B53/B56b: placeholder baseline ellen mért „skill" nem edge.
+- **Ha valaki újrapróbálná:** csak likvid, több-órás valós ár-történettel bíró piacokon, fix lead-del (pl. 6h/2h a rezolúció előtt) mintázva, ugyanabban a pillanatban a piaci árat ÉS a spotot véve — de a Gamma-elérhető above-K készlet erre nem alkalmas. A [`b73_threshold_backtest.py`](../../scratchpad-nem-verziózott) csak a scratchpadban van.
+
+### B74 — Measure-only directional halt ✅ IMPLEMENTED 2026-09-16 (94. session), default-OFF
+
+- **Miért:** a tiszta ledger (B67-provenancia, 2026-09-14, boot 90% CI) a directional ágakat a piac ára ALATT árazza OOS: crypto up-or-down **−44%** (n=72, CI [−77%,−21%]), HL perp **−59%** (n=31, CI [−144%,−12%]). Mindkét CI kizárja a 0-t. A threshold-ág az egyetlen, aminek van támogatása (+8%, n=23) — azt NEM állítjuk le.
+- **Új `directionalHalt` knob** (0/1, `common`, default 0). ON esetén:
+  - **crypto:** az [`isDirectionalCryptoMarket`](../../packages/core/src/coin.mts)-tel osztályozott **up-or-down** piacok nem nyílnak; a **threshold (above-K)** ág változatlan.
+  - **HL:** minden belépő leáll (a perp teljesen directional).
+- **A mérés folytatódik:** mindkét gate azon a piacon tüzel, ami **különben belépett volna**, és a skip-sort `predictedProb` + `endDate`/`marketPrice` mezővel pusholja → `appendPredictions` logolja, a ledger tovább gyűlik, a Brier-mérés a kimenet ellen sértetlen. „Ne vegyél fel, de mérj tovább."
+- **Fájlok:** [`directionalHaltEnabled()`](../../services/worker/src/pillars/shared/config.mts) · gate a [crypto runnerben](../../services/worker/src/pillars/index.mts) és a [HL runnerben](../../services/worker/src/pillars/hyperliquid/index.mts) · SCHEMA + [`env-vars.md`](../current-state/env-vars.md) `DIRECTIONAL_HALT` · [`coin.test.mts`](../../packages/core/src/coin.test.mts) B74-kohorsz assert-blokk. `tsc` 0 · 54/54 · build zöld.
+- **Élesítés:** default-OFF (mérés-first). A live-flip a deploy után külön, jóváhagyott lépés — lásd [changelog 2026-09-16](../changelog/CHANGELOG-2026-09-16.md).
+
 ---
 
 ## ✅ Completed sprints (rolling 5 utolsó)

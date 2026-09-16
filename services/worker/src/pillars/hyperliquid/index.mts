@@ -16,7 +16,7 @@ import { alertError, alertLiveBlocked } from "../shared/telegram.mts";
 import { computeLiveReadiness, shouldForcePaper, type LiveReadinessReport } from "../shared/live-readiness.mts";
 import { appendPredictions, reconcileLedger } from "@core/prediction-ledger.mts";
 import { getHlConfig, getEffectiveHlConfig } from "./config.mts";
-import { getEffectiveBetaCap } from "../shared/config.mts";
+import { getEffectiveBetaCap, directionalHaltEnabled } from "../shared/config.mts";
 import { loadPortfolioBetaSnapshot } from "../shared/portfolio-exposure.mts";
 import { hlExposureUsd, checkBetaCap } from "@core/portfolio-exposure.mts";
 import { getHlSignalForCoin } from "./signal-source.mts";
@@ -88,6 +88,10 @@ async function runHyperliquidTraderInner(
   // Mutable clone so the live-readiness gate can flip paperMode back to
   // true when the paper track record hasn't met validation thresholds.
   const config: HlTraderConfig = { ...baseConfig };
+  // B74: measure-only halt. HL perp is entirely directional and the clean
+  // ledger scores it −59% vs the market price OOS; when ON we still log every
+  // prediction but open nothing. Read once per tick.
+  const directionalHalt = await directionalHaltEnabled();
   let   session = await loadHlSession(config.paperMode);
   // Paper "never stop" valve (2026-09-01): resolved once per tick, used both
   // for the self-heal below and to suppress the post-resolution auto-stops.
@@ -540,6 +544,20 @@ async function runHyperliquidTraderInner(
       if (!decision.shouldTrade) {
         results.push({
           coin, action: "skip", reason: decision.reason,
+          direction: signal.direction, edge: netEdgePre,
+          predictedProb: signal.finalProb, marketPrice: signal.marketPrice,
+          gates: snapGates(),
+        });
+        continue;
+      }
+
+      // B74: measure-only directional halt. HL perp is entirely directional
+      // (−59% vs market OOS on the clean ledger). Fires only on a coin that
+      // would otherwise trade; the row still carries predictedProb + marketPrice
+      // so the ledger keeps filling. Default OFF → no behaviour change.
+      if (directionalHalt) {
+        results.push({
+          coin, action: "skip", reason: "Directional halt (B74): HL perp, measure-only",
           direction: signal.direction, edge: netEdgePre,
           predictedProb: signal.finalProb, marketPrice: signal.marketPrice,
           gates: snapGates(),

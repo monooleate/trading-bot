@@ -386,6 +386,20 @@ edge-tracker storage-ba kerülnek.
 
 ---
 
+### `DIRECTIONAL_HALT` 🟢 OPCIONÁLIS (default OFF) — B74
+
+- **Mire való:** ON esetén a bot **nem nyit új directional pozíciót** — se crypto
+  up-or-down, se HL perp —, de a predikciókat **tovább logolja a ledgerbe** (a
+  mérés torzítatlanul folytatódik). A tiszta ledger (B67-provenancia, 2026-09-14)
+  ezeket a piac ára ALATT árazta OOS: crypto up-or-down **−44%** (n=72), HL
+  **−59%** (n=31), a bootstrap-CI egyikben sem tartalmazza a 0-t.
+- **NEM érinti** a crypto **threshold** (above-K) piacokat — az az egyetlen crypto
+  ág, aminek van némi támogatása (+8%, n=23, még nem szignifikáns).
+- **Settings-knob:** `directionalHalt` (0/1, `common`) — deploy nélkül állítható.
+  Az env csak fallback; az override felülírja.
+
+---
+
 ## 10. Crypto bot tunable-ok (12 db)
 
 A crypto bot kereskedési paraméterei. Mind override-olható a Settings

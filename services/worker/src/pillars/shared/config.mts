@@ -111,6 +111,28 @@ export async function getEffectiveFillOpts(): Promise<{ enabled: boolean; partic
   }
 }
 
+// B74 — measure-only halt for DIRECTIONAL bets (crypto up-or-down + all HL perp).
+// The clean forward-logged ledger (B67 provenance) scores these worse than the
+// market price out-of-sample, both CIs excluding 0 (2026-09-14: crypto
+// up-or-down −44% n=72, HL −59% n=31). When ON, both runners still LOG every
+// prediction to the ledger — measurement continues, unbiased — but never open a
+// directional position. Crypto THRESHOLD (above-K) markets are unaffected: they
+// are the one crypto lane with any support (+8%, n=23, not yet significant), and
+// B73 showed the historical above-K markets carry no tradeable price to backtest
+// against, so that lane keeps gathering forward. Default OFF (env
+// DIRECTIONAL_HALT + `directionalHalt` 0/1 override) → zero behaviour change
+// until the operator flips it. Read once per tick by each runner.
+export async function directionalHaltEnabled(): Promise<boolean> {
+  const env = process.env.DIRECTIONAL_HALT === "true" || process.env.DIRECTIONAL_HALT === "1";
+  try {
+    const mod: any = await import("@api/routes/trader-settings.mts");
+    const ov = await mod.loadRuntimeOverrides();
+    return ov.directionalHalt != null ? ov.directionalHalt === 1 : env;
+  } catch {
+    return env;
+  }
+}
+
 // Crypto-beta exposure cap options (B49 #2). Aggregate directional crypto
 // capital (crypto + HL) is capped at `fraction × combined bankroll`. Env default
 // OFF; the `common` Blobs knobs `betaCapEnabled` (0/1) + `betaCapFraction`

@@ -145,6 +145,28 @@ const isMain = (() => {
   }
 }
 
+// ── B74 halt cohort ──────────────────────────────────────────────────────────
+// The measure-only directional halt (services/worker/src/pillars/index.mts) uses
+// this classifier to decide what to stop trading: up-or-down markets are the
+// −44% cohort and MUST be halted; above-K threshold markets are the +8% lane and
+// MUST keep trading. If a future change to isDirectionalCryptoMarket flips either
+// side, the halt would silently stop the wrong bets — pin both here.
+{
+  const t = "b74-halt-cohort";
+  for (const halted of [
+    "bitcoin-up-or-down-on-september-14-2026",
+    "ethereum-up-or-down-september-14-2026-5pm-et",
+  ]) {
+    expect(isDirectionalCryptoMarket(halted, "") === true, t, `B74 must halt: ${halted}`);
+  }
+  for (const kept of [
+    "bitcoin-above-76k-on-september-14-2026",
+    "ethereum-above-2600-on-september-14-2026",
+  ]) {
+    expect(isDirectionalCryptoMarket(kept, "") === false, t, `B74 must keep trading (threshold): ${kept}`);
+  }
+}
+
 if (isMain) {
   if (failures.length === 0) {
     console.log("coin.test: all checks passed");

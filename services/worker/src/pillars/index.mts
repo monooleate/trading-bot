@@ -8,8 +8,9 @@
 import type { Context } from "@netlify/functions";
 import { checkAuth } from "@api/routes/_auth-guard.ts";
 import { CORS, getTraderConfig, getEffectiveTraderConfig, getEffectiveBtcExitConfig, getBtcExitConfig, getEffectiveBetaCap, getEffectiveRiskOverlay,
-  getEffectiveCryptoScanWindow,
+  getEffectiveCryptoScanWindow, directionalHaltEnabled,
 } from "./shared/config.mts";
+import { isDirectionalCryptoMarket } from "@core/coin.mts";
 import { loadPortfolioBetaSnapshot } from "./shared/portfolio-exposure.mts";
 import { cryptoExposureUsd, checkBetaCap } from "@core/portfolio-exposure.mts";
 import { realisedVol, volTargetMultiplier, drawdownKill } from "@core/risk-overlay.mts";
@@ -322,6 +323,9 @@ async function runCryptoTrader(
   // Mutable copy: the live-readiness gate below may flip paperMode back
   // to true if the session hasn't met validation thresholds yet.
   const config: typeof baseConfig = { ...baseConfig };
+  // B74: measure-only halt for directional (up-or-down) crypto markets. Read
+  // once per tick; threshold (above-K) markets are never affected.
+  const directionalHalt = await directionalHaltEnabled();
   const btcExit = await getEffectiveBtcExitConfig();
   // P1.3 OB-imbalance thresholds + market-finder knobs + live-readiness
   // thresholds (all override-able via /trader-settings). The paper-resolver
@@ -701,6 +705,19 @@ async function runCryptoTrader(
           reason: decision.reason,
         });
         results.push({ ...marketContext, action: "skip", reason: decision.reason });
+        continue;
+      }
+
+      // B74: measure-only directional halt. Fires only on a market that WOULD
+      // otherwise trade, and only for up-or-down (directional) markets — the
+      // cohort the clean ledger scores −44% vs the market price OOS. The row is
+      // still pushed (with predictedProb + endDate) so appendPredictions logs it
+      // and the ledger keeps filling; we simply never open the position.
+      // Threshold (above-K) markets pass through untouched.
+      if (directionalHalt && isDirectionalCryptoMarket(market.slug, market.title)) {
+        const reason = "Directional halt (B74): up-or-down market, measure-only";
+        log("DECISION_SKIP", config.paperMode, { market: market.slug, reason });
+        results.push({ ...marketContext, action: "skip", reason });
         continue;
       }
 

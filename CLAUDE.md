@@ -374,7 +374,7 @@ netlify deploy --prod --dir=dist
 
 ---
 
-## AKTUÁLIS ÁLLAPOT (2026-09-10)
+## AKTUÁLIS ÁLLAPOT (2026-09-16)
 
 > **⚡ ÉLŐ knob-állapot — a drift-ellenőrzés referencia-listája (2026-09-10, 17 override, élőben verifikálva; `blob_kv` / `trader-settings` / `runtime-overrides-v1`):** `fillModelEnabled` 1 · `betaCapEnabled` 1 · `weatherUseEmos` 1 · `oiDeltaEnabled` 1 · `useHarRv` 1 · `useFirstPassage` 1 · `useDeribitIV` 1 · `riskVolTargetEnabled` 1 · `riskDdKillEnabled` 1 *(a 09-03-i B50-batch; a 10. kulcs, `combinerLogOddsStrength`, 09-09-én visszavonva — B56b)* · `weatherSelectionShrink` 1 · `weatherMaxPositionUSD` 15 · `frMinSpreadHourly` 0.00005 · `sportsSessionLossLimit` 50 · `sportsSessionLossLimitEnabled` 1 · `sessionLossLimit` 1000 *(a 6 visszaállított júliusi — B56)* · `weatherSigmaInflation` 2.25 · `weatherEmosSeedWeight` 0.1 *(a 90. session auditjából — párban mérve, egyiket se hangold a másik újramérése nélkül)*. **Szándékosan NINCS override-ban** (= kód-default): `sportsCronEnabled` (a 92. sessionben törölve → a sports fut), `weatherInvertDirection`, `combinerKBlindDownweight`, `combinerLogOddsStrength`. **Aki knobot vált, ezt a listát frissíti** — a napi `edgecalc-drift-check` kulcsonként ehhez hasonlít. A recorderek ON (`RECORD_OI=1`/`RECORD_CLOB_BOOK=1`), a weather EMOS seed lefuttatva (27/27 állomás).
 
@@ -384,7 +384,27 @@ netlify deploy --prod --dir=dist
 
 A user: lehetne-e API-szolgáltatást építeni a botok tudására és adataira, lenne-e kereslet? **Kód nem változott.** **Verdikt: most nem.** A predikciók **rosszabbak az ingyenes piaci árnál** (élő promóciós kapu: crypto −61% · weather −124% · sports −6% Brier-skill a piac ellen; HL +7%, de n=10), az adat kicsi (a teljes DB **11 MB**), a könyv-adat piaca telített (ingyenes, teljes Polymarket-archívum is van), és a Polymarket-adat pénzügyi szereplők felé csak Polymarket+ICE licenccel adható. Egyetlen fizetős rés: **weather** (Kalshi ~$1,1B/2026, wethr.net $15–99/hó) — de a belépő egy auditált track record. **⚠ Mellék-lelet:** a box IP-je (DE) a Polymarketnél **close-only** (`/api/geoblock` → `blocked:true`) → a Polymarket live-flip a boxról nem működne; emellett SZTFH ISP-blokk a polymarket.com-ra 2026 január óta, és az ESMA 2026-07-03-i event-contract statementje → **B10 új precondition** (jogi tisztázás; a megkerülés nem opció). Jelöltek: **B68** (fill-modell külső könyv-archívumból), **B69** (B52 offline előkiértékelés dynamical.org archívumon). Doksi: [changelog](internal-docs/changelog/CHANGELOG-2026-09-10.md) · [sprints B10/B68/B69](internal-docs/roadmap/sprints.md).
 
-### Legutóbbi munka (93. session, 2026-09-10) — drift-check kiértékelve → B67 számláló-fix + a drift-check prompt pontosítva
+### Legutóbbi munka (94. session, 2026-09-16) — a botok bizonyíték-alapú rendrakása: B73 (negatív), B74 (directional halt), B69 (weather offline eval)
+
+A user: „csináld őket sorban 1, 2, 3." Kiinduló mérés (tiszta ledger, B67-provenancia, 2026-09-14, boot 90% CI) — a modell első becslése a piac első ára ellen, OOS Brier-skill:
+
+| ág | n | skill vs piac | CI |
+|---|---|---|---|
+| crypto threshold (above-K) | 23 | **+8%** | [−5%, +23%] |
+| crypto up-or-down | 72 | **−44%** | [−77%, −21%] |
+| HL perp | 31 | **−59%** | [−144%, −12%] |
+| weather | 44 | **−61%** | [−90%, −33%] |
+| sports | 116 | **−10%** | [−20%, −3%] |
+
+**B73 — crypto threshold backtest → NEGATÍV, artefakt kiszűrve.** A cél a threshold-minta bővítése volt historikus above-K piacokra, a bot N(d₂)/HAR-RV fair-value-jának hű rekonstrukciójával. Az első futás **+92%-ot** adott — de ez **artefakt**: a Gamma `tag_id=21` lezárt above-K készlete (n=108) mind **órás strike-létra valós ár-idősor nélkül**, 74 a **0,5-ös mag-placeholderen** ül. A spotból számolt N(d₂) egy hamis baseline ellen „nyert". **Kód nem változott**, az artefaktot nem szállítottam. A threshold-edge csak forward-logolt likvid sorokból mérhető (marad n=23, +8%). Ugyanaz az osztály, mint a B53/B56b.
+
+**B74 — measure-only directional halt.** Új `directionalHalt` knob (0/1, `common`, **default 0**): ON esetén a crypto **up-or-down** és a teljes **HL** ág nem nyit pozíciót, de a ledgerbe **tovább logol** (torzítatlan mérés). A crypto **threshold** ág változatlan. A gate azon a piacon tüzel, ami különben belépett volna, a skip-sort `predictedProb`-bal pusholja → a Brier-mérés a kimenet ellen sértetlen. `tsc` 0 · **54/54** · build zöld. Élesítés: külön, a deploy után (mérés-first).
+
+**B69 — weather offline ensemble-értékelés:** külön szakasz a futás után (dynamical.org, ~74 GB, a boxon).
+
+`tsc` 0 · **54/54** teszt · build zöld. Doksi: [changelog](internal-docs/changelog/CHANGELOG-2026-09-16.md) · [sprints B73/B74/B69](internal-docs/roadmap/sprints.md).
+
+### Korábbi munka (93. session, 2026-09-10) — drift-check kiértékelve → B67 számláló-fix + a drift-check prompt pontosítva
 
 **A drift-check első ütemezett futása valódi hibát talált.** A tiszta first-observation számláló túlszámolt. A B61 `firstBackfilled` jelzés csak a saját deployjától (09-09 11:04) jelöl, ezért a B53 óta (05:25) addig back-fillelt sorok jelöletlenek maradtak. Emiatt **25 rezolvált sor „tisztának" látszott**: 63 számolt vs **38** valódi (2026-09-10, 15:44 UTC).
 
