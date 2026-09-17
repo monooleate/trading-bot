@@ -66,10 +66,39 @@ kimenet ellen) nem sérül** — pontosan a „ne vegyél fel, de mérj tovább"
 **Miért default-OFF + operátor-élesítés:** viselkedés-változás → mérés-first
 doktrína. A live-flip a deploy után külön, jóváhagyott lépés.
 
-## 3. B69 — weather offline ensemble-értékelés
+## 3. B69 — weather offline ensemble-értékelés → a multi-model pooling BIZONYÍTOTTAN javít
 
-(lásd külön szakasz a futás után)
+**Lefuttatva a boxon** (dynamical.org Icechunk, izolált `/tmp/b69lib` Python-környezet; a rendszer-Pythonhoz nincs pip/venv, `--target`-be telepítve, a botokat nem érintve). **11 823 állomás-nap**, 439 db 00z init 2025-07-02→09-13, a **B71-javított rezolúciós állomásokra**, T+1 napi maximum, IEM METAR / HKO megfigyeléssel. Pontozás a `multi-model-eval.mts` szerint (Gauss-CRPS, var-ratio, ±1σ), pooling a `multi-model-ensemble.mts` szerint (modellenként egyenlő súly, teljes-variancia tétel).
+
+**⚠ Menet közben elkaptam egy valódi tengely-hibát a saját scriptemben** — az IFS/AIFS dimenzió-sorrendje `(lead, member)`, a GEFS-é `(member, lead)`; a pozíciós `axis=1` az ECMWF-modelleknél a **tagokra** maximalizált, és hamis **4–8 °C hidegtorzítást** gyártott (paris IFS 24 vs valós 32). Megfigyelés-kontrollal szúrtam ki (a member-count 8/4 volt 51 helyett), név szerinti redukcióra javítottam. A tanulság a B53/B56b vonalán: mérés előtt kontroll valós adaton.
+
+### Eredmény (a javított futás)
+
+| variáns | torzítás | MAE | RMSE | CRPS | σ̄ | var-ratio | ±1σ |
+|---|---|---|---|---|---|---|---|
+| GEFS-inst *(amit a bot ma használ)* | −0,74 | 1,62 | 2,04 | 1,287 | 0,94 | **3,69** | 36% |
+| GEFS-tmax *(intervallum-max)* | −0,19 | 1,59 | 2,07 | 1,271 | 0,90 | 4,30 | 35% |
+| IFS-ENS | −1,20 | 1,65 | 2,05 | 1,346 | 0,74 | 6,15 | 26% |
+| AIFS-ENS | −1,55 | 1,77 | 2,15 | 1,377 | 0,95 | 4,49 | 28% |
+| **POOLED-inst** (G+I+A) | −1,16 | 1,52 | 1,86 | **1,124** | 1,25 | **1,91** | 44% |
+| **POOLED-best** (Gtmax+I+A) | −0,98 | 1,44 | 1,78 | **1,061** | 1,33 | **1,51** | 50% |
+
+**Három megállapítás, mind 11 823 napon:**
+
+1. **A GEFS-only σ súlyosan alul-diszperz — var-ratio 3,69, azaz a σ ~1,9×-esen túl szűk.** Ez a dokumentált weather-patológia első nagymintás számszerűsítése. Az élő `weatherSigmaInflation=2.25` tehát jó irány, sőt kissé bőkezű (√3,69 ≈ 1,92).
+2. **A pooling érdemben javít — dispersion ÉS pontosság:** a var-ratio 3,69 → **1,91** (a modellek közötti tag adja a szerkezeti szórást, amit egy család nem lát), a CRPS-skill a GEFS-inst ellen **+12,7% (párosított bootstrap 90% CI [+11,9, +13,4])**, interval-maxszal **+17,6% (CI [+16,9, +18,3])**. Régiónként is pozitív: EU +16,3%, Amerika +12,3%, Ázsia +9,7%. A pool a napok 55–59%-án nyer.
+3. **Az intervallum-max változó ~0,55 °C hidegtorzítást vesz le** a GEFS-ből (bias −0,74 → −0,19). A pool viszont örökli az ECMWF hidegtorzítását (IFS −1,20, AIFS −1,55) → a `weatherUseEmos` bias-korrekciója a poollal fontosabb.
+
+### Verdikt és korlátok
+
+A **B52 flip iránya (`weatherUseMultiModel`) bizonyítottan helyes**: a pooling +12–18% CRPS-t hoz és felezi az alul-diszperziót. **Két korlát, amiért ez nem azonnali flip:** (a) ez a mérés **3 modellt** használ, az élő multi-model **6–8-at** (GEM/UKMO/ICON is) és **EMOS-korrigált** — a pontos flip-hatáshoz a forward log kell; (b) a pool **még mindig alul-diszperz** (1,91), tehát a σ-infláció nem tűnik el, csak csökken (~√1,91 ≈ 1,4× a GEFS-only ~1,9× helyett). A két weather-knob (`weatherSigmaInflation` + `weatherEmosSeedWeight`) párban mérendő — a flip után újra kell hangolni, nem előtte. **Kód nem változott** (mérés); a flip + a knob-újrahangolás operátor-döntés a forward multi-model adatra.
+
+Scriptek a scratchpadban (`b69_eval.py`, `b69_ci.py`); a nyers minták a boxon `/tmp/b69_samples.jsonl` (11 823 sor).
 
 ---
 
-*(a deploy, a B74 élesítés és a B69 futás eredménye a szakasz alján frissül)*
+## Deploy + állapot
+
+- **B73 + B74 kód/doksi:** `1bea55c`, CI + deploy zöld. A `directionalHalt` knob a boxon fut, **default-OFF**.
+- **B74 élesítés:** a `directionalHalt=1` DB-írást a harness auto-mode classifier („Feature Flag Writes") **blokkolja** — operátornak kell lefuttatnia a `sprints.md` B74-nél megadott egysoros SQL-t. Amíg nem fut le, a live-állapot **17 override** (változatlan); élesítés után 18, és a CLAUDE.md knob-lista + ez a lábjegyzet frissül.
+- **B69:** csak mérés, nincs live-változás.

@@ -237,6 +237,29 @@ pont-hiba, a becsületes σ jobb CRPS-t kap").
 **Küszöb:** ≥30 címkézett snapshot, és csak pozitív CRPS-skill mellett szabad a
 `weatherUseMultiModel`-t bekapcsolni.
 
+### Offline előbizonyíték (B69, 2026-09-16 — dynamical.org, 11 823 állomás-nap)
+
+A forward log kivárása helyett a historikus archívumon (GEFS + IFS-ENS + AIFS-ENS,
+2025-07-02→09-13, 00z, a B71-javított rezolúciós állomásokra, IEM/HKO obs,
+ugyanezekkel a képletekkel) **nagymintás előbizonyíték**:
+
+| variáns | CRPS | var-ratio | skill vs GEFS-inst |
+|---|---|---|---|
+| GEFS-inst *(a mai σ-forrás)* | 1,287 | **3,69** (under) | — |
+| POOLED-inst (G+I+A) | 1,124 | **1,91** | **+12,7%** (CI [+11,9, +13,4]) |
+| POOLED-best (Gtmax+I+A) | 1,061 | 1,51 | **+17,6%** (CI [+16,9, +18,3]) |
+
+- A **GEFS-only σ ~1,9×-esen túl szűk** (var-ratio 3,69) — a dokumentált
+  underdispersion első nagymintás számszerűsítése, és igazolja a
+  `weatherSigmaInflation` létjogát (2,25 kissé bőkezű, √3,69 ≈ 1,92).
+- A **pooling felezi az alul-diszperziót** (3,69 → 1,91) és **+12–18% CRPS**-t hoz,
+  minden régióban pozitívan (EU +16% · AM +12% · AS +10%). A flip iránya tehát
+  **bizonyítottan helyes**.
+- **Korlát:** ez 3 modell (az élő path 6–8 + EMOS), és a pool **is** alul-diszperz
+  (1,91) → a σ-infláció marad, csak ~1,4×-re csökken. A flip + a σ/EMOS-knobok
+  **párban** újrahangolása a forward multi-model adatra vár. Részletek:
+  [changelog 2026-09-16](../changelog/CHANGELOG-2026-09-16.md).
+
 ---
 
 ## 7. Kapcsolódások

@@ -400,9 +400,11 @@ A user: „csináld őket sorban 1, 2, 3." Kiinduló mérés (tiszta ledger, B67
 
 **B74 — measure-only directional halt.** Új `directionalHalt` knob (0/1, `common`, **default 0**): ON esetén a crypto **up-or-down** és a teljes **HL** ág nem nyit pozíciót, de a ledgerbe **tovább logol** (torzítatlan mérés). A crypto **threshold** ág változatlan. A gate azon a piacon tüzel, ami különben belépett volna, a skip-sort `predictedProb`-bal pusholja → a Brier-mérés a kimenet ellen sértetlen. `tsc` 0 · **54/54** · build zöld. Élesítés: külön, a deploy után (mérés-first).
 
-**B69 — weather offline ensemble-értékelés:** külön szakasz a futás után (dynamical.org, ~74 GB, a boxon).
+**B69 — weather offline ensemble-értékelés → a multi-model pooling BIZONYÍTOTTAN javít.** A boxon lefuttatva (dynamical.org Icechunk, izolált Python-env; 11 823 állomás-nap, GEFS+IFS-ENS+AIFS-ENS, a B71-javított állomásokra). A **GEFS-only σ ~1,9×-esen túl szűk** (var-ratio 3,69 — a dokumentált underdispersion első nagymintás száma); a **pooling felezi** (→1,91) és **+12,7% CRPS-skillt** hoz (CI [+11,9, +13,4]), interval-maxszal +17,6%, minden régióban pozitívan. ⚠ Menet közben elkaptam egy tengely-hibát a scriptemben (IFS/AIFS dim-sorrend → hamis 4–8 °C hidegtorzítás), obs-kontrollal kiszűrve. **A B52 flip iránya igazolva**, de nem azonnali: 3 modell (élő 6–8 + EMOS), és a pool is alul-diszperz → a flip + σ/EMOS-knobok újrahangolása operátor-döntés a forward adatra. Kód nem változott.
 
-`tsc` 0 · **54/54** teszt · build zöld. Doksi: [changelog](internal-docs/changelog/CHANGELOG-2026-09-16.md) · [sprints B73/B74/B69](internal-docs/roadmap/sprints.md).
+`tsc` 0 · **54/54** teszt · build zöld. Doksi: [changelog](internal-docs/changelog/CHANGELOG-2026-09-16.md) · [sprints B73/B74/B69](internal-docs/roadmap/sprints.md) · [math/37 §6](internal-docs/math/37-multi-model-ensemble.md).
+
+> **⚠ B74 élesítés (a live knob-lista fentebb ezért még 17):** a `directionalHalt=1` DB-írást a harness auto-mode classifier („Feature Flag Writes") blokkolja — az operátornak kell lefuttatnia a [sprints B74](internal-docs/roadmap/sprints.md) egysoros SQL-jét. A knob deployolva, KI van kapcsolva. Élesítés után a lista 18-ra frissül.
 
 ### Korábbi munka (93. session, 2026-09-10) — drift-check kiértékelve → B67 számláló-fix + a drift-check prompt pontosítva
 

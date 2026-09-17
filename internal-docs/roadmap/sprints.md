@@ -918,7 +918,27 @@ A 2026-09-03 teljes audit (5 bot + infra + security) implementált fixei: [chang
   - **(b) A pozíció és a zárt trade nem őrzi a token-id-t és a fill-részleteket** (VWAP, teljesült USDC, részleges-e), így a fill-ek utólag nem auditálhatók.
 - **Státusz:** felderítve; az operátor 2026-09-10-én még nem indította (a B71-et választotta előbb).
 
-### B69 — B52 offline előkiértékelés historikus ensemble-archívumon 🔵 JELÖLT (2026-09-10, API-felmérés)
+### B69 — B52 offline előkiértékelés historikus ensemble-archívumon ✅ LEFUTVA 2026-09-16 (94. session) — a pooling bizonyítottan javít
+
+- **Eredmény (11 823 állomás-nap, 439 db 00z init 2025-07-02→09-13, a B71-javított állomásokra, T+1 napi max, IEM/HKO obs; Gauss-CRPS + var-ratio a `multi-model-eval.mts` szerint):**
+
+  | variáns | CRPS | var-ratio | CRPS-skill vs GEFS-inst |
+  |---|---|---|---|
+  | GEFS-inst *(a bot mai σ-forrása)* | 1,287 | **3,69** | — |
+  | IFS-ENS | 1,346 | 6,15 | −4,6% |
+  | AIFS-ENS | 1,377 | 4,49 | −7,0% |
+  | GEFS-tmax (intervallum-max) | 1,271 | 4,30 | +1,2% |
+  | **POOLED-inst** (G+I+A) | 1,124 | **1,91** | **+12,7%** (CI [+11,9, +13,4]) |
+  | **POOLED-best** (Gtmax+I+A) | 1,061 | 1,51 | **+17,6%** (CI [+16,9, +18,3]) |
+
+  Régiónként is pozitív (EU +16,3% · Amerika +12,3% · Ázsia +9,7%); a pool a napok 55–59%-án nyer.
+- **Három megállapítás:** (1) a GEFS-only σ ~**1,9×-esen túl szűk** (var-ratio 3,69) — a `weatherSigmaInflation=2.25` jó irány, kissé bőkezű; (2) a pooling felezi az alul-diszperziót (3,69 → 1,91) ÉS +12–18% CRPS-t hoz; (3) az intervallum-max ~0,55 °C hidegtorzítást vesz le a GEFS-ből, de a pool örökli az ECMWF hidegtorzítását (IFS −1,20, AIFS −1,55) → EMOS-korrekció kell mellé.
+- **⚠ Módszertan:** menet közben elkaptam egy tengely-hibát (az IFS/AIFS dim-sorrendje `(lead, member)`, a GEFS-é `(member, lead)`; a pozíciós `axis=1` hamis 4–8 °C hidegtorzítást gyártott) — megfigyelés-kontrollal kiszűrve, név szerinti redukcióra javítva. B53/B56b-vonal.
+- **Verdikt:** a **B52 flip iránya bizonyítottan helyes.** Nem azonnali flip: (a) ez 3 modell, az élő path 6–8 + EMOS → a pontos hatáshoz a forward log kell; (b) a pool is alul-diszperz (1,91), a σ-infláció marad (csak ~1,4×-re csökken). A flip + a `weatherSigmaInflation`/`weatherEmosSeedWeight` újrahangolása (párban!) **operátor-döntés a forward multi-model adatra**. Kód nem változott. Doksi: [changelog 2026-09-16](../changelog/CHANGELOG-2026-09-16.md) · [math/37 §5](../math/37-multi-model-ensemble.md).
+
+<details><summary>Felderítés (2026-09-10, 93. session — a lefutást megelőző kontextus)</summary>
+
+### B69 (felderítés) — B52 offline előkiértékelés historikus ensemble-archívumon
 
 - **Lelet.** A B52 flip-döntése (`weatherUseMultiModel`) ma 2-3 hét forward-adatra vár, mert az Open-Meteo historical-forecast API-ban nincs AIFS-ENS archívum, a WN2 pedig csak ~2026-09-04-től érhető el. A [dynamical.org](https://dynamical.org/catalog/) viszont ingyen adja az **ECMWF IFS-ENS**-t 2024-04-01 óta és az **AIFS-ENS**-t 2025-07-02 óta (51 tag, `temperature_2m`, Icechunk Zarr az AWS Open Data-n, CC BY 4.0 + ECMWF Terms of Use), és a GEFS-t is.
 - **Javaslat:** a GEFS vs IFS-ENS vs AIFS-ENS összevetés (CRPS, var-ratio, coverage a megfigyelt napi max ellen) már most elvégezhető ~14 hónapon × a bot állomásain; Python + xarray kell hozzá. A forward log a WN2 miatt ettől még kell, mert az nincs benne.
@@ -939,6 +959,7 @@ A 2026-09-03 teljes audit (5 bot + infra + security) implementált fixei: [chang
     - a korrelált snapshotok külön mintaként számolását.
   - **Korlát:** a live keverék 6–8 modelljével szemben itt csak 3 van, így a B52-flipre csak részleges választ ad.
 - **Státusz:** felderítve, a kör eldöntve. A futtatás (csomagtelepítés + ~74 GB) indításra vár.
+</details>
 
 ### B70 — Sports: a bankroll +$7,50 fantomot hordoz (a P2-10 fix átmenete) ✅ KORRIGÁLVA 2026-09-10 (operátor-jóváhagyással)
 
