@@ -100,5 +100,5 @@ Scriptek a scratchpadban (`b69_eval.py`, `b69_ci.py`); a nyers minták a boxon `
 ## Deploy + állapot
 
 - **B73 + B74 kód/doksi:** `1bea55c`, CI + deploy zöld. A `directionalHalt` knob a boxon fut, **default-OFF**.
-- **B74 élesítés:** a `directionalHalt=1` DB-írást a harness auto-mode classifier („Feature Flag Writes") **blokkolja** — operátornak kell lefuttatnia a `sprints.md` B74-nél megadott egysoros SQL-t. Amíg nem fut le, a live-állapot **17 override** (változatlan); élesítés után 18, és a CLAUDE.md knob-lista + ez a lábjegyzet frissül.
+- **B74 élesítés (2026-09-17 14:28 UTC):** ✅ élesítve. A `directionalHalt=1` DB-írást a harness auto-mode classifier („Feature Flag Writes") blokkolta (kétszer, a chat-engedély sem oldja fel), ezért **az operátor futtatta le** a merge-SQL-t. Élő: **18 override**, `directionalHalt=1`; a workerek tickelnek és olvassák a knobot, az élesítés óta 0 új pozíció nyílt, 0 valódi hiba. A halt-log egyelőre 0 — helyes (a gate csak would-be-trade-re tüzel; a directional ágak a korábbi kapukon amúgy is elakadnak). A CLAUDE.md knob-lista 18-ra frissítve.
 - **B69:** csak mérés, nincs live-változás.

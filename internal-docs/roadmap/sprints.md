@@ -1046,7 +1046,7 @@ A 2026-09-03 teljes audit (5 bot + infra + security) implementált fixei: [chang
   - **HL:** minden belépő leáll (a perp teljesen directional).
 - **A mérés folytatódik:** mindkét gate azon a piacon tüzel, ami **különben belépett volna**, és a skip-sort `predictedProb` + `endDate`/`marketPrice` mezővel pusholja → `appendPredictions` logolja, a ledger tovább gyűlik, a Brier-mérés a kimenet ellen sértetlen. „Ne vegyél fel, de mérj tovább."
 - **Fájlok:** [`directionalHaltEnabled()`](../../services/worker/src/pillars/shared/config.mts) · gate a [crypto runnerben](../../services/worker/src/pillars/index.mts) és a [HL runnerben](../../services/worker/src/pillars/hyperliquid/index.mts) · SCHEMA + [`env-vars.md`](../current-state/env-vars.md) `DIRECTIONAL_HALT` · [`coin.test.mts`](../../packages/core/src/coin.test.mts) B74-kohorsz assert-blokk. `tsc` 0 · 54/54 · build zöld.
-- **Élesítés:** default-OFF (mérés-first). A live-flip a deploy után külön, jóváhagyott lépés — lásd [changelog 2026-09-16](../changelog/CHANGELOG-2026-09-16.md).
+- **Élesítés:** ✅ **élesítve 2026-09-17 14:28 UTC** (`directionalHalt=1`, 18 override). A DB-írást a harness classifier blokkolta, ezért az operátor futtatta a merge-SQL-t; élőben verifikálva (workerek tickelnek + olvassák a knobot, 0 új pozíció az élesítés óta). A halt-log 0, amíg egy directional piac át nem jut az összes korábbi kapun. Lásd [changelog 2026-09-16](../changelog/CHANGELOG-2026-09-16.md).
 
 ---
 
