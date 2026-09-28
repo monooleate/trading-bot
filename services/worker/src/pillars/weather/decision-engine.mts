@@ -75,6 +75,13 @@ export interface WeatherConfig {
   // change corr(prediction, outcome) (measured −0.316 over n=28 entry rows).
   // See packages/core/src/weather-dispersion.mts and math/38.
   sigmaInflation: number;     // default 1.0 (off)
+  // multiSigmaInflation (B69, 2026-09-28): the same post-EMOS σ factor for the
+  // MULTI-MODEL path only. Each forecast source is calibrated separately and
+  // needs its own factor — measured on the forward log: GEFS + station EMOS
+  // plateaus at 1.2-1.4 (sigmaInflation 1.25), the mixture + its own pooled
+  // EMOS at 1.0. With one shared knob the GEFS fallback (mixture fetch failed)
+  // was forced onto the mixture's 1.0. Read only when the mixture drove μ/σ.
+  multiSigmaInflation: number; // default 1.0
   // shrinkSizing (P2-12, audit 2026-09-09): also apply the optimizer's-curse
   // penalty to the Kelly probability, not just to the trade/no-trade gate.
   // `selectionShrink` deflates the gross edge before the threshold test, but
@@ -160,6 +167,7 @@ export function getWeatherConfig(): WeatherConfig {
     // P0-1 (2026-09-09): default 1.0 = OFF / bit-identical. Measure-first —
     // the operator flips it after reading the dispersion diagnostics.
     sigmaInflation:     parseFloat(process.env.WEATHER_SIGMA_INFLATION || "1.0"),
+    multiSigmaInflation: parseFloat(process.env.WEATHER_MULTI_SIGMA_INFLATION || "1.0"),
     shrinkSizing:       parseFloat(process.env.WEATHER_SHRINK_SIZING || "0"),
   };
 }
@@ -202,6 +210,7 @@ export async function getEffectiveWeatherConfig(): Promise<WeatherConfig> {
       minPrice:           ov.weatherMinPrice        ?? env.minPrice,
       kellyScale:         ov.weatherKellyScale       ?? env.kellyScale,
       sigmaInflation:     ov.weatherSigmaInflation   ?? env.sigmaInflation,
+      multiSigmaInflation: ov.weatherMultiSigmaInflation ?? env.multiSigmaInflation,
       shrinkSizing:       ov.weatherShrinkSizing     ?? env.shrinkSizing,
     };
   } catch {

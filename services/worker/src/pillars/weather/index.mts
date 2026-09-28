@@ -474,7 +474,11 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
       // to (METAR obs + GEFS σ), so its dispersion term cannot be trusted to do
       // this job yet — that is P0-2. Inflating afterwards is predictable and
       // independent of the fit. Default 1.0 ⇒ `sigma` is untouched.
-      sigma = inflateSigma(sigma, config.sigmaInflation);
+      // B69: each forecast source has its own measured factor — the GEFS path
+      // (incl. the fallback when the mixture fetch fails) keeps sigmaInflation,
+      // the mixture uses multiSigmaInflation. Flip OFF → usingPool is false →
+      // exactly the legacy call.
+      sigma = inflateSigma(sigma, usingPool ? config.multiSigmaInflation : config.sigmaInflation);
       const match = matchBucket(emosMu, market.outcomes, sigma);
       if (!match) {
         results.push({
