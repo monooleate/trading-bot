@@ -10,6 +10,9 @@ import { getForecast } from "./forecast-engine.mts";
 import { detectModelLag } from "./model-lag-detector.mts";
 import { matchBucket, marketConsensusModalTempC } from "./bucket-matcher.mts";
 import { logForecast, loadStationEmosParams, reconcileEmosObs } from "./emos-store.mts";
+import { getPooledEmosModel } from "./pooled-emos-cache.mts";
+import { applyPooledEmos } from "@core/pooled-emos.mts";
+import { correctForecast } from "./metar-simulator.mts";
 import { isRecordDue, recordSnapshot, fillObsFromEmos } from "./multi-model-store.mts";
 import { emosApply } from "@core/emos.mts";
 import { inflateSigma } from "@core/weather-dispersion.mts";
@@ -346,10 +349,16 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
       // the systems refresh every 6–12 h, so the default 3 h cadence loses
       // nothing. Any store error → false → the legacy single-family path.
       const multiKey = `${station.icao}|${market.date}`;
-      let wantMultiModel = false;
-      if (config.multiModelRecord && !config.useMultiModel && !multiModelSeen.has(multiKey)) {
-        wantMultiModel = await isRecordDue(station.icao, market.date).catch(() => false);
+      // The ~3 h throttle gates the RECORDING, independently of the fetch: with
+      // the flip ON the mixture is fetched every tick anyway, and before B69 the
+      // throttle was skipped entirely in that mode — every 3-minute tick would
+      // have written a snapshot and pushed the useful history out of the
+      // 400-slot rolling store within days.
+      let recordDue = false;
+      if (config.multiModelRecord && !multiModelSeen.has(multiKey)) {
+        recordDue = await isRecordDue(station.icao, market.date).catch(() => false);
       }
+      const wantMultiModel = recordDue && !config.useMultiModel;
 
       // 4. Get forecast (pass through pipeline knobs from effective config)
       const forecast = await getForecast(market.city, station, market.date, {
@@ -381,7 +390,13 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
       // floor protects against ensemble agreement-overshoot (members
       // accidentally clustering into a tight σ doesn't mean the true
       // forecast skill is sub-half-a-degree).
-      const ensembleSigma = forecast.ensembleDetail?.dailyMaxStdDev;
+      // B69: with the multi-model flip ON, σ must come from the SAME source as
+      // μ (`forecastSd` — the mixture's σ). Reading `ensembleDetail` here priced
+      // buckets with the pooled μ and the single-family GEFS σ. Flip OFF keeps
+      // the exact legacy read, so the default path is bit-identical.
+      const ensembleSigma = config.useMultiModel
+        ? forecast.forecastSd
+        : forecast.ensembleDetail?.dailyMaxStdDev;
       const rawSigma =
         typeof ensembleSigma === "number" && Number.isFinite(ensembleSigma) && ensembleSigma > 0
           ? Math.max(0.5, ensembleSigma)
@@ -392,7 +407,22 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
       // Then, when EMOS is enabled AND the station has a fitted map, replace
       // (μ,σ) with the calibrated Gaussian — the σ-inflation fixes the
       // documented ensemble underdispersion. Default OFF → raw passthrough.
-      await logForecast(station.icao, market.date, forecast.predictedMaxC, rawSigma);
+      // B69: with the mixture driving μ/σ, the EMOS store still logs the GEFS
+      // ensemble — it is the GEFS calibration's training set, and mixing pooled
+      // residuals into it would corrupt the map the bot falls back to (flip OFF,
+      // or the mixture fetch failing). The pooled calibration learns from the
+      // multi-model store instead. Flip OFF → the legacy call, unchanged.
+      const usingPool = forecast.forecastSource === "multi";
+      if (!usingPool) {
+        await logForecast(station.icao, market.date, forecast.predictedMaxC, rawSigma);
+      } else if (forecast.ensembleDetail && forecast.ensembleDetail.memberCount >= 5) {
+        await logForecast(
+          station.icao,
+          market.date,
+          correctForecast(forecast.ensembleDetail.dailyMaxMean, 0),
+          Math.max(0.5, forecast.ensembleDetail.dailyMaxStdDev),
+        );
+      }
       // Fill past-date residuals from METAR + refit (unbiased; budgeted, best-effort).
       // Once per unique station per tick — many markets share one ICAO.
       if (!reconciledStations.has(station.icao)) {
@@ -406,7 +436,7 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
       }
       // B52 #1: record what every system said vs what the bot actually used.
       // Measurement only — nothing downstream reads this store.
-      if (config.multiModelRecord && forecast.multiModelDetail && !multiModelSeen.has(multiKey)) {
+      if (recordDue && forecast.multiModelDetail && !multiModelSeen.has(multiKey)) {
         multiModelSeen.add(multiKey);
         const mm = forecast.multiModelDetail;
         await recordSnapshot(station.icao, {
@@ -422,7 +452,14 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
       }
       let emosMu = forecast.predictedMaxC;
       let sigma = rawSigma;
-      if (config.useEmos) {
+      if (config.useEmos && usingPool) {
+        // B69 step 2: the mixture gets its OWN calibration (global EMOS map +
+        // shrunk station bias, fitted on the multi-model log). Unfitted → the
+        // raw mixture, never the GEFS-fitted per-station map.
+        const pooled = applyPooledEmos(await getPooledEmosModel(), station.icao, forecast.predictedMaxC, rawSigma);
+        emosMu = pooled.mu;
+        sigma = pooled.sigma;
+      } else if (config.useEmos) {
         const params = await loadStationEmosParams(station.icao);
         if (params?.fitted) {
           const cal = emosApply(params, forecast.predictedMaxC, rawSigma, params.varFloor);

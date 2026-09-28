@@ -289,3 +289,41 @@ ugyanezekkel a képletekkel) **nagymintás előbizonyíték**:
 - **WeatherNext 3** (5 km, órás, „station head", a bejelentés szerint 2 m-hőmérséklet-CRPS-ben
   akár −40% az ECMWF ENS-hez képest rövid lead-en) **még nincs az Open-Meteo-n**.
   Ha megjelenik, egy env-listaelem.
+
+## 9. A flip (B69 2. lépés, 2026-09-28) — saját kalibrációval, mérve
+
+A forward log (2026-09-09 → 09-27, 735 címkézett snapshot → 224 állomás-nap-lead-nap minta,
+18 állomás) az élő σ-láncon ([`scripts/eval-multimodel-flip.ts`](../../scripts/eval-multimodel-flip.ts))
+két dolgot mutatott, amit a nyers μ/σ összevetés nem:
+
+1. **A keverék a GEFS-re illesztett EMOS-szal rosszabb**, mint a GEFS-út. A keverék μ-ja +0,79 °C-kal
+   hidegebb a mértnél (az ECMWF-rendszerek hidegtorzítása), a GEFS-állomás-EMOS ezt csak +0,59-re viszi.
+   Ráadásul a mai élő σ túl széles volt: var-ratio 0,34, ±1σ-lefedettség 92% → `weatherSigmaInflation`
+   2,25 → **1,25** (1. lépés).
+2. **Saját kalibrációval a keverék nyer.** [`@core/pooled-emos.mts`](../../packages/core/src/pooled-emos.mts):
+   globális EMOS-térkép (a, b, c, d) az összes állomás keverék-snapshotján (állomásonként ~12 minta, az
+   EMOS 20-as küszöbe alatt) + állomásonkénti, K=5 pszeudo-mintával zsugorított bias; állomás-nap-lead-naponként
+   egy minta (a legutolsó snapshot). Óránkénti újraillesztés ([`pooled-emos-cache.mts`](../../services/worker/src/pillars/weather/pooled-emos-cache.mts)).
+
+**Gördülő (expanding-window) out-of-sample mérés, mindkét oldalon:** minden céldátumot csak a korábbi
+napokra illesztett modell pontoz (a GEFS-oldalon az élő tár súlyozásával újraillesztve: seed 0,1, forward
+csak `< d`).
+
+| változat | CRPS | skill vs GEFS OOS |
+|---|---|---|
+| GEFS + állomás-EMOS × 1,25 (OOS) | 0,864 | — |
+| **keverék + saját EMOS × 1,0** | **0,794** | **+8,1% [1,2; 15,5]** |
+| keverék + saját EMOS × 1,25 | 0,843 | +2,4% [−4,8; 9,9] |
+| keverék + saját EMOS × 1,5 | 0,905 | −4,7% [−12,3; 3,2] |
+
+⚠ Az in-sample GEFS-szám (0,764) 0,1-gyel szebb volt a valóságnál — az állomás-EMOS ezekre a napokra is
+illesztett. Egy in-sample alapvonal ellen a keverék vesztesnek látszott (−3,8%); a döntés csak a tisztességes
+összevetéssel születhetett meg.
+
+**A flip-pár:** `weatherUseMultiModel` = 1 **és** `weatherSigmaInflation` = 1,0 (kód-default). A keverék a
+saját kalibrációjával nem kér utólagos inflációt; a GEFS-út 1,25-je a keverékre már túl széles.
+
+**Két kódhiba, amit a flip előtt kellett javítani:** (1) a bucket-matcher σ-ja a flip után is a GEFS-ensemble
+szórása volt (`ensembleDetail`) — most a μ-vel azonos forrásból jön (`forecastSd`); (2) flip mellett a
+recorder throttle-je kiesett, minden 3 perces tick snapshotot írt volna. A GEFS-EMOS-tár a flip után is GEFS-adatot
+kap (a visszakapcsolás tiszta marad), a keverék a multi-model tárból tanul.

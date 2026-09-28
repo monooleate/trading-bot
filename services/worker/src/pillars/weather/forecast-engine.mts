@@ -34,6 +34,17 @@ export interface ForecastResult {
   // populated only when the caller asked for it (recorder tick or the trading
   // knob). Null otherwise — no fetch is issued.
   multiModelDetail?: MultiModelEnsembleResult | null;
+  // B69: the ensemble σ that DROVE μ and confidence on this call — the
+  // multi-system mixture's σ when `useMultiModel` took effect, the GEFS
+  // ensemble's σ otherwise, null when neither was usable. The bucket matcher
+  // must read THIS, not `ensembleDetail`: before this field existed a flipped
+  // run priced buckets with the pooled μ but the GEFS σ, i.e. without the very
+  // inter-model term the flip exists to add.
+  forecastSd?: number | null;
+  // B69: which source drove μ/σ on this call — "multi" (the mixture, flip ON
+  // and usable), "gefs-ens" (31-member GEFS) or "blend" (the deterministic
+  // GFS+ECMWF+NOAA fallback). The runner picks the matching EMOS by this.
+  forecastSource?: "multi" | "gefs-ens" | "blend";
   // Model weights used for this forecast (either fixed defaults or DEB-adjusted).
   modelWeightsUsed?: DebWeights;
 }
@@ -288,6 +299,8 @@ export async function getForecast(
   let ensembleMaxC = base.ensemble;
   let confidence   = base.confidence;
   let modelUsed    = base.modelUsed;
+  let forecastSd: number | null = null;
+  let forecastSource: "multi" | "gefs-ens" | "blend" = "blend";
 
   // B52: when the multi-system mixture is switched ON and usable, it supersedes
   // the single-family ensemble for both μ and σ — its σ carries the inter-model
@@ -296,6 +309,8 @@ export async function getForecast(
   if (opts.useMultiModel === true && multiResult && multiResult.memberCount >= 5) {
     ensembleMaxC = multiResult.dailyMaxMean;
     const sd = multiResult.dailyMaxStdDev;
+    forecastSd = sd;
+    forecastSource = "multi";
     confidence = Math.max(0.30, Math.min(0.95, 1.0 - sd / 4.0));
     modelUsed = `MULTI(${multiResult.perModel.length}x/${multiResult.memberCount})+${base.modelUsed}`;
   }
@@ -306,6 +321,8 @@ export async function getForecast(
     // Unanimity proxy: tighter stddev → higher confidence
     // stddev <= 0.5°C → 0.95 ; stddev >= 3°C → 0.30
     const sd = ensembleResult.dailyMaxStdDev;
+    forecastSd = sd;
+    forecastSource = "gefs-ens";
     confidence = Math.max(0.30, Math.min(0.95, 1.0 - sd / 4.0));
     modelUsed = `GFS-ENS31(${ensembleResult.memberCount})+${base.modelUsed}`;
   }
@@ -332,6 +349,8 @@ export async function getForecast(
     fetchedAt: new Date().toISOString(),
     ensembleDetail: ensembleResult,
     multiModelDetail: multiResult,
+    forecastSd,
+    forecastSource,
     modelWeightsUsed: debWeights,
   };
 }
