@@ -4,11 +4,52 @@ import { polygon } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
 import { getPolymarketConfig, CLOB_API } from "../shared/config.mts";
 import { log } from "../shared/logger.mts";
+import { alertError } from "../shared/telegram.mts";
 import { fetchClobBook } from "../shared/clob-book.mts";
 import { simulateDepthFill, fallbackFill, isFillValid } from "@core/fill-model.mts";
 import type { MarketInfo, OrderRecord } from "@core/types.mts";
 
 let _client: any = null;
+
+// ─── No-fill watchdog (B75) ─────────────────────────────────
+// 2026-09-14 → 09-28: 68 trade decisions, 68 rejected paper fills, and nothing
+// noticed it for two weeks — the rejection was a log line, the Telegram token
+// on the box is empty, and the daily drift-check looked at knobs, not fills.
+// Every consecutive REJECTED order (crypto + weather share this function) bumps
+// a streak; a FILLED order resets it. At the threshold a loud NO_FILL_WATCHDOG
+// line is logged (the drift-check greps it) and a Telegram alert is attempted.
+// Process-local on purpose: a restart resets it, and the drift-check covers the
+// multi-day view from the logs.
+const NO_FILL_ALERT_STREAK = 5;
+let _rejectStreak = 0;
+let _rejectStreakSince: string | null = null;
+
+function noteFillOutcome(filled: boolean, market: string, reason?: string): void {
+  if (filled) {
+    _rejectStreak = 0;
+    _rejectStreakSince = null;
+    return;
+  }
+  _rejectStreak++;
+  if (!_rejectStreakSince) _rejectStreakSince = new Date().toISOString();
+  if (_rejectStreak === NO_FILL_ALERT_STREAK || (_rejectStreak > NO_FILL_ALERT_STREAK && _rejectStreak % 20 === 0)) {
+    log("NO_FILL_WATCHDOG", true, {
+      consecutiveRejected: _rejectStreak,
+      since: _rejectStreakSince,
+      lastMarket: market,
+      lastReason: reason ?? null,
+    });
+    void alertError(
+      `NO-FILL WATCHDOG: ${_rejectStreak} consecutive orders rejected since ${_rejectStreakSince} ` +
+      `(last: ${market} — ${reason ?? "unknown"}). The bot decides to trade but nothing fills.`,
+    ).catch(() => {});
+  }
+}
+
+/** Test/diagnostic accessor. */
+export function getNoFillStreak(): { consecutiveRejected: number; since: string | null } {
+  return { consecutiveRejected: _rejectStreak, since: _rejectStreakSince };
+}
 
 // ─── Depth-aware paper fill options (model-discovery-expansion §4.A / B49 #1) ─
 // Passed from the runner (built from the effective TraderConfig). When
@@ -135,6 +176,7 @@ export async function placeBuyOrder(
           requestedUsdc: sizeUSDC,
           fillNote,
         });
+        noteFillOutcome(false, market.slug, "paper fill below min size / invalid / implausible vs quote");
         return record;
       }
     }
@@ -162,6 +204,7 @@ export async function placeBuyOrder(
       partial,
       fillNote,
     });
+    noteFillOutcome(true, market.slug);
 
     return record;
   }

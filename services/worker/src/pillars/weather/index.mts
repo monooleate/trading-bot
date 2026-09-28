@@ -17,6 +17,7 @@ import { makeWeatherDecision, getWeatherConfig, padWeatherGates } from "./decisi
 import type { WeatherTradeDecision, WeatherConfig } from "./decision-engine.mts";
 import { placeBuyOrder } from "../crypto/execution.mts";
 import { getEffectiveFillOpts } from "../shared/config.mts";
+import { checkExecutableEdge } from "../shared/executable-edge.mts";
 import {
   loadSession,
   saveSession,
@@ -520,6 +521,49 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
         continue;
       }
 
+      // 7b. Executable-edge gate (B75) — the same check as the crypto runner:
+      // re-price the chosen side at the book VWAP for this order size. Skipped
+      // in the experimental invertDirection mode, where the bot deliberately
+      // bets AGAINST the model probability, so a model-based edge is
+      // meaningless by construction.
+      const quotedSidePrice = decision.direction === "YES"
+        ? Math.min(decision.marketPrice + 0.01, 0.99)
+        : Math.max(1 - decision.marketPrice + 0.01, 0.01);
+      if (fillOpts.enabled && !config.invertDirection) {
+        const exec = await checkExecutableEdge(
+          toMarketInfo(market, match.bucket),
+          decision.direction,
+          match.probability,
+          quotedSidePrice,
+          decision.positionSizeUSDC,
+          {
+            participationCap: fillOpts.participationCap,
+            exitFeePct: config.roundtripFeePct,
+            edgeThreshold: config.edgeThreshold,
+          },
+        );
+        if (!exec.result.ok) {
+          log("DECISION_SKIP", config.paperMode, {
+            type: "weather",
+            market: market.slug,
+            bucket: decision.bucketLabel,
+            reason: exec.result.reason,
+            execFailure: exec.result.failure,
+            quotedPrice: quotedSidePrice,
+            vwap: Number.isFinite(exec.result.vwap) ? exec.result.vwap : null,
+            requestedUsdc: decision.positionSizeUSDC,
+            bookSource: exec.bookSource,
+          });
+          results.push({
+            ...rowContext,
+            gates: [...rowContext.gates, exec.gate],
+            action: "skip",
+            reason: exec.result.reason,
+          });
+          continue;
+        }
+      }
+
       await sendWeatherAlert(decision, config.paperMode);
 
       log("DECISION_TRADE", config.paperMode, {
@@ -534,9 +578,7 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
 
       // 8. Execute
       const marketInfo = toMarketInfo(market, match.bucket);
-      const entryPrice = decision.direction === "YES"
-        ? Math.min(decision.marketPrice + 0.01, 0.99)
-        : Math.max(1 - decision.marketPrice + 0.01, 0.01);
+      const entryPrice = quotedSidePrice;
 
       const buyOrder = await placeBuyOrder(
         marketInfo,

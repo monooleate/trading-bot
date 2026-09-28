@@ -5,7 +5,7 @@
 //
 // Run: npx tsx packages/core/src/risk-overlay.test.mts
 
-import { realisedVol, volTargetMultiplier, drawdownKill } from "./risk-overlay.mts";
+import { realisedVol, volTargetMultiplier, drawdownKill, equityReturnsFromTrades } from "./risk-overlay.mts";
 
 interface Failure { test: string; message: string; }
 const failures: Failure[] = [];
@@ -54,6 +54,36 @@ const approx = (a: number, b: number, eps = 1e-6) => Math.abs(a - b) < eps;
   // fail-open on bad input
   expect(drawdownKill(0, 0, 0.25).kill === false, t, "0 peak → fail-open");
   expect(drawdownKill(1000, 500, 0).kill === false, t, "0 limit → fail-open");
+}
+
+// ── equityReturnsFromTrades (B75) ────────────────────────────────────────────
+{
+  const t = "equity-returns";
+  const r = equityReturnsFromTrades(100, [{ pnl: -8 }, { pnl: 23 }, { pnl: null }, { pnl: -11.5 }]);
+  expect(r.length === 3, t, `non-finite pnl skipped, got len ${r.length}`);
+  expect(approx(r[0], -0.08), t, `first = −8/100, got ${r[0]}`);
+  expect(approx(r[1], 23 / 92), t, `second on equity 92, got ${r[1]}`);
+  expect(approx(r[2], -11.5 / 115), t, `third on equity 115, got ${r[2]}`);
+  expect(equityReturnsFromTrades(0, [{ pnl: 1 }]).length === 0, t, "zero start → empty");
+  expect(equityReturnsFromTrades(10, [{ pnl: -10 }, { pnl: 5 }]).length === 1, t, "stops at zero equity");
+
+  // The B75 regression, pinned: a ¼-Kelly binary history (8% stakes, lose
+  // 100% or win ~+150%) has pnlPct std ≈ 1.3 → the old overlay floored every
+  // order at 0.25×. The equity series of the SAME trades is ~10× calmer, so a
+  // 0.10 target leaves the size (≈) untouched instead of quartering it.
+  const trades: { pnl: number; pnlPct: number }[] = [];
+  let eq = 100;
+  for (let i = 0; i < 30; i++) {
+    const stake = eq * 0.08;
+    const win = i % 3 === 0;
+    const pnl = win ? stake * 1.5 : -stake;
+    trades.push({ pnl, pnlPct: win ? 1.5 : -1 });
+    eq += pnl;
+  }
+  const oldMult = volTargetMultiplier(realisedVol(trades.map((x) => x.pnlPct)), 0.1);
+  const newMult = volTargetMultiplier(realisedVol(equityReturnsFromTrades(100, trades)), 0.1, { maxMult: 1 });
+  expect(approx(oldMult, 0.25), t, `pnlPct basis floors at 0.25, got ${oldMult}`);
+  expect(newMult > 0.9, t, `equity basis keeps ≥0.9 of the size, got ${newMult}`);
 }
 
 // ─── CLI report ───────────────────────────────────────────────────────────

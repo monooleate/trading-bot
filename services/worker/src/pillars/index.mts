@@ -13,7 +13,8 @@ import { CORS, getTraderConfig, getEffectiveTraderConfig, getEffectiveBtcExitCon
 import { isDirectionalCryptoMarket } from "@core/coin.mts";
 import { loadPortfolioBetaSnapshot } from "./shared/portfolio-exposure.mts";
 import { cryptoExposureUsd, checkBetaCap } from "@core/portfolio-exposure.mts";
-import { realisedVol, volTargetMultiplier, drawdownKill } from "@core/risk-overlay.mts";
+import { realisedVol, volTargetMultiplier, drawdownKill, equityReturnsFromTrades } from "@core/risk-overlay.mts";
+import { checkExecutableEdge } from "./shared/executable-edge.mts";
 
 // State-changing actions require a valid JWT cookie. Read-only `status` is
 // public so the home page + per-venue dashboards can render without
@@ -721,13 +722,9 @@ async function runCryptoTrader(
         continue;
       }
 
-      log("DECISION_TRADE", config.paperMode, {
-        market: market.slug,
-        direction: decision.direction,
-        size: decision.positionSizeUSDC,
-        edge: decision.edge,
-        kelly: decision.kellyUsed,
-      });
+      // (B75) DECISION_TRADE is logged just before placeBuyOrder, after every
+      // pre-trade gate — so each DECISION_TRADE is followed by exactly one
+      // ORDER_PLACED or ORDER_REJECTED. The no-fill watchdog relies on it.
 
       // 4a. Portfolio risk overlays (B49 #8), both default-OFF:
       //  • Drawdown kill-switch — halt NEW entries once peak-to-current equity
@@ -769,8 +766,19 @@ async function runCryptoTrader(
       }
       let sizeUSDC = decision.positionSizeUSDC;
       if (riskOverlay.volTargetEnabled) {
-        const rv = realisedVol((updatedSession.closedTrades ?? []).slice(-30).map((t: any) => (t.pnlPct || 0) / 100));
-        sizeUSDC = Math.round(decision.positionSizeUSDC * volTargetMultiplier(rv, riskOverlay.volTargetVol) * 100) / 100;
+        // B75: measure the vol of EQUITY returns (pnl / equity-before), not of
+        // the trade's own pnlPct. A binary bet returns −100% or +x00% by
+        // construction, so the pnlPct std is ~1+ on any history and pinned the
+        // multiplier to its 0.25 floor — every order was quartered below the
+        // 5-share minimum (68/68 rejected, 2026-09-14 → 09-28). maxMult 1: the
+        // overlay may only SHRINK the ¼-Kelly size, never lift it past the
+        // 8% binary cap.
+        const eqRets = equityReturnsFromTrades(
+          updatedSession.bankrollStart || 0,
+          updatedSession.closedTrades ?? [],
+        ).slice(-30);
+        const mult = volTargetMultiplier(realisedVol(eqRets), riskOverlay.volTargetVol, { maxMult: 1 });
+        sizeUSDC = Math.round(decision.positionSizeUSDC * mult * 100) / 100;
       }
 
       // 4b. Portfolio crypto-beta exposure cap (B49 #2). Block a new crypto-
@@ -787,6 +795,54 @@ async function runCryptoTrader(
           continue;
         }
       }
+
+      // 4c. Executable-edge gate (B75). The decision priced the edge on the
+      // Gamma quote; re-price it at the book VWAP for THIS order size and
+      // require it to still clear the edge threshold and the 5-share minimum.
+      // Active with the depth-aware fill model (the only mode where a second,
+      // real price exists). The row keeps predictedProb/endDate so the ledger
+      // still logs the prediction.
+      if (config.fillModelEnabled) {
+        const exec = await checkExecutableEdge(
+          market,
+          decision.direction,
+          signal.finalProb,
+          decision.entryPrice,
+          sizeUSDC,
+          {
+            participationCap: config.fillParticipationCap ?? 0.2,
+            exitFeePct: config.settlementFeePctFillModel ?? 0.015,
+            edgeThreshold: config.edgeThreshold,
+          },
+        );
+        if (!exec.result.ok) {
+          log("DECISION_SKIP", config.paperMode, {
+            market: market.slug,
+            reason: exec.result.reason,
+            execFailure: exec.result.failure,
+            quotedPrice: decision.entryPrice,
+            vwap: Number.isFinite(exec.result.vwap) ? exec.result.vwap : null,
+            requestedUsdc: sizeUSDC,
+            bookSource: exec.bookSource,
+          });
+          results.push({
+            ...marketContext,
+            gates: [...marketContext.gates, exec.gate],
+            action: "skip",
+            reason: exec.result.reason,
+          });
+          continue;
+        }
+      }
+
+      log("DECISION_TRADE", config.paperMode, {
+        market: market.slug,
+        direction: decision.direction,
+        size: sizeUSDC,
+        kellySize: decision.positionSizeUSDC,
+        edge: decision.edge,
+        kelly: decision.kellyUsed,
+      });
 
       // 5. Execute buy (size = ¼-Kelly after the vol-target overlay)
       const buyOrder = await placeBuyOrder(

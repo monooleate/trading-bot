@@ -37,6 +37,44 @@ export interface VolTargetOpts {
 }
 
 /**
+ * Per-trade EQUITY returns: each closed trade's PnL divided by the equity
+ * BEFORE that trade (starting from `bankrollStart`). This is the series the
+ * vol-target must be fed for BINARY positions (B75).
+ *
+ * WHY not the trade's own `pnlPct`: a binary bet returns −100% or several
+ * hundred percent by construction, so the std of `pnlPct` is ~1–3 on every
+ * possible history. Fed into `volTargetMultiplier(rv, 0.10)` that pins the
+ * multiplier to its 0.25 floor forever — measured live 2026-09-28: every crypto
+ * order was cut to exactly ¼ of the Kelly size (8.95 → 2.24 USDC), which then
+ * fell under Polymarket's 5-share minimum, and 68 of 68 trade decisions in 14
+ * days were rejected. The equity series instead measures what the overlay is
+ * meant to control: how much the BANKROLL swings per trade (a ¼-Kelly bet of
+ * 8% that loses moves equity by −8%, not by −100%).
+ *
+ * Non-finite PnL is skipped; a non-positive running equity stops the series
+ * (a return on zero equity is undefined). Pure.
+ */
+export function equityReturnsFromTrades(
+  bankrollStart: number,
+  trades: ReadonlyArray<{ pnl?: number | null }>,
+): number[] {
+  const out: number[] = [];
+  let equity = bankrollStart;
+  if (!(equity > 0)) return out;
+  for (const t of trades ?? []) {
+    // `Number(null)` is 0, not NaN — a missing PnL must be skipped, not
+    // counted as a flat trade.
+    if (t?.pnl == null) continue;
+    const pnl = Number(t.pnl);
+    if (!Number.isFinite(pnl)) continue;
+    if (!(equity > 0)) break;
+    out.push(pnl / equity);
+    equity += pnl;
+  }
+  return out;
+}
+
+/**
  * Vol-target multiplier = clamp(targetVol / realisedVol, minMult, maxMult). When
  * realised vol is unknown (≤ volFloor) or targetVol ≤ 0, returns 1 (no-op). Apply
  * to the ¼-Kelly fraction. Pure.

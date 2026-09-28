@@ -275,6 +275,7 @@ export type LogEvent =
   | "ORDER_FILLED"
   | "ORDER_EXPIRED"
   | "ORDER_REJECTED"
+  | "NO_FILL_WATCHDOG"
   | "SELL_PLACED"
   | "TRADE_CLOSED"
   | "SESSION_START"
