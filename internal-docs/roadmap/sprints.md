@@ -1051,11 +1051,30 @@ A 2026-09-03 teljes audit (5 bot + infra + security) implementált fixei: [chang
 - **Fájlok:** [`directionalHaltEnabled()`](../../services/worker/src/pillars/shared/config.mts) · gate a [crypto runnerben](../../services/worker/src/pillars/index.mts) és a [HL runnerben](../../services/worker/src/pillars/hyperliquid/index.mts) · SCHEMA + [`env-vars.md`](../current-state/env-vars.md) `DIRECTIONAL_HALT` · [`coin.test.mts`](../../packages/core/src/coin.test.mts) B74-kohorsz assert-blokk. `tsc` 0 · 54/54 · build zöld.
 - **Élesítés:** ✅ **élesítve 2026-09-17 14:28 UTC** (`directionalHalt=1`, 18 override). A DB-írást a harness classifier blokkolta, ezért az operátor futtatta a merge-SQL-t; élőben verifikálva (workerek tickelnek + olvassák a knobot, 0 új pozíció az élesítés óta). A halt-log 0, amíg egy directional piac át nem jut az összes korábbi kapun. Lásd [changelog 2026-09-16](../changelog/CHANGELOG-2026-09-16.md).
 
-### B76 — Weather a PIACI ÁR ellen, az új (B69) σ-láncon 🟠 NEXT (mérés, kód-változás nélkül)
+### B76 — Weather a PIACI ÁR ellen, az új (B69) σ-láncon ⛔ LEFUTVA 2026-09-28 (97. session) — NINCS EDGE
+
+- **Eredmény** ([math/37 §10](../math/37-multi-model-ensemble.md), [`eval-weather-vs-market.ts`](../../scripts/eval-weather-vs-market.ts)): a teljes bucket-eloszlás a piaci ár-vektor ellen, 200 minta / 137 állomás-nap, gördülő kalibrációkkal. Brier-skill a piac ellen: **T+1 −28% [−40; −19] · T+0 reggel −33% [−55; −17] · T+0 délután −300%** (ott a piac már a megfigyelést árazza). **Az 50/50 modell+piac keverék is rosszabb a piacnál** (−9% / −10%) → a modell nem ad információt. A B69 javulása valós, de a réshez képest kicsi.
+- **Mellék-lelet → B78:** a ledger weather-mérése torz lehet (`conditionId` felülíródik, az első-látás tuple nem).
+- **Döntés az operátornál → B79:** a weather kereskedése a mérés szerint negatív várható értékű.
+
+<details><summary>Eredeti leírás</summary>
+
+### B76 (terv)
 
 - **Miért:** a B69 a megfigyelés ellen javított (CRPS +8% a σ-szorzóval, +8% a keverékkel, out-of-sample) — de a botnak a PIACOT kell vernie. Az utolsó mérés (94. session): weather **−61%** Brier-skill a piac első ára ellen (n=44). Egy 8–16%-os CRPS-javulás a megfigyelés ellen önmagában valószínűleg nem zárja ezt a rést.
 - **Mit:** a prediction-ledger rezolvált weather-sorain (bucket, első piaci ár, kimenet) a multi-model tár azonos idejű snapshotjából újraszámolni a bucket-valószínűséget a MAI láncon (keverék + saját EMOS × 1,0, illetve GEFS + állomás-EMOS × 1,25), és Brier-skillt mérni a piaci ár ellen. Forward: 2–3 hét múlva a promóciós kapu ugyanezt élőben mutatja.
 - **Döntés, amit ad:** ha a skill a piac ellen sem pozitív, a weather-ág forecast-hangolása kimerült → az edge-forrás máshol keresendő (B77, B37), nem újabb σ-knobban.
+
+</details>
+
+### B78 — Prediction-ledger: a `conditionId` felülíródik, az első-látás tuple nem 🟠 BACKLOG (mérés-integritás)
+
+- **Lelet (2026-09-28):** [`upsertRecords`](../../packages/core/src/prediction-ledger.mts) minden szkennelésnél felülírja a `conditionId`-t (`prev.conditionId = inc.conditionId`), a `firstPredictedProb`/`firstMarketPrice` viszont az első-látáskor latchelődik. Weather-nél (egy slug = egy esemény, a bot által választott bucket szkennelésenként változhat) az első-látás valószínűségét a LEGUTÓBBI bucket kimenete pontozza. A korábbi „weather −61% a piac ellen" ezért nem tiszta bizonyíték (a B76 ettől független úton mért).
+- **Javítás iránya:** `firstConditionId` latchelése + a first-tuple kimenetének a first-bucketre való feloldása; vagy weather-nél bucket-szintű kulcs. Előbb mérni, hány sornál változott a bucket (a ledger ma nem őrzi).
+
+### B79 — Weather kereskedés: measure-only mód? 🔴 OPERÁTOR-DÖNTÉS
+
+- **Miért:** a B76 szerint a weather-modell egyik tisztességes horizonton sem veri a piacot, és nem is ad hozzá információt. Opciók: (a) **measure-only halt** a weatherre a B74 mintájára (nem nyit, de a ledger és a multi-model recorder tovább gyűjt); (b) csak T+1 belépés engedése (a délutáni T+0 a legrosszabb: ott a piac már a megfigyelést árazza); (c) marad, ahogy van (paper — a veszteség csak paper-tőke, de a mérés szerint biztosan negatív).
 
 ### B77 — Maker (limit) megbízás taker helyett 🟡 FELDERÍTÉS
 

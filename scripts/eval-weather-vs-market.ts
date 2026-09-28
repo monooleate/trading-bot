@@ -152,7 +152,7 @@ function modelDist(buckets: TemperatureBucket[], mu: number, sigma: number): Dis
 const brier = (d: Dist, labels: string[], win: string) => labels.reduce((s, l) => s + ((d.get(l) ?? 0) - (l === win ? 1 : 0)) ** 2, 0);
 const logs = (d: Dist, win: string) => -Math.log(Math.max(0.001, d.get(win) ?? 0));
 
-interface Row { k: string; brier: Record<string, number>; log: Record<string, number>; trades: Record<string, number[]> }
+interface Row { k: string; leadDay: number; localHour: number; brier: Record<string, number>; log: Record<string, number>; trades: Record<string, number[]> }
 const rows: Row[] = [];
 const days = [...new Set(samples.map((s) => s.date))].sort();
 let noPrice = 0;
@@ -198,7 +198,9 @@ for (const d of days) {
     // 50/50 linear pool of model and market: does the model ADD information?
     dists.blend = new Map(labels.map((l) => [l, 0.5 * (dists.pooled!.get(l) ?? 0) + 0.5 * market.get(l)!]));
 
-    const row: Row = { k: `${s.icao}|${s.date}`, brier: {}, log: {}, trades: {} };
+    const tz = Object.values(SETTLEMENT_STATIONS).find((x) => x.icao === s.icao)?.tz ?? "UTC";
+    const localHour = Number(new Intl.DateTimeFormat("en-GB", { hour: "2-digit", hour12: false, timeZone: tz }).format(new Date(s.ts)));
+    const row: Row = { k: `${s.icao}|${s.date}`, leadDay: Math.floor(s.snap.leadHours / 24), localHour, brier: {}, log: {}, trades: {} };
     for (const [name, dist] of Object.entries(dists)) {
       row.brier[name] = brier(dist!, labels, ev.winner!);
       row.log[name] = logs(dist!, ev.winner!);
@@ -251,5 +253,39 @@ for (const name of ["asWas", "gefs", "pooled"]) {
   const all = rows.flatMap((r) => r.trades[name]);
   const ci = clusterBoot((rs) => mean(rs.flatMap((r) => r.trades[name])));
   console.log(`  ${name.padEnd(8)} bets ${String(all.length).padStart(4)}  mean return/bet ${(mean(all) * 100).toFixed(1)}% [${(ci[0] * 100).toFixed(1)}, ${(ci[1] * 100).toFixed(1)}]  win ${((all.filter((x) => x > 0).length / Math.max(1, all.length)) * 100).toFixed(0)}%`);
+}
+// Information-horizon split: a T+0 snapshot taken in the local afternoon is
+// scored against a market that has already seen most of the day's heating.
+console.log("\nby information horizon (Brier; skill vs market):");
+const groups: [string, (r: Row) => boolean][] = [
+  ["T+1 (day before)", (r) => r.leadDay === 1],
+  ["T+0, local < 11h", (r) => r.leadDay === 0 && r.localHour < 11],
+  ["T+0, local ≥ 11h", (r) => r.leadDay === 0 && r.localHour >= 11],
+];
+for (const [name, f] of groups) {
+  const rs = rows.filter(f);
+  if (!rs.length) { console.log(`  ${name.padEnd(20)} n=0`); continue; }
+  const m = (k: string) => mean(rs.map((r) => r.brier[k]));
+  const sk = (k: string) => `${(skill(rs, k, "brier") * 100).toFixed(0)}%`;
+  const ci = clusterBootOn(rs, (x) => skill(x, "pooled", "brier"));
+  console.log(
+    `  ${name.padEnd(20)} n=${String(rs.length).padStart(3)}  market ${m("market").toFixed(3)}  ` +
+    `gefs ${m("gefs").toFixed(3)} (${sk("gefs")})  pooled ${m("pooled").toFixed(3)} (${sk("pooled")} ` +
+    `[${(ci[0] * 100).toFixed(0)}, ${(ci[1] * 100).toFixed(0)}])  blend ${sk("blend")}`,
+  );
+}
+function clusterBootOn(rs: Row[], metric: (x: Row[]) => number, iters = 1000): [number, number] {
+  const ks = [...new Set(rs.map((r) => r.k))];
+  const byK = new Map(ks.map((k) => [k, rs.filter((r) => r.k === k)]));
+  let seed = 99;
+  const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+  const out: number[] = [];
+  for (let i = 0; i < iters; i++) {
+    const pick: Row[] = [];
+    for (let j = 0; j < ks.length; j++) pick.push(...byK.get(ks[Math.floor(rnd() * ks.length)])!);
+    out.push(metric(pick));
+  }
+  out.sort((a, b) => a - b);
+  return [out[Math.floor(iters * 0.05)], out[Math.floor(iters * 0.95)]];
 }
 process.exit(0);

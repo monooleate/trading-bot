@@ -98,3 +98,21 @@ A user kérése: a GEFS-fallback is kapja meg az 1,25-öt. A közös `weatherSig
 **Élő ellenőrzés:** az első flip utáni tickben (06:32 UTC) mind az 5 város μ-ja elmozdult a 05:31-es GEFS-értékhez képest (Hongkong 32,2 → 31,7, Madrid 23,3 → 24,4, Tokió 25,6 → 25,0), hiba nincs.
 
 **Következő lépések:** [sprints B76/B77](../roadmap/sprints.md).
+
+## B76 (97. session, ugyanaznap): a weather a PIACI ÁR ellen — nincs edge
+
+A user: *„csináld meg a B76-ot"*. **Kód-viselkedés nem változott** (két parszoló exportálva a mérőszkripthez; új read-only szkript [`eval-weather-vs-market.ts`](../../scripts/eval-weather-vs-market.ts)).
+
+**Módszer:** a ledger helyett a teljes bucket-eloszlás a piaci ár-vektor ellen, mert a ledger weather-mérése torz lehet (a `conditionId` felülíródik, az első-látás tuple nem → B78). Minden multi-model mintához (200, 137 állomás-nap): Gamma-esemény (bucketek + eredmény), CLOB prices-history (a bucketek YES-ára a snapshot pillanatában, normalizálva), és a bot saját `matchBucket`-je a vizsgált láncon, gördülő, csak korábbi napokra illesztett kalibrációkkal. 0 kiesett minta.
+
+**Eredmény (többosztályos Brier-skill a piac ellen, 90% klaszter-bootstrap):**
+
+| horizont | n | keverék + saját EMOS | GEFS + EMOS × 1,25 | ½ modell + ½ piac |
+|---|---|---|---|---|
+| T+1 | 66 | −28% [−40; −19] | −29% | −9% |
+| T+0 reggel | 34 | −33% [−55; −17] | −43% | −10% |
+| T+0 délután | 100 | −300% | −290% | −76% |
+
+A piac minden horizonton jobban kalibrált, és az 50/50 keverék is rosszabb a puszta piacnál → **a modell nem ad információt a piaci árhoz**. A délutáni T+0 a legrosszabb: ott a piac már a megfigyelt melegedést árazza. A B69 javulása valós (0,808 → 0,771), de a réshez (piac 0,394) képest kicsi.
+
+**Következmény:** a weather-előrejelzés további σ/μ-hangolása ezen a piacon nem teremt edge-et. Új backlog: **B78** (ledger `conditionId`), **B79** (weather measure-only — operátor-döntés). Doksi: [math/37 §10](../math/37-multi-model-ensemble.md) · [sprints B76/B78/B79](../roadmap/sprints.md).

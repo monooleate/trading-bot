@@ -327,3 +327,26 @@ saját kalibrációjával nem kér utólagos inflációt; a GEFS-út 1,25-je a k
 szórása volt (`ensembleDetail`) — most a μ-vel azonos forrásból jön (`forecastSd`); (2) flip mellett a
 recorder throttle-je kiesett, minden 3 perces tick snapshotot írt volna. A GEFS-EMOS-tár a flip után is GEFS-adatot
 kap (a visszakapcsolás tiszta marad), a keverék a multi-model tárból tanul.
+
+## 10. B76 — a piaci ár ellen (2026-09-28): nincs edge, egyik horizonton sem
+
+A §9 javulása a MEGFIGYELÉS ellen mért. A pénzhez a piaci árat kell verni.
+[`scripts/eval-weather-vs-market.ts`](../../scripts/eval-weather-vs-market.ts) a teljes bucket-eloszlást
+pontozza a piac ár-vektora ellen, a snapshot pillanatában (CLOB prices-history, óránkénti; Gamma-eredmény),
+a bot saját `matchBucket`-jével és gördülő (csak korábbi napokra illesztett) kalibrációkkal. 200 minta,
+137 állomás-nap, 0 kiesett minta. Többosztályos Brier (kisebb a jobb):
+
+| horizont | n | piac | GEFS + EMOS × 1,25 | keverék + saját EMOS × 1,0 | ½ keverék + ½ piac |
+|---|---|---|---|---|---|
+| T+1 (előző nap) | 66 | 0,608 | 0,786 (−29%) | 0,780 (**−28%** [−40; −19]) | −9% |
+| T+0, helyi < 11 h | 34 | 0,577 | 0,822 (−43%) | 0,765 (**−33%** [−55; −17]) | −10% |
+| T+0, helyi ≥ 11 h | 100 | 0,192 | 0,748 (−290%) | 0,766 (−300%) | −76% |
+| **mind** | 200 | 0,394 | 0,773 (−96%) | 0,771 (−95%) | −25% |
+
+**Olvasat:** (1) A piac minden horizonton jobban kalibrált, mint a modell, és a konfidencia-intervallumok végig
+negatívak. (2) **A modell nem ad információt a piachoz**: még az 50/50 keverék is rosszabb a puszta piacnál.
+(3) T+0 délután a piac már árazza a megfigyelt melegedést (Brier 0,19) — ott a csak előrejelzésből dolgozó bot
+szerkezetileg hátrányban van. (4) A B69 javítása (0,808 → 0,771) valós, de a réshez (0,394) képest kicsi.
+**Következtetés:** a weather-előrejelzés σ-/μ-hangolása ezen a piacon nem teremt edge-et; a weather-ág
+kereskedése a mérés szerint negatív várható értékű. A hipotetikus középáras kötések (+26,5% [−17,5; 74,8]) a
+longshot-szórás miatt zajszintűek, és spread nélkül optimisták — nem bizonyíték.
