@@ -90,3 +90,11 @@ Az élő σ-lánc hű visszajátszása (METAR-kerekítés → σ-padló 0,5 → 
 2. **2. lépés — ✅ alkalmazva a `f73be61` deploy után:** `weatherUseMultiModel` = 1 és `weatherSigmaInflation` = 1,0 (a kód-default, tehát az override törölve; 18 override, DSR-trial naplózva). A flip előtt a szállított keverék-EMOS élőben ellenőrizve a boxon: 224 minta, 18 állomás, `a=−0,60 b=1,05` (25 °C körül +0,7 °C melegítés — pont a mért hidegtorzítás), `d=3,64` (a keverék σ-ja ~1,9×-re tágul), in-sample CRPS 1,044 → 0,870. A sorrend számít: a régi kóddal a flip a σ-hibával és a GEFS-EMOS-szal futott volna.
 
 `tsc` 0 · **56/56** · build zöld. Feladat: [sprints B69 / B52 (3)](../roadmap/sprints.md) · algoritmus: [math/37 §9](../math/37-multi-model-ensemble.md).
+
+## Követő (97. session): forrásonkénti σ-szorzó (`7bd55f8`)
+
+A user kérése: a GEFS-fallback is kapja meg az 1,25-öt. A közös `weatherSigmaInflation` knob miatt a flip után a GEFS-fallback (sikertelen keverék-lekérés) a keverék 1,0-ját kapta. Most a két forrásnak saját, mért szorzója van: `weatherSigmaInflation` **1,25** (GEFS-út és -fallback) és az új `weatherMultiSigmaInflation` **1,0** (keverék; kód-default, env `WEATHER_MULTI_SIGMA_INFLATION`). Kikapcsolt flip mellett bájt-azonos. Sorrend: előbb deploy, utána az override visszaállítása 1,25-re (a régi kód a szorzót a keverékre is alkalmazta volna). 19 override, DSR-trial naplózva. `tsc` 0 · 56/56 · build zöld.
+
+**Élő ellenőrzés:** az első flip utáni tickben (06:32 UTC) mind az 5 város μ-ja elmozdult a 05:31-es GEFS-értékhez képest (Hongkong 32,2 → 31,7, Madrid 23,3 → 24,4, Tokió 25,6 → 25,0), hiba nincs.
+
+**Következő lépések:** [sprints B76/B77](../roadmap/sprints.md).

@@ -1051,6 +1051,17 @@ A 2026-09-03 teljes audit (5 bot + infra + security) implementált fixei: [chang
 - **Fájlok:** [`directionalHaltEnabled()`](../../services/worker/src/pillars/shared/config.mts) · gate a [crypto runnerben](../../services/worker/src/pillars/index.mts) és a [HL runnerben](../../services/worker/src/pillars/hyperliquid/index.mts) · SCHEMA + [`env-vars.md`](../current-state/env-vars.md) `DIRECTIONAL_HALT` · [`coin.test.mts`](../../packages/core/src/coin.test.mts) B74-kohorsz assert-blokk. `tsc` 0 · 54/54 · build zöld.
 - **Élesítés:** ✅ **élesítve 2026-09-17 14:28 UTC** (`directionalHalt=1`, 18 override). A DB-írást a harness classifier blokkolta, ezért az operátor futtatta a merge-SQL-t; élőben verifikálva (workerek tickelnek + olvassák a knobot, 0 új pozíció az élesítés óta). A halt-log 0, amíg egy directional piac át nem jut az összes korábbi kapun. Lásd [changelog 2026-09-16](../changelog/CHANGELOG-2026-09-16.md).
 
+### B76 — Weather a PIACI ÁR ellen, az új (B69) σ-láncon 🟠 NEXT (mérés, kód-változás nélkül)
+
+- **Miért:** a B69 a megfigyelés ellen javított (CRPS +8% a σ-szorzóval, +8% a keverékkel, out-of-sample) — de a botnak a PIACOT kell vernie. Az utolsó mérés (94. session): weather **−61%** Brier-skill a piac első ára ellen (n=44). Egy 8–16%-os CRPS-javulás a megfigyelés ellen önmagában valószínűleg nem zárja ezt a rést.
+- **Mit:** a prediction-ledger rezolvált weather-sorain (bucket, első piaci ár, kimenet) a multi-model tár azonos idejű snapshotjából újraszámolni a bucket-valószínűséget a MAI láncon (keverék + saját EMOS × 1,0, illetve GEFS + állomás-EMOS × 1,25), és Brier-skillt mérni a piaci ár ellen. Forward: 2–3 hét múlva a promóciós kapu ugyanezt élőben mutatja.
+- **Döntés, amit ad:** ha a skill a piac ellen sem pozitív, a weather-ág forecast-hangolása kimerült → az edge-forrás máshol keresendő (B77, B37), nem újabb σ-knobban.
+
+### B77 — Maker (limit) megbízás taker helyett 🟡 FELDERÍTÉS
+
+- **Miért:** a B75 replay szerint a crypto „15–20% edge" nagyrészt a spread volt, amit taker-ként a bot megfizet. Maker-ként (limit a saját fair ár alatt) a spreadet nem fizeti, hanem beszedi.
+- **Nehézség:** a maker-fill becsületes paper-modellezése nehéz (sorban állás, és kiválasztódási torzítás: épp akkor tölt, amikor rossz). Előfeltétel a B68 fill-kalibráció külső könyv-archívummal. Élesben a boxról nem kereskedhetünk (geoblock, B10).
+
 ### B75 — „68 döntés, 68 elutasítás": vol-target bináris-hiba + végrehajtható-edge kapu + no-fill őr ✅ IMPLEMENTED 2026-09-28 (96. session)
 
 - **Lelet (élő log, 14 nap):** 58 291 SIGNAL · 25 408 DECISION_SKIP · **68 DECISION_TRADE → 68 ORDER_REJECTED, 0 kötés**. A 95. session a DECISION_TRADE sorokat kötésnek olvasta — tévesen.
