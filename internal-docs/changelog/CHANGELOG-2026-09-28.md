@@ -87,6 +87,6 @@ Az élő σ-lánc hű visszajátszása (METAR-kerekítés → σ-padló 0,5 → 
 ## Élesítés
 
 1. **1. lépés — ✅ alkalmazva:** `weatherSigmaInflation` 2,25 → **1,25** (a settings-séma 0,25-ös lépésköze miatt 1,25, nem 1,3; a görbe 1,2–1,4 között lapos). DSR-trial naplózva.
-2. **2. lépés — a deploy UTÁN:** `weatherUseMultiModel` = 1 és `weatherSigmaInflation` = 1,0 (a kód-default, tehát az override törlődik). A sorrend számít: a régi kóddal a flip a σ-hibával és a GEFS-EMOS-szal futott volna.
+2. **2. lépés — ✅ alkalmazva a `f73be61` deploy után:** `weatherUseMultiModel` = 1 és `weatherSigmaInflation` = 1,0 (a kód-default, tehát az override törölve; 18 override, DSR-trial naplózva). A flip előtt a szállított keverék-EMOS élőben ellenőrizve a boxon: 224 minta, 18 állomás, `a=−0,60 b=1,05` (25 °C körül +0,7 °C melegítés — pont a mért hidegtorzítás), `d=3,64` (a keverék σ-ja ~1,9×-re tágul), in-sample CRPS 1,044 → 0,870. A sorrend számít: a régi kóddal a flip a σ-hibával és a GEFS-EMOS-szal futott volna.
 
 `tsc` 0 · **56/56** · build zöld. Feladat: [sprints B69 / B52 (3)](../roadmap/sprints.md) · algoritmus: [math/37 §9](../math/37-multi-model-ensemble.md).
