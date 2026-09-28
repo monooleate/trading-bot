@@ -133,6 +133,26 @@ export async function directionalHaltEnabled(): Promise<boolean> {
   }
 }
 
+// B79 — measure-only halt for the WEATHER pillar. The B76 read-out scored the
+// full bucket distribution against the market price vector (200 samples, 137
+// station-days, expanding-window calibrations): Brier skill vs the market
+// T+1 −28% [−40, −19], T+0 morning −33% [−55, −17], T+0 afternoon −300% — and
+// even a 50/50 model+market blend is worse than the market alone, i.e. the
+// forecast adds no information to the price. ON: no new weather position is
+// opened; forecasting, the prediction ledger, the multi-model recorder and the
+// EMOS logs all keep running, and open positions still settle (the reconciler
+// is a separate path). Env default OFF (WEATHER_HALT) + `weatherHalt` override.
+export async function weatherHaltEnabled(): Promise<boolean> {
+  const env = process.env.WEATHER_HALT === "true" || process.env.WEATHER_HALT === "1";
+  try {
+    const mod: any = await import("@api/routes/trader-settings.mts");
+    const ov = await mod.loadRuntimeOverrides();
+    return ov.weatherHalt != null ? ov.weatherHalt === 1 : env;
+  } catch {
+    return env;
+  }
+}
+
 // Crypto-beta exposure cap options (B49 #2). Aggregate directional crypto
 // capital (crypto + HL) is capped at `fraction × combined bankroll`. Env default
 // OFF; the `common` Blobs knobs `betaCapEnabled` (0/1) + `betaCapFraction`

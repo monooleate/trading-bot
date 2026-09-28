@@ -19,7 +19,7 @@ import { inflateSigma } from "@core/weather-dispersion.mts";
 import { makeWeatherDecision, getWeatherConfig, padWeatherGates } from "./decision-engine.mts";
 import type { WeatherTradeDecision, WeatherConfig } from "./decision-engine.mts";
 import { placeBuyOrder } from "../crypto/execution.mts";
-import { getEffectiveFillOpts } from "../shared/config.mts";
+import { getEffectiveFillOpts, weatherHaltEnabled } from "../shared/config.mts";
 import { checkExecutableEdge } from "../shared/executable-edge.mts";
 import {
   loadSession,
@@ -182,6 +182,8 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
   // Depth-aware paper fill options (B49 #1) — fetched once per scan, shared by
   // every entry below. Default OFF → legacy full fill (zero behaviour change).
   const fillOpts = await getEffectiveFillOpts();
+  // B79: measure-only halt, resolved once per scan (see weatherHaltEnabled).
+  const weatherHalt = await weatherHaltEnabled();
 
   // Live-readiness gate: weather is prediction-driven (forecast-vs-bucket
   // probability), so the IC / calibration gates apply. Closed trades are
@@ -559,6 +561,16 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
 
       if (!decision.shouldTrade) {
         results.push({ ...rowContext, action: "skip", reason: decision.reason });
+        continue;
+      }
+
+      // 7a. B79 measure-only halt. Fires only on a bucket that WOULD otherwise
+      // trade; the row keeps predictedProb / conditionId / endDate, so the
+      // prediction ledger still logs it — "don't take it, but keep measuring".
+      if (weatherHalt) {
+        const reason = "Weather halt (B79): measure-only — no edge vs the market price (B76)";
+        log("DECISION_SKIP", config.paperMode, { type: "weather", market: market.slug, bucket: decision.bucketLabel, reason });
+        results.push({ ...rowContext, action: "skip", reason });
         continue;
       }
 

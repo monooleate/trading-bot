@@ -386,6 +386,18 @@ edge-tracker storage-ba kerülnek.
 
 ---
 
+### `WEATHER_HALT` 🟢 OPCIONÁLIS (default OFF) — B79
+
+- **Mire való:** ON esetén a weather bot **nem nyit új pozíciót**, de minden tickben
+  előrejelez, a predikciókat **tovább logolja a ledgerbe**, és a multi-model
+  felvétel és az EMOS-naplózás is fut. A nyitott pozíciók elszámolása (reconciler)
+  változatlan.
+- **Indok (B76, 2026-09-28):** a teljes bucket-eloszlás a piaci ár-vektor ellen,
+  200 mintán: Brier-skill T+1 **−28%**, T+0 reggel **−33%**, T+0 délután **−300%**,
+  és a ½ modell + ½ piac keverék is rosszabb a piacnál.
+- **Settings-knob:** `weatherHalt` (0/1, `weather`) — deploy nélkül állítható.
+  Az env csak fallback; az override felülírja.
+
 ### `DIRECTIONAL_HALT` 🟢 OPCIONÁLIS (default OFF) — B74
 
 - **Mire való:** ON esetén a bot **nem nyit új directional pozíciót** — se crypto
