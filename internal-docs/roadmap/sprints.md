@@ -1072,9 +1072,18 @@ A 2026-09-03 teljes audit (5 bot + infra + security) implementált fixei: [chang
 - **Lelet (2026-09-28):** [`upsertRecords`](../../packages/core/src/prediction-ledger.mts) minden szkennelésnél felülírja a `conditionId`-t (`prev.conditionId = inc.conditionId`), a `firstPredictedProb`/`firstMarketPrice` viszont az első-látáskor latchelődik. Weather-nél (egy slug = egy esemény, a bot által választott bucket szkennelésenként változhat) az első-látás valószínűségét a LEGUTÓBBI bucket kimenete pontozza. A korábbi „weather −61% a piac ellen" ezért nem tiszta bizonyíték (a B76 ettől független úton mért).
 - **Javítás iránya:** `firstConditionId` latchelése + a first-tuple kimenetének a first-bucketre való feloldása; vagy weather-nél bucket-szintű kulcs. Előbb mérni, hány sornál változott a bucket (a ledger ma nem őrzi).
 
-### B79 — Weather kereskedés: measure-only mód? 🔴 OPERÁTOR-DÖNTÉS
+### B79 — Weather kereskedés: measure-only mód ✅ IMPLEMENTED + ÉLESÍTVE 2026-09-28 (97. session)
+
+- **Döntés (user, 2026-09-28):** az (a) opció. Új `weatherHalt` knob (0/1, `weather`, default 0; env `WEATHER_HALT`) — [`weatherHaltEnabled()`](../../services/worker/src/pillars/shared/config.mts), gate a [weather runnerben](../../services/worker/src/pillars/weather/index.mts) a `shouldTrade` után: nem nyit, de a skip-sor megtartja a ledger-mezőket; az előrejelzés, a multi-model recorder és az EMOS-naplózás fut, a nyitott pozíciók elszámolása változatlan. Deploy `2b69fdf`, utána `weatherHalt=1` (20 override, DSR-trial naplózva). Élesítéskor 0 nyitott weather-pozíció, tőke $86,57.
+- **Visszakapcsolás feltétele:** a [`eval-weather-vs-market.ts`](../../scripts/eval-weather-vs-market.ts) valamelyik tisztességes horizonton (T+1 / T+0 reggel) pozitív skillt mutat a piac ellen, CI-vel, és az 50/50 keverék veri a piacot.
+
+<details><summary>Eredeti leírás (operátor-döntés előtt)</summary>
+
+### B79 (terv)
 
 - **Miért:** a B76 szerint a weather-modell egyik tisztességes horizonton sem veri a piacot, és nem is ad hozzá információt. Opciók: (a) **measure-only halt** a weatherre a B74 mintájára (nem nyit, de a ledger és a multi-model recorder tovább gyűjt); (b) csak T+1 belépés engedése (a délutáni T+0 a legrosszabb: ott a piac már a megfigyelést árazza); (c) marad, ahogy van (paper — a veszteség csak paper-tőke, de a mérés szerint biztosan negatív).
+
+</details>
 
 ### B77 — Maker (limit) megbízás taker helyett 🟡 FELDERÍTÉS
 
