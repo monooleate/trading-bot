@@ -86,7 +86,7 @@ const CITY_PATTERNS: Record<string, string[]> = {
   shenzhen:      ["shenzhen"],
 };
 
-function parseCityFromSlug(slug: string): string | null {
+export function parseCityFromSlug(slug: string): string | null {
   const s = `-${slug.toLowerCase()}-`;
   for (const [city, patterns] of Object.entries(CITY_PATTERNS)) {
     if (patterns.some((p) => s.includes(`-${p}-`))) return city;
@@ -94,7 +94,7 @@ function parseCityFromSlug(slug: string): string | null {
   return null;
 }
 
-function parseDateFromSlug(slug: string): string | null {
+export function parseDateFromSlug(slug: string): string | null {
   // Match patterns like "april-12", "on-april-12", "april-12-2026"
   const months: Record<string, string> = {
     january: "01", february: "02", march: "03", april: "04",
@@ -131,7 +131,7 @@ interface ParsedTemp {
   tail: "low" | "high" | null;
 }
 
-function parseTempFromLabel(label: string): ParsedTemp | null {
+export function parseTempFromLabel(label: string): ParsedTemp | null {
   // Supported formats:
   //   "18°C"                 → 18 (internal)
   //   "15°C or below"        → 15 (low tail)
