@@ -8,13 +8,15 @@
 import type { Context } from "@netlify/functions";
 import { checkAuth } from "@api/routes/_auth-guard.ts";
 import { CORS, getTraderConfig, getEffectiveTraderConfig, getEffectiveBtcExitConfig, getBtcExitConfig, getEffectiveBetaCap, getEffectiveRiskOverlay,
-  getEffectiveCryptoScanWindow, directionalHaltEnabled,
+  getEffectiveCryptoScanWindow, directionalHaltEnabled, makerShadowRecordEnabled,
 } from "./shared/config.mts";
 import { isDirectionalCryptoMarket } from "@core/coin.mts";
 import { loadPortfolioBetaSnapshot } from "./shared/portfolio-exposure.mts";
 import { cryptoExposureUsd, checkBetaCap } from "@core/portfolio-exposure.mts";
 import { realisedVol, volTargetMultiplier, drawdownKill, equityReturnsFromTrades } from "@core/risk-overlay.mts";
 import { checkExecutableEdge } from "./shared/executable-edge.mts";
+import { loadShadowOrders, saveShadowOrders, processShadowOrders, placeShadowLadder, isMakerShadowEligible } from "./shared/maker-shadow-store.mts";
+import type { MakerShadowOrder } from "@core/maker-shadow.mts";
 
 // State-changing actions require a valid JWT cookie. Read-only `status` is
 // public so the home page + per-venue dashboards can render without
@@ -546,6 +548,18 @@ async function runCryptoTrader(
   }
 
   let updatedSession = session;
+  // B77 — shadow maker orders (measurement only, zero trading effect). Processed
+  // BEFORE the scan so an order placed this tick is first observed on the next
+  // one. Any failure inside is swallowed — it must never touch the tick.
+  const makerShadow = await makerShadowRecordEnabled();
+  let shadowOrders: MakerShadowOrder[] = [];
+  let shadowDirty = false;
+  if (makerShadow) {
+    shadowOrders = await loadShadowOrders();
+    const pr = await processShadowOrders(shadowOrders, config.settlementFeePctFillModel ?? 0.015);
+    shadowOrders = pr.orders;
+    shadowDirty = pr.changed;
+  }
   // Portfolio crypto-beta exposure cap (B49 #2) — resolved once per tick. The
   // HL side comes from the persisted snapshot; the crypto side is recomputed
   // from the LIVE updatedSession at each entry so intra-tick opens count. OFF → no-op.
@@ -663,6 +677,28 @@ async function runCryptoTrader(
         // (e.g. NO @ 78K + YES @ 80K with non-monotonic predProbs).
         updatedSession.openPositions,
       );
+
+      // B77: shadow maker ladder for a decision that fails ONLY on price (Net
+      // edge / Kelly minimum). Records what a resting limit would have done —
+      // it changes nothing about this tick. Threshold markets only: the
+      // directional (up-or-down) branch is halted (B74) on evidence it has no
+      // edge, so a cheaper price for it is not a hypothesis worth measuring.
+      const shadowPlan = (): Parameters<typeof placeShadowLadder>[1] | null => {
+        const tokenId = decision.direction === "YES" ? market.clobTokenIds?.[0] : market.clobTokenIds?.[1];
+        if (!tokenId) return null;
+        return {
+          slug: market.slug, conditionId: market.conditionId ?? null, tokenId, direction: decision.direction,
+          endDate: market.endDate ?? null, pYes: signal.finalProb,
+          quotedSidePrice: decision.direction === "YES" ? market.currentPrice : 1 - market.currentPrice,
+          exitFeePct: config.settlementFeePctFillModel ?? 0.015,
+        };
+      };
+      if (makerShadow && !alreadyOpen && !decision.shouldTrade
+          && !isDirectionalCryptoMarket(market.slug, market.title)
+          && isMakerShadowEligible(decision.gates ?? [])) {
+        const plan = shadowPlan();
+        if (plan && (await placeShadowLadder(shadowOrders, plan)) > 0) shadowDirty = true;
+      }
 
       // Common per-market context surfaced in the response so the UI can
       // explain *why* the bot acted the way it did, regardless of branch.
@@ -816,6 +852,12 @@ async function runCryptoTrader(
           },
         );
         if (!exec.result.ok) {
+          // B77: the decision was a trade at the quote but the book price kills
+          // the edge — exactly the case a resting limit is meant for.
+          if (makerShadow && exec.result.failure === "edge_below_threshold") {
+            const plan = shadowPlan();
+            if (plan && (await placeShadowLadder(shadowOrders, plan)) > 0) shadowDirty = true;
+          }
           log("DECISION_SKIP", config.paperMode, {
             market: market.slug,
             reason: exec.result.reason,
@@ -962,6 +1004,9 @@ async function runCryptoTrader(
 
   // Save session state
   await saveSession(updatedSession);
+
+  // B77: persist the shadow maker orders (placed / observed / settled this tick).
+  if (makerShadow && shadowDirty) await saveShadowOrders(shadowOrders);
 
   // Prediction ledger (model-discovery §2): log EVERY scanned market's
   // forecast (taken + skipped) + fill outcomes for taken markets from

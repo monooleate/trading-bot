@@ -16,6 +16,10 @@ COPY tsconfig.json ./
 COPY BUILD_INFO ./
 COPY packages/ ./packages/
 COPY services/ ./services/
+# Read-only read-out / seed scripts (eval-*.ts, seed-emos.ts). Never run by CMD;
+# shipped so `docker exec edgecalc-workers bun scripts/eval-maker-shadow.ts`
+# works on the box (until B77 they had to be copied in by hand). ~76 KB.
+COPY scripts/ ./scripts/
 
 USER bun
 CMD ["bun", "run", "services/worker/src/main.ts"]

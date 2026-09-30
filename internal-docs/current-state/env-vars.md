@@ -386,6 +386,13 @@ edge-tracker storage-ba kerülnek.
 
 ---
 
+### `MAKER_SHADOW_RECORD` 🟢 OPCIONÁLIS (default **ON**) — B77
+
+- **Mire való:** a crypto threshold döntéseknél, amelyek **csak árra buknak** (Net edge / Kelly-minimum, vagy a B75 könyv-VWAP kapu), a bot HIPOTETIKUS álló vételi limit-megbízások létráját naplózza, ticken ként megnézi a könyvet (kitöltés = legjobb ask ≤ limit, a LIMITEN), és a piac feloldásakor a Gamma-eredménnyel elszámolja — a ki nem töltötteket is (az adverse selection összevetéséhez). **Nulla trading-hatás.**
+- **Azért default BE:** nem visszatölthető (hogy egy álló megbízás kitöltődött volna-e, a következő percek könyvétől függ), mint a többi recorder. `false`/`0` kikapcsolja.
+- **Settings-knob:** `makerShadowRecord` (0/1, `common`). Olvasó: `scripts/eval-maker-shadow.ts`. Doksi: [math/40](../math/40-maker-shadow.md).
+- **Finomhangolás (env, opcionális):** `MAKER_SHADOW_LADDER` (`0.05,0.10,0.15` — a cél-edge létra), `MAKER_SHADOW_TTL_MIN` (`120` — a megbízás élettartama; a piac vége −10 perc a plafon), `MAKER_SHADOW_NOTIONAL_USDC` (`10` — a hipotetikus méret; a hozam/$ méretfüggetlen).
+
 ### `WEATHER_HALT` 🟢 OPCIONÁLIS (default OFF) — B79
 
 - **Mire való:** ON esetén a weather bot **nem nyit új pozíciót**, de minden tickben

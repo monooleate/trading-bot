@@ -391,6 +391,8 @@ function expect(cond: boolean, test: string, message: string) {
 // flag it. The 2026-09-10 drift check found 25 such resolved rows counted as
 // clean. Provenance has to come from `firstTs`, which is never rewritten.
 {
+  // Category is irrelevant to the B67 epoch rule under test; "crypto" keeps these rows
+  // out of B78's weather bucket-key rule, which has its own tests below.
   const t = "first-tuple-epoch";
   const incG = (ts: string) =>
     buildIncoming(
@@ -405,14 +407,14 @@ function expect(cond: boolean, test: string, message: string) {
   // A gap row exactly as the live ones looked at 11:04: first seen before B53,
   // tuple already filled in inside the window, and no flag.
   const gapRow: any = {
-    slug: "g1", category: "weather", firstTs: "2026-09-08T11:00:00Z",
+    slug: "g1", category: "crypto", firstTs: "2026-09-08T11:00:00Z",
     ts: "2026-09-09T10:57:00Z", conditionId: "0xg", endDate: "2026-09-20T00:00:00Z",
     predictedProb: 0.30, marketPrice: 0.62, edge: 0.32,
     firstPredictedProb: 0.29, firstMarketPrice: 0.61, firstConfigHash: "cfgGap",
     direction: "NO", taken: false, lastAction: "skip", skipReason: null, signalBreakdown: null,
     scans: 449, outcome: null, resolvedAt: null, configHash: "cfgGap",
   };
-  const after = upsertRecords([gapRow], incG("2026-09-10T06:00:00Z"), "weather");
+  const after = upsertRecords([gapRow], incG("2026-09-10T06:00:00Z"), "crypto");
   expect(after[0].firstBackfilled !== true, t,
     "precondition (the bug itself): today's upsert cannot flag a tuple filled in before the flag existed");
   expect(after[0].firstMarketPrice === 0.61, t, "the tuple itself stays write-once");
@@ -421,10 +423,10 @@ function expect(cond: boolean, test: string, message: string) {
     `the gap row must classify as backfilled, got ${firstObservationProvenance(after[0])}`);
 
   // Boundary: a first sighting AT the epoch is clean; a millisecond earlier is not.
-  const atEpoch = upsertRecords([], incG(FIRST_TUPLE_EPOCH), "weather");
+  const atEpoch = upsertRecords([], incG(FIRST_TUPLE_EPOCH), "crypto");
   expect(isCleanFirstObservation(atEpoch[0]), t, "a row first seen at the epoch is clean");
   const earlier = new Date(Date.parse(FIRST_TUPLE_EPOCH) - 1).toISOString();
-  expect(!isCleanFirstObservation(upsertRecords([], incG(earlier), "weather")[0]), t,
+  expect(!isCleanFirstObservation(upsertRecords([], incG(earlier), "crypto")[0]), t,
     "one millisecond before the epoch is not");
 
   // A tuple whose row age cannot be established is not vouched for.
@@ -436,7 +438,7 @@ function expect(cond: boolean, test: string, message: string) {
     "null/undefined → missing, never clean");
 
   // Coverage over the four shapes the live ledger holds.
-  const genuine = upsertRecords([], incG("2026-09-10T07:00:00Z"), "weather")[0];
+  const genuine = upsertRecords([], incG("2026-09-10T07:00:00Z"), "crypto")[0];
   const cov = firstObservationCoverage([
     genuine,
     { ...genuine, firstTs: "2026-09-02T00:00:00Z", firstBackfilled: true }, // flagged (after B61)
@@ -445,6 +447,75 @@ function expect(cond: boolean, test: string, message: string) {
   ]);
   expect(cov.clean === 1 && cov.backfilled === 2 && cov.missing === 1, t,
     `the gap row must count as backfilled, not clean, got ${JSON.stringify(cov)}`);
+}
+
+// ── B78: a multi-bucket event is one row PER BUCKET, not one row per slug ────
+// Weather: one slug, ~11 sub-markets, and the bot scores whichever bucket has
+// the largest edge each scan. With one row per slug the first tuple described
+// the first scan's bucket while `conditionId`/`outcome` came from the last
+// scan's (or the traded) one — a first-tuple scored against ANOTHER bucket's
+// result. Positive control: run the OLD key (slug only) over the same scans and
+// show it collapses to a single mixed-bucket row.
+{
+  const t = "B78-bucket-rows";
+  const scan = (bucket: string, cond: string, prob: number, price: number, ts: string, action = "skip") =>
+    buildIncoming(
+      [{ market: "highest-temperature-in-x", action, reason: "r", predictedProb: prob, marketPrice: price, direction: "YES", conditionId: cond, bucketId: cond, bucket, endDate: "2026-09-20T12:00:00Z" }],
+      [], ts, "cfg",
+    );
+
+  // Scan 1 picks bucket A, scan 2 picks bucket B, scan 3 back to A.
+  let rows = upsertRecords([], scan("21C", "0xA", 0.30, 0.20, "2026-09-19T01:00:00Z"), "weather");
+  rows = upsertRecords(rows, scan("22C", "0xB", 0.40, 0.35, "2026-09-19T02:00:00Z"), "weather");
+  rows = upsertRecords(rows, scan("21C", "0xA", 0.28, 0.24, "2026-09-19T03:00:00Z"), "weather");
+
+  expect(rows.length === 2, t, `two buckets → two rows, got ${rows.length}`);
+  const a = rows.find((r) => r.bucketId === "0xA")!, b = rows.find((r) => r.bucketId === "0xB")!;
+  expect(a && b && a.slug === b.slug, t, "both rows keep the event slug (display + matching)");
+  expect(a.scans === 2 && b.scans === 1, t, `scans per bucket 2/1, got ${a.scans}/${b.scans}`);
+  expect(a.firstPredictedProb === 0.30 && a.firstMarketPrice === 0.20, t,
+    `bucket A first tuple is ITS first sighting, got ${a.firstPredictedProb}/${a.firstMarketPrice}`);
+  expect(b.firstPredictedProb === 0.40 && b.firstMarketPrice === 0.35, t,
+    `bucket B first tuple is ITS first sighting, got ${b.firstPredictedProb}/${b.firstMarketPrice}`);
+  expect(a.conditionId === "0xA" && b.conditionId === "0xB", t, "each row resolves against its own conditionId");
+
+  // Positive control — the old key (no bucketId) mixes the buckets in ONE row.
+  const strip = (inc: ReturnType<typeof scan>) => inc.map(({ bucketId: _b, ...rest }) => rest as any);
+  let old = upsertRecords([], strip(scan("21C", "0xA", 0.30, 0.20, "2026-09-19T01:00:00Z")), "weather");
+  old = upsertRecords(old, strip(scan("22C", "0xB", 0.40, 0.35, "2026-09-19T02:00:00Z")), "weather");
+  expect(old.length === 1, t, "control: the old key collapses both buckets into one row");
+  expect(old[0].conditionId === "0xB" && old[0].firstPredictedProb === 0.30, t,
+    "control: that row pairs bucket A's first tuple with bucket B's conditionId — the bug");
+
+  // A closed trade (matched on the event slug, carries no bucket) must NOT fill a
+  // bucket row's outcome: it may describe a different bucket.
+  const filled = fillOutcomesFromClosedTrades(rows, [{ market: "highest-temperature-in-x", direction: "YES", pnl: 5, closedAt: "2026-09-20T13:00:00Z" }], "2026-09-20T14:00:00Z");
+  expect(filled.every((r) => r.outcome === null), t, "closed-trade fill skips bucket rows (Gamma resolves them)");
+  // …while a legacy row for the same slug (no bucketId) is filled exactly as before.
+  const legacy: PredictionRecord[] = [{ ...rows[0], bucketId: undefined }];
+  const legacyFilled = fillOutcomesFromClosedTrades(legacy, [{ market: "highest-temperature-in-x", direction: "YES", pnl: 5, closedAt: "2026-09-20T13:00:00Z" }], "2026-09-20T14:00:00Z");
+  expect(legacyFilled[0].outcome === 1, t, "legacy (unkeyed) row still fills from the closed trade");
+}
+
+// ── B78: crypto/HL/sports keep ONE row per slug — bit-identical behaviour ────
+{
+  const t = "B78-single-market-unchanged";
+  const inc = (prob: number, ts: string) =>
+    buildIncoming([{ market: "bitcoin-above-80k", action: "skip", reason: "r", predictedProb: prob, marketPrice: 0.5, direction: "YES", endDate: "2026-09-20T00:00:00Z" }],
+      [{ slug: "bitcoin-above-80k", conditionId: "0xc" }], ts, "cfg");
+  let rows = upsertRecords([], inc(0.6, "2026-09-19T01:00:00Z"), "crypto");
+  rows = upsertRecords(rows, inc(0.7, "2026-09-19T02:00:00Z"), "crypto");
+  expect(rows.length === 1 && rows[0].scans === 2 && rows[0].bucketId === undefined, t, `one row, no bucketId, got ${JSON.stringify(rows.map((r) => [r.slug, r.scans, r.bucketId]))}`);
+}
+
+// ── B78: provenance — a weather row is only vouched for when bucket-keyed ────
+{
+  const t = "B78-provenance";
+  const base = { firstTs: "2026-09-30T00:00:00Z", firstPredictedProb: 0.3 };
+  expect(firstObservationProvenance({ ...base, category: "weather", bucketId: "0xA" }) === "clean", t, "bucket-keyed weather row after the epoch is clean");
+  expect(firstObservationProvenance({ ...base, category: "weather" }) === "backfilled", t, "weather row WITHOUT bucketId is not vouched for, even after the epoch");
+  expect(firstObservationProvenance({ ...base, category: "crypto" }) === "clean", t, "crypto has no buckets → unaffected");
+  expect(firstObservationProvenance(base) === "clean", t, "records with no category → unaffected (back-compat)");
 }
 
 // ─── CLI report ───────────────────────────────────────────────────────────

@@ -542,6 +542,8 @@ async function runWeatherTraderInner(configIn: WeatherConfig) {
         // under the generic name the ledger reads.
         predictedProb: match.probability,
         conditionId: match.bucket.conditionId,
+        // B78: the ledger row is one (event, bucket) — see PredictionRecord.bucketId.
+        bucketId: match.bucket.conditionId || undefined,
         endDate: (market as any).endDate ?? null,
         edge: decision.edge,
         confidence: decision.confidence,

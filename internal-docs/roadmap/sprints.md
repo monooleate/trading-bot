@@ -1067,10 +1067,12 @@ A 2026-09-03 teljes audit (5 bot + infra + security) implementált fixei: [chang
 
 </details>
 
-### B78 — Prediction-ledger: a `conditionId` felülíródik, az első-látás tuple nem 🟠 BACKLOG (mérés-integritás)
+### B78 — Prediction-ledger: a weather-sor három bucketet kevert ✅ IMPLEMENTED 2026-09-30 (98. session)
 
-- **Lelet (2026-09-28):** [`upsertRecords`](../../packages/core/src/prediction-ledger.mts) minden szkennelésnél felülírja a `conditionId`-t (`prev.conditionId = inc.conditionId`), a `firstPredictedProb`/`firstMarketPrice` viszont az első-látáskor latchelődik. Weather-nél (egy slug = egy esemény, a bot által választott bucket szkennelésenként változhat) az első-látás valószínűségét a LEGUTÓBBI bucket kimenete pontozza. A korábbi „weather −61% a piac ellen" ezért nem tiszta bizonyíték (a B76 ettől független úton mért).
-- **Javítás iránya:** `firstConditionId` latchelése + a first-tuple kimenetének a first-bucketre való feloldása; vagy weather-nél bucket-szintű kulcs. Előbb mérni, hány sornál változott a bucket (a ledger ma nem őrzi).
+- **Lelet (2026-09-28, a B76 mellékterméke):** a weather-esemény egy slug ~11 alpiaccal, a bot szkennelésenként a legnagyobb edge-ű bucketet pontozza → egy sorban három különböző bucket keveredett: az első-látás tuple az *első* szkennelés bucketjéé, a `conditionId` / `predictedProb` az *utolsóé*, az `outcome` az utolsóé (Gamma) vagy a *kötötté* (a zárt trade az esemény-slugra illeszkedett, bucketet nem hordoz). Az első tuple egy másik bucket eredményén lett pontozva — a korábbi „weather −61% a piac ellen" ezért nem tiszta bizonyíték.
+- **Javítás** ([math/40 §5](../math/40-maker-shadow.md)): a weather sor **(esemény, bucket)** — új `bucketId` (a bucket `conditionId`-ja) a sor kulcsában (`recordKey`), a `slug` marad az eseményé; a zárt trade-ből való `outcome`-kitöltés bucket-sorokra kimarad (azok a saját `conditionId`-jukon, Gamma-ból oldódnak fel); a weather sor `bucketId` nélkül a provenance-ban nem „tiszta". Más kategóriák kulcsa bájt-azonos (teszttel pinelve, pozitív kontrollal: a régi kulcs ugyanazon szkenneléseken egy vegyes sorba esik össze).
+- **Élő hatás (mérve a boxon, read-only):** 288 weather sor, 271 lezárt, a B67-szabály szerint 209 „tiszta", és **mind a 209 többször volt szkennelve** → a deploykor a weather tiszta-számláló 209 → 0, majd az új bucket-kulcsos sorokból épül újra. A drift-check 4. pontja ennek megfelelően frissítve.
+- ⚠ A dormáns `packages/core/src/ledger.ts` (Postgres-backend, csak a `pg-roundtrip.test.mts` használja) `(category, slug)` kulcson dolgozik; ha a worker valaha átáll rá, a bucket-kulcsot át kell vinni.
 
 ### B79 — Weather kereskedés: measure-only mód ✅ IMPLEMENTED + ÉLESÍTVE 2026-09-28 (97. session)
 
@@ -1085,10 +1087,18 @@ A 2026-09-03 teljes audit (5 bot + infra + security) implementált fixei: [chang
 
 </details>
 
-### B77 — Maker (limit) megbízás taker helyett 🟡 FELDERÍTÉS
+### B77 — Maker (limit) megbízás taker helyett: ÁRNYÉK-MÉRÉS ✅ IMPLEMENTED 2026-09-30 (98. session), a végrehajtás → B77b
 
-- **Miért:** a B75 replay szerint a crypto „15–20% edge" nagyrészt a spread volt, amit taker-ként a bot megfizet. Maker-ként (limit a saját fair ár alatt) a spreadet nem fizeti, hanem beszedi.
-- **Nehézség:** a maker-fill becsületes paper-modellezése nehéz (sorban állás, és kiválasztódási torzítás: épp akkor tölt, amikor rossz). Előfeltétel a B68 fill-kalibráció külső könyv-archívummal. Élesben a boxról nem kereskedhetünk (geoblock, B10).
+- **Miért:** a B75 replay szerint a crypto „15–20% edge" nagyrészt a spread volt, amit a taker megfizet; egy álló megbízás nem fizeti, hanem beszedi az árat. **Nem dönthető el gondolkodással:** kitöltődik-e, és a kitöltések nem épp az adverse-selection esetei-e. A paper-motornak nincs sorállása → egy „álló megbízás" paper-szimulációja hamis magabiztosságot adna.
+- **Ezért az első fél előre-naplózó ÁRNYÉK-mérés** ([math/40](../math/40-maker-shadow.md)): minden crypto threshold döntésnél, ami csak árra bukik (Net edge / Kelly-minimum, vagy a B75 könyv-VWAP kapu), hipotetikus álló vételek létrája (5/10/15% cél-edge); kitöltés = a legjobb ask ≤ limit, **a limiten** (nincs árjavítás; a fill-arány alsó korlát); minden megbízás — a ki nem töltöttek is — a valódi feloldással kerül elszámolásra, hogy az adverse selection mérhető legyen. [`maker-shadow.mts`](../../packages/core/src/maker-shadow.mts) (pure) + [`maker-shadow-store.mts`](../../services/worker/src/pillars/shared/maker-shadow-store.mts) + a crypto runner két pontja + [`eval-maker-shadow.ts`](../../scripts/eval-maker-shadow.ts). **Nulla trading-hatás.** Knob: `makerShadowRecord` (**default BE** — nem visszatölthető, mint a többi recorder; env `MAKER_SHADOW_RECORD`).
+- **Tesztek:** [`maker-shadow.test.mts`](../../packages/core/src/maker-shadow.test.mts) (létra-árak, marketable fokok, lejárat, kitöltés csak keresztező askra és a limiten, késői megfigyelés nem gyárt kitöltést [pozitív kontroll], elszámolás a paper-resolver díjával, piac-klaszterezett CI, adverse-gap veto [pozitív kontroll]) · [`maker-shadow-store.test.mts`](../../services/worker/src/pillars/shared/maker-shadow-store.test.mts) (stubolt könyv + Gamma: elhelyezés, egyszeri létra, negatív cache, megfigyelés, elszámolás, hálózati hiba nem dob).
+- **Várható ütem — őszintén:** hetente pár jogosult piac (a crypto threshold döntések ritkák: 72 óra alatt 1). Egy verdikthez ≥ 30 lezárt-kitöltött PIAC kell (a piac a független egység) → **hetek, valószínűleg hónapok**. A `PROMISING` előtt semmi nem épül.
+
+### B77b — Tényleges álló (maker) paper-megbízások ⏳ CSAK a B77 `PROMISING` verdiktje után
+
+- **Feltétel:** az [`eval-maker-shadow.ts`](../../scripts/eval-maker-shadow.ts) valamelyik létrafokon `PROMISING` (≥ 30 lezárt-kitöltött piac, pozitív alsó 90% hozam-határ, adverse-gap > −10 pont).
+- **Ami hozzá kell (és most szándékosan NINCS megírva):** függő-megbízás tár + tickenkénti kitöltés/lejárat; a kitöltött megbízás pozícióvá alakítása ugyanazzal az `entryDecision`-snapshottal, mint a taker út; **a cross-position kapuk (monotonicitás, outcome-overlap) újra-ellenőrzése a KITÖLTÉS pillanatában** (a másik pozíciók közben megváltozhattak); bankroll-foglalás a függő megbízásokra + a nyitott-pozíció plafonba számítás; a beta-cap. Csak olyan döntéseket egészít ki, amelyeket a taker-út ma kiszűr — a működő taker-kötéseket nem váltja.
+- **Miért nem most:** hetekig kihasználatlan kód egy kereskedési ciklusban, bizonyíték nélkül, a kitöltéskori kapu-újraértékelés vakon megírva — a B56b/B53 tanulsága szerint egy hihető, mérés nélküli javítás árthat.
 
 ### B75 — „68 döntés, 68 elutasítás": vol-target bináris-hiba + végrehajtható-edge kapu + no-fill őr ✅ IMPLEMENTED 2026-09-28 (96. session)
 

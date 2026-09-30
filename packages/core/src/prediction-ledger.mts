@@ -84,6 +84,19 @@ export interface PredictionRecord {
   outcome: number | null;             // YES-resolution 0/1 once resolved, else null
   resolvedAt: string | null;
   configHash?: string | null;         // B50 #4: fingerprint of the active config at the latest scan
+  // B78 — bucket identity for MULTI-BUCKET events (weather). A weather event is
+  // ONE slug with ~11 sub-markets, and the bot scores whichever bucket has the
+  // largest edge at each scan, so the chosen bucket changes between scans. With
+  // one row per slug that produced three different buckets inside one record:
+  // the write-once first tuple described the bucket of the FIRST scan, `conditionId`
+  // / `predictedProb` the LAST scan's bucket, and `outcome` either that last
+  // bucket (Gamma) or the TRADED bucket (closed trade, matched on the event
+  // slug) — then the first tuple was scored against another bucket's result.
+  // A row is now one (slug, bucket): `bucketId` is the bucket's conditionId, part
+  // of the row key, set only by runners that trade multi-bucket events. Rows
+  // without it (every crypto/HL/sports row, and all weather rows written before
+  // B78) keep the old single-row-per-slug behaviour.
+  bucketId?: string;
 }
 
 // Shape of the incoming per-market prediction (derived from a bot's scan
@@ -102,6 +115,16 @@ export interface IncomingPrediction {
   skipReason: string | null;
   signalBreakdown: Record<string, number | null> | null;
   configHash?: string | null;
+  bucketId?: string;              // B78: multi-bucket events only (see PredictionRecord)
+}
+
+/**
+ * The upsert key of a ledger row (B78): the slug, plus the bucket for
+ * multi-bucket events. Rows without a `bucketId` key on the slug alone, exactly
+ * as before, so single-market categories are unaffected. Pure.
+ */
+export function recordKey(r: { slug: string; bucketId?: string | null }): string {
+  return r.bucketId ? `${r.slug}#${r.bucketId}` : r.slug;
 }
 
 const isYesLike = (d: unknown): boolean => d === "YES" || d === "LONG";
@@ -149,6 +172,7 @@ export function buildIncoming(
       skipReason: action === "skip" || action === "failed" ? (r.reason ?? null) : null,
       signalBreakdown: r.signalBreakdown ?? null,
       configHash,
+      ...(r.bucketId ? { bucketId: String(r.bucketId) } : {}),
     });
   }
   return out;
@@ -166,13 +190,15 @@ export function upsertRecords(
   category: string,
 ): PredictionRecord[] {
   const bySlug = new Map<string, PredictionRecord>();
-  for (const r of existing) bySlug.set(r.slug, r);
+  for (const r of existing) bySlug.set(recordKey(r), r);
 
   for (const inc of incoming) {
-    const prev = bySlug.get(inc.slug);
+    const key = recordKey(inc);
+    const prev = bySlug.get(key);
     if (!prev) {
-      bySlug.set(inc.slug, {
+      bySlug.set(key, {
         slug: inc.slug,
+        ...(inc.bucketId ? { bucketId: inc.bucketId } : {}),
         category,
         firstTs: inc.ts,
         ts: inc.ts,
@@ -293,6 +319,10 @@ export function fillOutcomesFromClosedTrades(
   }
   return records.map((r) => {
     if (r.outcome !== null) return r;
+    // B78: a bucket row resolves from ITS OWN conditionId (Gamma reconcile). A
+    // closed trade is matched on the event slug and carries no bucket, so its
+    // result may belong to a different bucket than this row's — never use it.
+    if (r.bucketId) return r;
     const t = bySlug.get(r.slug);
     if (!t) return r;
     const yes = yesOutcomeFromClosedTrade(t);
@@ -406,7 +436,7 @@ export async function reconcileLedger(
  * yet resolved / on error. Mirrors the crypto paper-resolver pattern
  * (`&closed=true` mandatory; resolved ⇔ outcomePrices binary extreme).
  */
-async function fetchGammaYesResolution(conditionId: string): Promise<number | null> {
+export async function fetchGammaYesResolution(conditionId: string): Promise<number | null> {
   try {
     const url = `${GAMMA_API}/markets?condition_ids=${encodeURIComponent(conditionId)}&closed=true`;
     const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
@@ -485,7 +515,13 @@ export interface FirstObservationFields {
   firstTs: string;
   firstPredictedProb?: number;
   firstBackfilled?: boolean;
+  category?: string;      // B78: weather rows are only vouched for when bucket-keyed
+  bucketId?: string;
 }
+
+/** Categories whose events hold several buckets, so a row is only a single
+ *  well-defined prediction when it is keyed by bucket (B78). */
+const MULTI_BUCKET_CATEGORIES = new Set(["weather"]);
 
 /**
  * Classify a record's first-sighting tuple (audit P1-4 + B67). Three states
@@ -502,6 +538,12 @@ export interface FirstObservationFields {
  *   "missing"    no tuple → pre-B53 row never rescanned; consumers fall back to
  *                the LATEST fields, the converged value the fix exists to avoid.
  *
+ * B78: a WEATHER row without a `bucketId` is also "backfilled" — not because it
+ * was back-filled, but for the same reason: its first tuple is not vouched for.
+ * Such a row describes one bucket (the first scan's) while its outcome comes
+ * from another (the last scan's, or the traded one), and which of them it is
+ * was never recorded. Only rows keyed by bucket are unambiguous.
+ *
  * Only "clean" is clean. Consumers should keep scoring every row — dropping the
  * other two today would leave little — but they must be able to say how much
  * of a verdict rests on contaminated evidence. Pure.
@@ -511,6 +553,7 @@ export function firstObservationProvenance(
 ): FirstObservationProvenance {
   if (!r || typeof r.firstPredictedProb !== "number") return "missing";
   if (r.firstBackfilled === true) return "backfilled";
+  if (r.category && MULTI_BUCKET_CATEGORIES.has(r.category) && !r.bucketId) return "backfilled";
   const firstSeen = Date.parse(r.firstTs);
   if (!Number.isFinite(firstSeen) || firstSeen < FIRST_TUPLE_EPOCH_MS) return "backfilled";
   return "clean";

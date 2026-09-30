@@ -153,6 +153,24 @@ export async function weatherHaltEnabled(): Promise<boolean> {
   }
 }
 
+// B77 — shadow maker orders (measurement only, ZERO trading effect). For each
+// crypto decision that fails only on price, records a ladder of hypothetical
+// resting limit orders, watches the book for fills and settles them against the
+// real resolution (@core/maker-shadow.mts). Default ON, like the other
+// non-backfillable recorders: whether a resting order would have filled depends
+// on the book over the following minutes, which cannot be reconstructed later.
+// OFF (`MAKER_SHADOW_RECORD=false` or `makerShadowRecord`=0) stops collecting.
+export async function makerShadowRecordEnabled(): Promise<boolean> {
+  const env = !["false", "0"].includes(String(process.env.MAKER_SHADOW_RECORD ?? "true").toLowerCase());
+  try {
+    const mod: any = await import("@api/routes/trader-settings.mts");
+    const ov = await mod.loadRuntimeOverrides();
+    return ov.makerShadowRecord != null ? ov.makerShadowRecord === 1 : env;
+  } catch {
+    return env;
+  }
+}
+
 // Crypto-beta exposure cap options (B49 #2). Aggregate directional crypto
 // capital (crypto + HL) is capped at `fraction × combined bankroll`. Env default
 // OFF; the `common` Blobs knobs `betaCapEnabled` (0/1) + `betaCapFraction`

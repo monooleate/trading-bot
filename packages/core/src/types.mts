@@ -276,6 +276,7 @@ export type LogEvent =
   | "ORDER_EXPIRED"
   | "ORDER_REJECTED"
   | "NO_FILL_WATCHDOG"
+  | "MAKER_SHADOW"             // B77: shadow maker order placed / filled / expired / settled
   | "SELL_PLACED"
   | "TRADE_CLOSED"
   | "SESSION_START"
