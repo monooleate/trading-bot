@@ -1,0 +1,41 @@
+---
+paths:
+  - "services/worker/src/pillars/crypto/**"
+  - "services/worker/src/pillars/index.mts"
+  - "services/worker/src/pillars/shared/cross-position-gates*.mts"
+  - "services/worker/src/pillars/shared/signal-calibration*.mts"
+  - "services/worker/src/pillars/shared/signal-combiner-threshold.test.mts"
+  - "services/worker/src/pillars/shared/maker-shadow-store*.mts"
+  - "services/worker/src/recorders/**"
+  - "services/api/src/routes/signal-combiner.mts"
+  - "services/api/src/routes/vol-divergence.mts"
+  - "services/api/src/routes/cond-prob-matrix.mts"
+  - "packages/core/src/coin*.mts"
+  - "packages/core/src/scan-slots*.mts"
+  - "packages/core/src/oi-delta*.mts"
+  - "packages/core/src/har-*.mts"
+  - "packages/core/src/first-passage*.mts"
+  - "packages/core/src/deribit-rnd*.mts"
+  - "packages/core/src/maker-shadow*.mts"
+  - "packages/core/src/market-recorder*.mts"
+  - "packages/core/src/log-odds-pool.test.mts"
+  - "packages/core/src/extremize.test.mts"
+  - "scripts/eval-maker-shadow.ts"
+  - "scripts/fit-har.ts"
+  - "apps/web/src/components/trader/CryptoTrader.tsx"
+---
+
+# Crypto bot + signal-combiner
+
+- Egyetlen támogatott ág a **threshold (`above-K`)**; az up-or-down és a teljes HL directional ág measure-only (`directionalHalt`=1, B74: a piac ellen −44% / −59% Brier-skill). A threshold-ág sem veri bizonyítottan a piaci árat — ne állíts edge-et.
+- Coin- és strike-parsing SSOT: `@core/coin.mts` — ne írj új regexet. Threshold strike: `parseThresholdK` (`above-Nk` → N×1000 USD); K=S fallback esetén a BS-digital `fair YES ≈ 0,5` K-tól függetlenül (a „lapos finalProb" patológia).
+- `cond_prob` monotonicitás-check csak AZONOS parsed strike K-n; up-or-down piacon kimarad (B27 — különböző strike-ok hamis violationt adtak).
+- Cross-position kapuk: monotonicitás (#15, predikció-koherencia) és outcome-overlap (#16, `findOutcomeOverlapViolation`: NO@K_lo + YES@K_hi tiltva) — független, komplementer; ne vond össze.
+- Új combiner-signal checklist: `SIGNAL_ICS` + osztályozás `K_BLIND_SIGNALS`-be (strike-vak jel) + knob-gate (OFF → `null` → a `combine()` elejti → bit-azonos) + `signal-aggregator.mts` `extractBreakdown` ÉS a default-breakdown builder (különben a ledger-breakdown NULL, nincs per-signal IC — az `oi_delta`-nál ez megtörtént).
+- Ne hagyd ki a ~0,5-ös („semleges") jeleket a poolból, és ne kapcsold be a `combinerLogOddsStrength`-et bizonyíték nélkül — mindkettő mérve rontott a directional ágon (B56b). A `combinerKBlindDownweight` csak a threshold-ágra hat: ne változtasd operátor-döntés nélkül.
+- Scan: `selectScanSlots` coin-diverzifikált (minden jelen lévő coin egy fenntartott slot, a maradék volumen szerint; egy coin / `minPerCoin=0` → bit-azonos a régi `slice(0,N)`-nel). `cryptoScanWindow` (default 5) a fő külső-API tárcsa (~8 fetch/slot). A volumen-rangsort ne cseréld bizonyíték nélküli heurisztikára.
+- Edge a végrehajtható áron (B75, `executable-edge`, `fillModelEnabled` mellett): `P(oldal) − könyv-VWAP − kilépési díj ≥ küszöb` ÉS ≥5 részvény. A Gamma-quote-on számolt „15–20% edge" nagyrészt spread volt.
+- Flip-elemzésből ne fordíts oldalt: egy rövid veszteség-sorozat ellentétes oldala regime-artefaktum (B27, a B22-csapda); a naiv flip (Brier(1−p)) mérve sem működik.
+- Maker: `makerShadowRecord` (default 1) csak árnyék-mérés, nulla trading-hatás; a kitöltés ára a LIMIT, sosem a jobb ask. A valódi álló paper-megbízás (B77b) csak `PROMISING` verdikt után (≥30 lezárt-kitöltött piac, `scripts/eval-maker-shadow.ts`).
+- Recorderek (`RECORD_OI`, `RECORD_CLOB_BOOK`, env-gated): a pillérek UTÁN, best-effort, sosem törhetik a ticket. Az OI-history és a PM könyv-mélység nem visszatölthető → log-forward.
+- A crypto-ágon `directionalHalt` alatt is a skip-sor `predictedProb`-bal logolódjon (torzítatlan mérés).
