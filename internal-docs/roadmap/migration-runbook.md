@@ -6,6 +6,10 @@
 >
 > **Dátum:** 2026-09-02
 
+> **📌 STÁTUSZ (2026-10-12): A MIGRÁCIÓ LEZÁRULT 2026-09-02-án — ez a dokumentum mostantól TÖRTÉNETI runbook.**
+> Phase 0–3 + 5 ✅ · Phase 4 ⏭ szándékosan kihagyva (tiszta indulás) · Phase 6 ✅ (a Netlify nyugdíjazva, a stack a single source; CI-rsync deploy 2026-09-03 óta) · **Phase 7 (Chronos/model-súly) NYITOTT** — a sprint-követés a [`sprints.md`](./sprints.md)-ben (B2 ✅, Phase 7 a backlogban).
+> Bizonyíték: [`CHANGELOG-2026-09-02.md`](../changelog/CHANGELOG-2026-09-02.md) „Phase 4/6 döntés" + [`CHANGELOG-2026-09-03.md`](../changelog/CHANGELOG-2026-09-03.md) „Deploy pipeline: … rsync-from-runner". A lenti „⚠ MEGERŐSÍTÉS ELŐTTE" / „a Netlify MÉG fut" jelölések a végrehajtás idejére vonatkoztak.
+
 ---
 
 ## 0. Kickoff prompt (másold be a köv. session indításához)
@@ -145,7 +149,9 @@ A pure logika változatlan; **csak az I/O-adapter cserélődik** (Netlify Blobs 
 
 ---
 
-## 6. Phase 4 — Adat-migráció (Blobs → Postgres) ⚠ MEGERŐSÍTÉS ELŐTTE
+## 6. Phase 4 — Adat-migráció (Blobs → Postgres) ⏭ SZÁNDÉKOSAN KIHAGYVA (2026-09-02)
+
+> **⏭ KIHAGYVA (2026-09-02, user-döntés): tiszta indulás.** A Netlify Blobs history (paper-history, IC-kalibráció, ledger) **NEM lett átemelve**; a box üres sessionökkel indult, a botok a kód-defaultokon futnak (operátor-döntés 2026-09-03: „run-on-defaults, calibrate-later"). Az alábbi tooling (`scripts/export-blobs.mjs`, `services/api/src/import-blobs.ts`) megmaradt, de **nem futott**. Forrás: [`CHANGELOG-2026-09-02.md`](../changelog/CHANGELOG-2026-09-02.md) „Phase 4/6 döntés".
 
 **Feladatok**
 1. **Export** (Netlify): egy admin-endpoint / `netlify` CLI kiírja minden store-t JSON-ba (`prediction-ledger/*`, `auto-trader-state/*`, `hyperliquid-session-v1/*`, `hyperliquid-arb-session-v1/*`, `auto-trader-session-sports/*`, `trader-settings`).
@@ -186,7 +192,9 @@ A pure logika változatlan; **csak az I/O-adapter cserélődik** (Netlify Blobs 
 
 ---
 
-## 8. Phase 6 — Parity + cutover ⚠ MEGERŐSÍTÉS ELŐTTE
+## 8. Phase 6 — Parity + cutover ✅ KÉSZ (2026-09-02)
+
+> **✅ KÉSZ (2026-09-02/03).** A tiszta indulás miatt a pillérenkénti **paper-parity összevetés nem futott** (nem volt közös history, amihez mérni lehetett volna) — a cutover egy lépésben történt: a workers/api/model + Postgres a boxon a single source, zöld jelzés a Netlify trading-site törlésére. **A Netlify DNS-zóna MARAD** (a `stats.jmeszaros.dev` és a `trade.jmeszaros.dev` is azon van). Deploy 2026-09-03 óta: push `main` → CI (tsc + teszt + build) → `deploy.yml` rsync a boxra. ⚠ Hogy a Netlify site ténylegesen törölve lett-e, a repóból nem ellenőrizhető.
 
 **Feladatok**
 - **Signal-parity:** az `api` signal-combiner outputja bit-közelre egyezik a Netlify-éval (ugyanaz a kód) — 24–48h összevetés azonos slug-okon.
@@ -197,7 +205,7 @@ A pure logika változatlan; **csak az I/O-adapter cserélődik** (Netlify Blobs 
 
 ---
 
-## 9. Phase 7 — B-lépcső ML bekötése (a co-host már bírja)
+## 9. Phase 7 — B-lépcső ML bekötése (a co-host már bírja) 🟡 NYITOTT (a sprints.md backlogjában követve)
 
 **Feladatok**
 - A `services/model` bekötése: a workers a `http://model:8000/vol` (Chronos-Bolt distribution / RealizedGARCH) + `/calibrate` (isotonic/Venn-Abers) végpontokat hívja a **meglévő default-off knobok mögött** (#5 σ-forrás, #2 kalibráció live).
@@ -209,7 +217,7 @@ A pure logika változatlan; **csak az I/O-adapter cserélődik** (Netlify Blobs 
 
 ## 10. Rollback + kockázatok
 
-- **Minden fázis visszafordítható; a Netlify Phase 6-ig ÉL** (strangler) → bármikor visszaállás.
+- *(Történeti — a végrehajtás idejére.)* **Minden fázis visszafordítható volt; a Netlify Phase 6-ig élt** (strangler). A cutover óta a visszaút a box saját rollbackje (lásd a deploy-workflow-t), nem a Netlify.
 - **Data-migráció:** az import idempotens (`ON CONFLICT`); a Blobs-export megmarad backupként.
 - **RAM:** `free -h` + `docker stats` figyelése; ha tartós >0.5 GB swap → a `model` mem_limit / load-on-demand TTL hangolása, végső esetben 16 GB rescale.
 - **Titkok:** `.env` chmod 600, sosem a git-ben; a `db` az `internal`-hálón, port nélkül.
@@ -221,8 +229,8 @@ A pure logika változatlan; **csak az I/O-adapter cserélődik** (Netlify Blobs 
 
 > **Már eldöntve (nem kell újra-tárgyalni):** **Postgres = a meglévő umami-konténer újrahasznosítása** (külön `edgecalc` DB + user) — lásd Phase 2 + §18.2. Külön `edgecalc-db` konténer csak escape-hatch, ha a DB-terhelés nő.
 
-1. **Session-state séma-ALAK** (a reuse-on belül): `pillar_state_*` blob-modell (gyors port) VS normalizált táblák (jobb lekérdezhetőség) — a hetzner-infrastructure.md §4 két opciója. *(A tároló-instance eldöntve; csak a tábla-alak nyitott.)*
-2. **Bun router:** Hono vs Elysia.
+1. ~~**Session-state séma-ALAK**~~ ✅ **ELDÖNTVE (2026-09-02):** normalizált táblák (`pillar_session`, `pillar_open_position`, `pillar_closed_trade` — migráció 005) + a többi állapot a `blob_kv`-ben (compat facade). A prediction ledger még `blob_kv`-ben él (a `prediction_ledger` tábla létezik, de nem írjuk) — ez nyitott, a sprints.md B12-ben.
+2. ~~**Bun router:** Hono vs Elysia.~~ ✅ **ELDÖNTVE (2026-09-02):** egyik sem — vékony `Bun.serve` név szerinti dispatch (`services/api/src/server.ts`), lásd Phase 3.
 3. ~~**Branch:** merge main-be vagy külön migráció-branch.~~ ✅ **ELDÖNTVE (2026-09-02):** külön `feat/hetzner-migration` branch (a Netlify main-strangler érintetlen).
 4. **Redis:** kihagyva az A-lépcsőben; a B-lépcső feed/pubsubhoz később.
-5. **Odds-feed (#9):** melyik provider (the-odds-api free tier?) — külön data-task, nem blokkoló.
+5. **Odds-feed (#9):** melyik provider (the-odds-api free tier?) — külön data-task, nem blokkoló. *(2026-10-12: még nyitott; a sports a B37-ig manuálisan leállítva.)*
