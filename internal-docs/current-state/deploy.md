@@ -1,5 +1,7 @@
 # Deploy Guide – EdgeCalc Auto-Trader
 
+> ⛔ **TÖRTÉNETI (2026-10-12):** ez az útmutató a Netlify-korszakot írja le. A Netlify site törölve; ma: push `main` → CI → `.github/workflows/deploy.yml` rsync a Hetzner `analytics` boxra (lásd `README.md`, `internal-docs/roadmap/migration-runbook.md`). A live-trading előfeltételek (wallet, kulcsok) tartalmilag továbbra is érvényesek lehetnek.
+
 Teljes lépés-listás útmutató az auto-trader éles üzembe helyezéséhez.
 
 > ⚠ **Biztonság**: Csak dedikált hot wallet-et használj kis összeggel. Az éles trading valós pénzt mozgat.

@@ -19,7 +19,7 @@ Ez a fájl minden Claude Code session elején betöltődik — csak a mindig ér
 
 ```
 apps/web/src/          components/ (egy tab = egy *Panel.tsx; shared/ = TraderShell + kártyák; trader/ = per-bot UI), lib/math.ts, styles/global.css, pages/ (index, tools, trade/[category])
-services/api/src/      server.ts (router: /.netlify/functions/<név> + /api/<név>), routes/*.mts, migrate.ts, import-blobs.ts
+services/api/src/      server.ts (router: /.netlify/functions/<név> + /api/<név>), routes/*.mts, migrate.ts
 services/worker/src/   main.ts (payloadsFor), scheduler.ts, pillars/{crypto,weather,hyperliquid(+funding-arb),sports,shared,politics,macro}, recorders/
 packages/core/src/     pure modulok + *.test.mts (prediction-ledger, fill-model, emos, risk-overlay, promotion-gate, …)
 services/model/        Python ML service        migrations/  001–007 SQL        scripts/  eval-*/seed-emos/fit-har/run-tests

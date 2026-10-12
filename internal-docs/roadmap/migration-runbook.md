@@ -194,7 +194,7 @@ A pure logika változatlan; **csak az I/O-adapter cserélődik** (Netlify Blobs 
 
 ## 8. Phase 6 — Parity + cutover ✅ KÉSZ (2026-09-02)
 
-> **✅ KÉSZ (2026-09-02/03).** A tiszta indulás miatt a pillérenkénti **paper-parity összevetés nem futott** (nem volt közös history, amihez mérni lehetett volna) — a cutover egy lépésben történt: a workers/api/model + Postgres a boxon a single source, zöld jelzés a Netlify trading-site törlésére. **A Netlify DNS-zóna MARAD** (a `stats.jmeszaros.dev` és a `trade.jmeszaros.dev` is azon van). Deploy 2026-09-03 óta: push `main` → CI (tsc + teszt + build) → `deploy.yml` rsync a boxra. ⚠ Hogy a Netlify site ténylegesen törölve lett-e, a repóból nem ellenőrizhető.
+> **✅ KÉSZ (2026-09-02/03).** A tiszta indulás miatt a pillérenkénti **paper-parity összevetés nem futott** (nem volt közös history, amihez mérni lehetett volna) — a cutover egy lépésben történt: a workers/api/model + Postgres a boxon a single source, zöld jelzés a Netlify trading-site törlésére. **A Netlify DNS-zóna MARAD** (a `stats.jmeszaros.dev` és a `trade.jmeszaros.dev` is azon van). Deploy 2026-09-03 óta: push `main` → CI (tsc + teszt + build) → `deploy.yml` rsync a boxra. ✅ **2026-10-12-én ellenőrizve:** a `mj-trading.netlify.app` a Netlify „Not Found" oldalát adja → a trading-site törölve (vele a Blobs-adat is). A repóból 2026-10-12-én törölve a `netlify.toml`, a `scripts/export-blobs.mjs` és a `services/api/src/import-blobs.ts`. (Az `edgecalc.netlify.app` egy külön, statikus EdgeCalc landing — nem ennek a repónak a deployja, nem érintett.)
 
 **Feladatok**
 - **Signal-parity:** az `api` signal-combiner outputja bit-közelre egyezik a Netlify-éval (ugyanaz a kód) — 24–48h összevetés azonos slug-okon.

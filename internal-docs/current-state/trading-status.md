@@ -1,3 +1,5 @@
+> ⛔ **2026-10-12:** a lenti `netlify.toml` cron-hivatkozások történetiek — ma a `services/worker` ütemezője fut (`LOOP_INTERVAL_SEC`).
+
 # Trading Status — mit tudsz most, mit tudsz majd Hetznerrel
 
 > Frissítve: 2026-05-09. Forrás: `auto-trader/index.mts` + `netlify.toml` cron config + `execution.mts` clob-client integráció.

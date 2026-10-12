@@ -10,11 +10,9 @@ paths:
   - "packages/core/src/db.ts"
   - "packages/core/src/env.ts"
   - "services/api/src/migrate.ts"
-  - "services/api/src/import-blobs.ts"
   - "services/api/src/server.ts"
   - "services/worker/src/main.ts"
   - "services/worker/src/scheduler.ts"
-  - "scripts/export-blobs.mjs"
   - ".env.example"
   - "BUILD_INFO"
 ---
@@ -30,5 +28,5 @@ paths:
 - Új pillér a workerben: payload a `services/worker/src/main.ts` `payloadsFor`-ban + a compose `PILLARS` lista. A recorderek a pillérek UTÁN, best-effort futnak.
 - Caddy `trade.` blokk (`infra/caddy/trade.Caddyfile.snippet`): a site rejtve kereső/AI elől (X-Robots-Tag noindex, `robots.txt` Disallow, 403 AI user-agentekre) — maradjon így.
 - Netlify-specifikus minta (netlify.toml cron, `schedule()` wrapper, functions-bundling) már nem fut — a futtató Bun + belső ütemező. A Netlify DNS-zóna viszont maradjon (`stats.` umami ÉS `trade.` is ott van).
-- A Phase-4 adat-migráció helyett tiszta indulás történt (2026-09-02); az `export-blobs.mjs` / `import-blobs.ts` tooling megvan, de a Netlify törlésével a forrás elvész.
+- A Phase-4 adat-migráció helyett tiszta indulás történt (2026-09-02). A Netlify trading-site (`mj-trading.netlify.app`) 2026-10-12-én ellenőrizve törölve (Netlify „Not Found"), vele a Blobs-adat is; ezért az `export-blobs.mjs` / `import-blobs.ts` 2026-10-12-én törölve. A `netlify.toml` is törölve; a `@netlify/blobs`/`@netlify/functions` csomagok maradnak (a kód aliasként a Postgres-facade-ot importálja, `packages/core/src/blobs-compat.ts`). A `jmeszaros.dev` DNS-zóna Netlify DNS-en (NS1) MARAD.
 - Box-hozzáférés: `ssh analytics`, `/opt/edgecalc`. Élő DB-írás, `.env`-szerkesztés, konténer-recreate operátor-jóváhagyáshoz kötött.

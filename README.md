@@ -1,72 +1,23 @@
-# EdgeCalc — Polymarket & Funding Arb Toolkit
+# EdgeCalc — Polymarket & funding-arb trading toolkit
 
-Astro 4 + React 18 + Tailwind CSS • Netlify static deploy
+Monorepo: **Astro 4 + React** frontend (`apps/web`), **Bun** API (`services/api`), **worker** with an internal scheduler (`services/worker`), pure core logic (`packages/core`), Python model service (`services/model`), **Postgres**. Runs as a Docker co-host on the Hetzner `analytics` box at **https://trade.jmeszaros.dev** (paper mode).
 
-## Helyi futtatás
+## Local development
 
 ```bash
 npm install
-npm run dev
-# → http://localhost:4321
+npm run dev          # frontend only → http://localhost:4321
+npm test             # core + services test suite (scripts/run-tests.mjs)
 ```
 
-## Netlify deploy (első alkalom)
+The API and the worker need Postgres (`DATABASE_URL`); see `.env.example` and `docker-compose.yml`.
 
-### A) GitHub-on keresztül (ajánlott)
+## Deploy
 
-1. Töltsd fel a mappát egy GitHub repo-ba
-2. Netlify.com → Add new site → Import from Git
-3. Build command: `npm run build`
-4. Publish directory: `dist`
-5. Deploy site → kész, automatikus CI/CD
+Push to `main` → GitHub Actions CI (typecheck + tests + build) → `.github/workflows/deploy.yml` rsyncs the tree to the box and rebuilds the containers. There is no Netlify deploy any more (retired 2026-09-02; the old `mj-trading.netlify.app` site is deleted).
 
-### B) Netlify CLI-vel (gyorsabb)
+## Where to read next
 
-```bash
-npm install -g netlify-cli
-npm run build
-netlify deploy --prod --dir=dist
-```
-
-## Python scanner integráció
-
-```bash
-pip install requests
-python polymarket_scanner.py
-# → polymarket_data.json
-# Ezt töltsd be a Scanner tabba drag-and-drop-pal
-```
-
-## Struktúra
-
-```
-edge-calc/
-├── src/
-│   ├── components/
-│   │   └── Dashboard.tsx     ← teljes React island (4 tab)
-│   ├── layouts/
-│   │   └── Base.astro
-│   ├── pages/
-│   │   └── index.astro
-│   └── styles/
-│       └── global.css
-├── public/
-│   └── favicon.svg
-├── astro.config.mjs
-├── netlify.toml
-├── package.json
-└── tailwind.config.mjs
-```
-
-## Tab leírás
-
-| Tab | Funkció |
-|-----|---------|
-| 01 Scanner | Polymarket piacok listája, JSON import, EV kalkulator |
-| 02 EV Kalk. | Standalone Expected Value + Kelly pozícióméretező |
-| 03 Funding Arb | Delta-neutral funding rate arbitrázs kalkulátor |
-| 04 Swarm | Multi-agent szimuláció + Monte Carlo validáció |
-
-## Figyelmeztetés
-
-Ez egy oktatási célú eszköz. Nem befektetési tanács.
+- `CLAUDE.md` — project overview, safety rules, where the rules live
+- `internal-docs/roadmap/sprints.md` — current focus and backlog
+- `internal-docs/roadmap/migration-runbook.md` — the (completed) Netlify → Hetzner migration

@@ -412,7 +412,9 @@ TELEGRAM_CHAT_ID=
 
 ---
 
-## 12. Cron ütemezés (`netlify.toml`)
+## 12. Cron ütemezés (`netlify.toml`) — ⛔ TÖRTÉNETI
+
+> **2026-10-12:** a `netlify.toml` és a Netlify-cron megszűnt (a site törölve). Ma a `services/worker` belső ütemezője (`scheduler.ts`) futtatja a pilléreket `LOOP_INTERVAL_SEC` (default 180 s) időközzel, `PILLARS` env szerint. Az alábbi blokk a Netlify-korszakot írja le.
 
 ```toml
 [functions."scheduled-scan"]   schedule = "0 * * * *"     # óránként

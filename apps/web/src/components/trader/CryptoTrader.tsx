@@ -261,7 +261,7 @@ export default function CryptoTrader({ bankroll }: { bankroll?: number }) {
       title="Crypto Auto-Trader"
       subtitle="BTC short markets (5m / 15m up/down) · signal-combiner: funding · orderflow · vol-div · apex · cond-prob · momentum · contrarian · pairs-spread + OB-imbalance gate"
       mode={{ label: session?.paperMode ? "PAPER" : "LIVE", tone: session?.paperMode ? "paper" : "live" }}
-      cron={{ enabled: !!status?.cronEnabled, intervalLabel: "3 min", title: "Configured in netlify.toml (auto-trader */3 * * * *)" }}
+      cron={{ enabled: !!status?.cronEnabled, intervalLabel: "3 min", title: "Worker scheduler: services/worker (LOOP_INTERVAL_SEC, default 180 s)" }}
       isRunning={isRunning}
       lastSource={rs?.source ?? null}
       lastRunAt={rs?.lastRunAt ?? null}
