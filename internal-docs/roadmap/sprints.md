@@ -11,39 +11,43 @@
 >
 > Ez a fájl **lokalizált, gyors operatív áttekintést** ad: "MIT csináljak most / a héten / a hónapban". A `master-plan.md` a **státusz-tracker** (✅/⚠️/❌), ez a fájl a **sprint-tracker** (active/next/backlog).
 >
-> **Utolsó frissítés:** 2026-09-02 (**Hetzner-migráció elindult** — Phase 0+1 kész [branch `feat/hetzner-migration`, repo → `apps/web`+`services/{api,worker,feeds}`+`packages/core` monorepo, tsc/23-teszt/build zöld]. A migráció **fázis-státusza a [`migration-runbook.md`](./migration-runbook.md)-ben él (SSOT)** — itt nem duplikáljuk. Következő: Phase 2 Blobs→Postgres adapter). Korábbi: 2026-07-23 (7-sávos code-review → B29–B32 P0 kódfixek, B33–B40 follow-upok)
+> **Utolsó frissítés:** 2026-10-12 (**Netlify→Hetzner utáni realignment** — az 5 hónapos „Active Sprint 42" helyére „Aktuális fókusz" került a CLAUDE.md AKTUÁLIS ÁLLAPOT + a 09-16…09-30-i changelogok alapján; a régi Sprint 42 tábla a lezárt sprintek közé került; minden 42A–E / B1–B79 tétel újraellenőrizve a kódból: ✅ kész / ⛔ elavult (Netlify-only) / nyitott, a Netlify-kori útvonalak és előfeltételek javítva.)
+>
+> **Korábbi:** 2026-09-02 (**Hetzner-migráció elindult** — Phase 0+1 kész [branch `feat/hetzner-migration`, repo → `apps/web`+`services/{api,worker,feeds}`+`packages/core` monorepo, tsc/23-teszt/build zöld]. A migráció **fázis-státusza a [`migration-runbook.md`](./migration-runbook.md)-ben él (SSOT)** — itt nem duplikáljuk. Következő: Phase 2 Blobs→Postgres adapter). Korábbi: 2026-07-23 (7-sávos code-review → B29–B32 P0 kódfixek, B33–B40 follow-upok)
 >
 > **Nomenklatúra-megjegyzés (2026-05-15):** a `sprints.md` ettől a frissítéstől **csak sequential integer**-eket használ (Sprint 38, 39e, 40, 41, 42 active). A CLAUDE.md "N. session" száma is ezzel szinkronban van — egyik suffix se versenyez a másikkal (előfordult korábban: "Sprint 39 active" ops vs "Sprint 39e" code-change). Ahol kétértelmű volt (Sprint 40A/B/C candidate vs 40f code-change), az új neve `40A → Sprint 42A candidate` lett.
 
 ---
 
-## 🔥 Active sprint (Sprint 42 — 2026-05-15 → ~2026-05-22)
+## 🎯 Aktuális fókusz (2026-10-12)
 
-**Sprint cél:** Post-fix paper trade volume accumulation a vol_divergence K-extrakció root-cause javítás validálására — legalább 10 closed trade gyűlni a fix után, hogy a finalProb K-érzékeny mértékét és a `Combiner confidence (|p − 0.5|)` gate (#3) blokk-arányát mérni tudjuk.
+> Forrás: a CLAUDE.md „AKTUÁLIS ÁLLAPOT (2026-09-30)" + a [09-16](../changelog/CHANGELOG-2026-09-16.md), [09-25](../changelog/CHANGELOG-2026-09-25.md), [09-28](../changelog/CHANGELOG-2026-09-28.md), [09-30](../changelog/CHANGELOG-2026-09-30.md) changelog. Az utolsó dokumentált élő ellenőrzés a 98. session (2026-09-30, `66f9027`); ami ennél frissebb, azt élőben kell ellenőrizni. A klasszikus „aktív sprint" formátum 2026-05 óta nem futott — a munka session-alapú, mérés-first; ez a szakasz azt rögzíti, ami MA ténylegesen folyamatban van.
 
-**Status:** in_progress (2026-05-15 indítva, post-Sprint-41 K-extrakció fix után)
+**Infrastruktúra (kész, nem sprint-tétel):** az oldal és a stack a Hetzner `analytics` boxon fut Docker co-hostként (`https://trade.jmeszaros.dev`, **paper mód**) — Bun API ([`services/api/src/server.ts`](../../services/api/src/server.ts)), egy worker-konténer belső ütemezővel ([`services/worker/src/main.ts`](../../services/worker/src/main.ts)), Postgres (`blob_kv` compat + normalizált session-táblák). Deploy: GitHub Actions CI (typecheck + teszt + build) → [`deploy.yml`](../../.github/workflows/deploy.yml) rsync a boxra. A Netlify-deploy nyugdíjazva (csak a Netlify DNS-zóna maradt).
 
-| # | Feladat | Owner | Acceptance criteria | Prio |
-|---|---------|-------|---------------------|------|
-| 1 | Post-K-fix vol_divergence validáció | operator | A reset után 10+ új closed trade-ben a vol_div `prob` mező **eltérése K szerint** (78K vs 80K vs 82K markets) ≥ 0.15. Edge Tracker calibration-view-ben látható a változás. | 🟠 |
-| 2 | Combiner confidence gate blokk-arány mérése | operator + bot | A K-fix után a 3. gate (`Combiner confidence`) blokk-rate-je növekedjen ≥30%-kal Normal preset alatt (a near-noise trade-ek kiestek). Ha nem nő → a fix nem érvényesül a 4 K-blind signal mean-reversion-je miatt → Sprint 42A trigger. | 🟠 |
-| 3 | Crypto Loose → Normal preset tervezett váltás | operator | A K-fix validálása után (10+ trade) → Settings → Normal. A combinerConfidenceMin 0.02 → 0.05 lépés meg kell maradjon production-ban a valódi noise-szűrésre. | 🟡 |
-| 4 | HL bot consecutive-loss pause tesztelés | operator | A 2026-05-14f Settings knob (`hlConsecutiveLossPauseHours`) validációja — ha trigger, az inline `Cancel pause` gomb működik (UI smoke test). | 🟢 |
-| 5 | Daily Coach mode check-in (RecommendationsCard) | operator | Naponta egyszer `/trade/<bot>/`-on átolvasni. Apply csak indokolt esetben, dismiss a többit. | 🟢 |
+**Fő irány: mérés, nem lazítás.** A promóciós kapu szerint egyik ág sem veri a piaci árat (2026-09-14 tiszta ledger) → nincs küszöb-lazítás; minden bekapcsolás csak pozitív, előre regisztrált mérés után.
 
-**Sprint end-criteria (mindhárom kell):**
-- ✓ 10+ post-K-fix closed crypto trade gyűlt (combiner K-érzékenysége valós-time validálva)
-- ✓ vol_divergence `prob` mező eltérése piaconként K szerint ≥ 0.15 (a fix után 78K vs 82K piacon >70% eltérés várt)
-- ✓ Gate-3 blokk-arány Normal preset-en ≥30%-os növekedés a Sprint 41 előtti állapothoz képest (a near-noise contrarian-ek kiszűrve)
+| # | Folyamatban | Állapot / mi kell a következő lépéshez | Hivatkozás |
+|---|-------------|----------------------------------------|------------|
+| 1 | **Maker-árnyékmérés** (crypto threshold) | `makerShadowRecord` BE, gyűlik; verdikt az [`eval-maker-shadow.ts`](../../scripts/eval-maker-shadow.ts)-ből, ≥30 lezárt-kitöltött piac kell (hetek–hónapok). `PROMISING` esetén jön a B77b. | B77 / B77b |
+| 2 | **Weather measure-only** (`weatherHalt`=1) | Előrejelez + logol + multi-model felvétel fut, nem nyit. Visszakapcsolás csak ha a [`eval-weather-vs-market.ts`](../../scripts/eval-weather-vs-market.ts) pozitív skillt mutat a piac ellen. | B76 / B79 |
+| 3 | **Tiszta weather-ledger újraépítése** | A B78 óta bucket-kulcsos sorok, a „tiszta" számláló szándékosan 0-ról indul — nem riasztás. | B78 |
+| 4 | **Végrehajtható-edge kapu élő megfigyelése** | A B75 óta kevés, de valós kötés várható; az első élő kapu-szűrés 2026-09-30-án megtörtént (`ethereum-above-2700`). | B75 |
+| 5 | **HL + crypto up-or-down directional halt** | `directionalHalt`=1 marad (measure-only); a crypto csak a threshold-ágon nyithat. | B74 |
+| 6 | **Napi drift-ellenőrzés** | A 20 élő override a referencia (CLAUDE.md). ⚠ A boxon a `TELEGRAM_BOT_TOKEN` üres volt (2026-09-28) → az alert-ek elnyelődnek, a monitorozás a napi drift-check. | CLAUDE.md |
 
-**Sprint risk:**
-- ⚠️ Ha a 4 K-blind signal mean-reversion-je elnyomja a vol_div K-érzékenységét (combiner súlyozás `w = ic × (1 + |demeaned| × 0.5)` szerint a vol_div 12-15% súlyú) → finalProb még mindig 0.45-0.50 sávban marad → trigger a **Sprint 42A K-blind re-weighting** candidate-re.
-- ⚠️ Ha 24h alatt < 5 új closed trade → cron lassú vagy nincs piac → operator intervention.
+**Bot-szándék:** crypto fut (csak threshold) · weather measure-only · HL measure-only · F-Arb fut · sports **manuálisan leállítva** B37-ig.
+
+**Operátor- / adat-függő, nem indítható magától:** B37 (sports odds-feed, `ODDS_API_KEY`) · B10 (live-előfeltételek + jogi tisztázás) · B20 (reverse F-Arb live, futures-short adapter) · B38 (korreláció-tudatos crypto cap, ≥30 tiszta crypto sor után) · B12 maradéka (ledger normalizált táblára, nem blokkoló) · Phase 7 Chronos-súly (box-bővítés kell, [`migration-runbook.md`](./migration-runbook.md) §9).
+
+**Legutóbbi doksi-változás:** 2026-10-12 — CLAUDE.md karcsúsítás (szabályok a `.claude/rules/`-ba, session-zárás skillbe, napló a `CLAUDE-HISTORY.md`-be; `dacbfc3`).
 
 ---
 
 ## 📋 Next sprint candidates (ready to start, prioritised)
 
+> **2026-10-12 újraellenőrzés:** a 42A–42E tételek státusza a kódból újra-ellenőrizve (lásd az egyes fejléceket). Valódi „következő sprint" sorrend 2026-05 óta nincs vezetve; a ténylegesen nyitott munka az „Aktuális fókusz" táblában és a backlogban él.
+>
 > **Sorrend-logika (2026-05-15 re-order):** A candidate-ek mostantól **implementation readiness** szerint sorrendezve, nem alfabetikusan. Sorrend: (1) high-impact + speculative-OK; (2) quick-win zero-precondition; (3) low-impact small scope; (4) data-conditional; (5) big-scope operator-driven.
 
 ### Sprint 42A — K-blind signal re-weighting threshold piacokon ✅ IMPLEMENTED 2026-05-15 (speculative, default-off)
@@ -140,7 +144,9 @@ function combine(signals, icMap, marketKind) {
 - **Edge Tracker drawdown%**: a `maxDrawdownPct = sessionLoss / bankrollStart`, és topup után az új `bankrollStart` a denominator → új tőke = új high-water mark része (konzisztens)
 - **Audit-trail**: minden topup-ra Telegram alert + `SESSION_TOPUP` log entry — operátor utólag rekonstruálhatja mikor és mennyit injektált
 
-### Sprint 42C — Statistics-driven recommendations expansion (~1-2 nap)
+### Sprint 42C — Statistics-driven recommendations expansion (~1-2 nap) 🟡 NYITOTT (2026-10-12 ellenőrizve)
+
+> **Státusz 2026-10-12:** nincs megvalósítva — a [`recommendations.mts`](../../services/worker/src/pillars/shared/recommendations.mts) szabálylistájában (`rec-use-realized-ic` … `rec-insufficient-data`) az 5 új szabály egyike sincs. A „Sprint 42 end" előfeltétel tárgytalan (a sprint történeti); a valós előfeltétel: ≥20 closed trade egy boton a 2026-09-02-i tiszta indulás óta. (A `recommendations.mts` a monorepóban: `services/worker/src/pillars/shared/`.)
 
 **Precondition:** Sprint 42 end (legalább 1 bot ≥20 closed trade). A statisztika-mezők (Sortino, profitFactor, expectancy, sharpeCiLo/Hi, currentStreak, evGap, maxDrawdownDuration) **már elérhetők** a `computeSummary` válaszában a Sprint 38 (Edge Tracker Tier-1 metric expansion) óta, csak a recommendations engine-be kell bekötni.
 
@@ -162,7 +168,9 @@ function combine(signals, icMap, marketKind) {
 
 **Becsült munka:** 1-2 nap
 
-### Sprint 42D — Dismissed-state Blobs persistence (~0.5-1 nap)
+### Sprint 42D — Dismissed-state Blobs persistence (~0.5-1 nap) 🟡 NYITOTT (2026-10-12 ellenőrizve)
+
+> **Státusz 2026-10-12:** nincs megvalósítva — a [`RecommendationsCard.tsx`](../../apps/web/src/components/shared/RecommendationsCard.tsx) `dismiss()`-e továbbra is csak React-state (`useState<Set<string>>`), a [`recommendations-api.mts`](../../services/api/src/routes/recommendations-api.mts)-ben nincs `dismiss` action. **Szóhasználat-javítás:** a „Blobs store" ma a Postgres `blob_kv` compat-réteg (a `@netlify/blobs` import a `packages/core/src/blobs-compat.ts`-re mutat) — a terv változatlanul működik, csak a tár Postgres; a végpont a Bun API-n `/api/recommendations-api` (és a régi `/.netlify/functions/…` alias) alatt érhető el.
 
 **Precondition:** RecommendationsCard 30+ napos production-használat, az operátor jelzi hogy ugyanazt dismisszálja 3+ alkalommal hetente. **2026-05-15 megjegyzés**: a 30-napos precondition pre-emptive — coding-ready ma is, de production-impact alacsony (1 db UX-nice-to-have a 4 bot oldalán).
 
@@ -176,7 +184,9 @@ function combine(signals, icMap, marketKind) {
 
 **Becsült munka:** 0.5-1 nap
 
-### Sprint 42E — Sports bot stub → MVP (~3-5 nap)
+### Sprint 42E — Sports bot stub → MVP (~3-5 nap) 🟡 RÉSZBEN KÉSZ / FELVÁLTVA → B37 (2026-10-12 ellenőrizve)
+
+> **Státusz 2026-10-12:** a sports pillér **nem stub** — teljes pipeline él ([`services/worker/src/pillars/sports/`](../../services/worker/src/pillars/sports/): market-finder + decision-engine + session-manager + paper-resolver, ~1600 sor; „Bot Registry + Sports bot" commit `4b899ee`, 2026-05-11), a worker ütemezi (`services/worker/src/main.ts` `PILLARS` default tartalmazza a `sports`-ot), van `SportsTrader.tsx` UI, a de-vig matek a [`math/24-sports-devig.md`](../math/24-sports-devig.md)-ben. **Ami nyitott:** (1) a Pinnacle-edge (valódi fair value) → **B37** (a bot addig manuálisan leállítva, 2026-09-25); (2) a sports `RecommendationsCard` — a `recommendations-api.mts` `VALID_CATEGORIES` ma is csak `crypto/weather/hyperliquid/funding-arb`. A „cron `*/15`" acceptance tárgytalan: a worker belső ütemezője futtatja.
 
 **Precondition:** Sport bot integráció kérése (jelenleg `category=sports` 400-at ad a recommendations-api-on, mert a P4.2 stub még üres). Sorrend végén mert ez a legnagyobb scope (3-5 nap) és operator-driven decision.
 
@@ -195,23 +205,25 @@ function combine(signals, icMap, marketKind) {
 
 ## 🔮 Backlog (blocked vagy nagyobb sprint)
 
-### B1 — Tier 2 reliability diagram (per-prediction bin Brier)
+### B1 — Tier 2 reliability diagram (per-prediction bin Brier) 🟡 RÉSZBEN KÉSZ (2026-09-01)
 
+- **Státusz 2026-10-12:** a **diagram + per-bin Brier kész** — a proper-scoring harness (B41 #1, `0deaf60`, 2026-09-01): Brier-Murphy dekompozíció + `reliabilityBins` a [`packages/core/src/statistics.mts`](../../packages/core/src/statistics.mts)-ben, renderelve a `ProperScoresCard`-on ([`EdgeTrackerPanel.tsx`](../../apps/web/src/components/EdgeTrackerPanel.tsx)) — lásd B13. **Nyitott:** a „tényleges Bayes-frissítés a `signal-combiner` súlyozásban" — a Platt-kalibráció ([`calibration.mts`](../../packages/core/src/calibration.mts)) és az AdaHedge online súlyozás ([`online-weights.mts`](../../packages/core/src/online-weights.mts)) **mérés-only**, a live combinerbe nincs bekötve. A „3-4 trade/bot" adat 2026-05-ös.
 - **Precondition:** ≥200 closed trade egy boton (jelenleg 3-4 trade/bot)
 - **Becslés:** 2-4 hét
 - **Doksi:** `master-plan.md` "Legközelebbi prioritások #2" + `math/17-recommendations-engine.md` §3.4
 - **Mit ad:** Per-bin reliability score (Brier-alapú) → tényleges Bayes-frissítés a `signal-combiner` súlyozásban
 - **Sprint-szintű terv:** csak 200 trade küszöb átlépése után. Becslés szerint Sprint 44+ körüli.
 
-### B2 — Hetzner VPS migráció (7-fázisú action plan)
+### B2 — Hetzner VPS migráció (7-fázisú action plan) ✅ KÉSZ 2026-09-02 (Phase 7 nyitva)
 
+- **Státusz 2026-10-12 (a [`migration-runbook.md`](./migration-runbook.md) SSOT + [changelog 2026-09-02](../changelog/CHANGELOG-2026-09-02.md) alapján):** Phase 0 (döntések + secret-leltár) ✅ · Phase 1 (monorepo) ✅ · Phase 2 (Blobs→Postgres adapter) ✅ · Phase 3 (`services/`) ✅ · Phase 5 (deploy az `analytics` boxra, `trade.jmeszaros.dev`) ✅ — mind 2026-09-02. **Phase 4 (adat-migráció) szándékosan NEM futott:** a user tiszta indulást választott (2026-09-02, a Netlify Blobs-history nem került át). **Phase 6 (cutover):** a Netlify trading-site törlése jóváhagyva 2026-09-02, a Netlify-deploy nyugdíjazva (CLAUDE.md), a `netlify/functions/` könyvtár nem létezik; a deploy azóta CI → [`deploy.yml`](../../.github/workflows/deploy.yml) rsync (2026-09-03). A pillérenkénti paper-parity összevetés a tiszta indulás miatt nem készült. **Nyitva: Phase 7** (Chronos-súly a `model` szolgáltatásba — box-bővítés kell). A runbook Phase 4/6 fejlécei ezt nem jelölik — a runbook SSOT-ját ez a sor nem írja felül.
 - **Precondition:** Operátor explicit zöld jelzése + paper bot stabilan fut 30+ napon át
 - **Becslés:** 1-2 hét
 - **Doksi:** [`hetzner-migration.md`](./hetzner-migration.md)
 - **Mit ad:** WebSocket feedek (P2.2 + P3.3), 24/7 execution réteg, Postgres trade-log
 - **Sprint-szintű terv:** ha valami fenti sprint pre-conditionje "Hetzner kell hozzá" → akkor halasztva. Jelenleg nincs ilyen.
 
-### B3 — TradingAgents debate pattern (P4.3)
+### B3 — TradingAgents debate pattern (P4.3) 🔵 NYITOTT (2026-10-12: nincs implementáció a kódban)
 
 - **Precondition:** ANTHROPIC_API_KEY budget bővítés + stabil paper rendszer
 - **Becslés:** 1 hét (kísérleti)
@@ -219,7 +231,7 @@ function combine(signals, icMap, marketKind) {
 - **Mit ad:** Bull/Bear/Risk Manager Claude agent triumvirate a decision engine fölé
 - **Sprint-szintű terv:** csak experimental, nem fő-prioritás.
 
-### B4 — Weather forecast-forrás upgrade (a / b / c opció)
+### B4 — Weather forecast-forrás upgrade (a / b / c opció) ⛔ FELVÁLTVA → B52 (2026-09-08)
 
 - **Precondition:** Operátor döntés a 3 opcióból (ECMWF közvetlen / NOAA GFS GRIB2 / kereskedelmi)
 - **Becslés:** (a) 3 nap akadémiai kulcsra való várás után, (b) Hetzner-függő, (c) skála-függő
@@ -229,28 +241,33 @@ function combine(signals, icMap, marketKind) {
   egyetlen kérésben — az (a)/(b)/(c) opciók (akadémiai kulcs / saját GRIB2-pull / fizetős szolgáltató)
   ezzel tárgytalanok a következő lépcsőre. Ez a tétel csak a B52 után, live-skálán merül fel újra.
 
-### B5 — LP Refresh Window execution (P3.3)
+### B5 — LP Refresh Window execution (P3.3) 🔵 NYITOTT (2026-10-12: nincs implementáció)
 
 - **Precondition:** B2 (Hetzner) ✅ + P2.4 follow-up (LP subgroup feedback)
+- **Előfeltétel-állapot 2026-10-12:** a B2 rész **teljesült** (a box 2026-09-02 óta él, hosszan futó worker-folyamat → WS-feliratkozás technikailag lehetséges); a P2.4 follow-up (= B8) **nyitott**; a WS-feedek helye, a [`services/feeds/`](../../services/feeds/README.md), ma csak placeholder.
 - **Becslés:** 1 hét
 - **Doksi:** `master-plan.md` P3.3
 - **Sprint-szintű terv:** Hetzner megléte után, kombinálható B2 sprint-tel
 
-### B6 — Polymarket auto-redeem cron (P1.4 follow-up)
+### B6 — Polymarket auto-redeem cron (P1.4 follow-up) 🔵 NYITOTT (2026-10-12: csak a kézi [`polymarket-redeem.mts`](../../services/api/src/routes/polymarket-redeem.mts) route van, automatikus redeem nincs)
+
+- **Szóhasználat-javítás (2026-10-12):** „cron" helyett ma egy worker-ütemezési feladat lenne ([`services/worker/src/scheduler.ts`](../../services/worker/src/scheduler.ts)) — Netlify scheduled function már nincs.
 
 - **Precondition:** Live trading flip → akkor kritikus (jelenleg paper mode-ban a redeem kézi gomb is OK)
 - **Becslés:** 2 óra
 - **Doksi:** `master-plan.md` P1.4
 - **Sprint-szintű terv:** P1.4 még PARTIAL — live trade-flip előtti kötelező feladat
 
-### B7 — Edge Tracker hiányzó chartok (P3.4 follow-up)
+### B7 — Edge Tracker hiányzó chartok (P3.4 follow-up) ✅ KÉSZ (a tracker elavult volt; ellenőrizve 2026-10-12)
+
+- **Bizonyíték:** mind a 4 chart megvan a [`EdgeTrackerPanel.tsx`](../../apps/web/src/components/EdgeTrackerPanel.tsx)-ben — „Cumulative PnL vs Baselines" (Random 50/50 + EV baseline overlay), „Chart 2: Calibration scatter", `EdgeDecayChart` („Edge Decay (weekly)"), `WinRateHeatmap`. A `git log -S` szerint ezek a `d089696` (2026-04-20) óta a kódban vannak — a tétel (és a master-plan P3.4 „⚠️ Részben" sora) tehát már felvételkor elavult volt.
 
 - **Tartalom:** Random baseline overlay, Calibration scatter, Edge decay timeseries, Win-rate heatmap (napszak × kategória)
 - **Becslés:** 3 nap
 - **Doksi:** `master-plan.md` P3.4 (jelenleg ⚠️ PARTIAL)
 - **Sprint-szintű terv:** 30+ closed trade után érdemes (különben üres chart-ok)
 
-### B8 — Apex LP subgroup feedback a signal-combiner-be (P2.4 follow-up)
+### B8 — Apex LP subgroup feedback a signal-combiner-be (P2.4 follow-up) 🔵 NYITOTT (2026-10-12: a subgroup csak az Apex Wallets panelen/route-on él, a `signal-combiner.mts` nem használja)
 
 - **Becslés:** 1 nap
 - **Doksi:** `master-plan.md` P2.4
@@ -268,59 +285,68 @@ A korábbi B9 (Topup action) átkerült a "📋 Next sprint candidates" szekció
 - **Mit ad:** HL live trade-flip enabler — `HL_PRIVATE_KEY` env, `@nktkas/hyperliquid` npm install + audit, `HL_PAPER_MODE=false`. Polymarket live trade-flip enabler — `POLY_PRIVATE_KEY`, `POLY_FUNDER_ADDRESS`, `@polymarket/clob-client` audit, `PAPER_MODE=false`. **Erre live trade nem indítható** — minden live módra váltás előfeltétele ez a setup.
 - **Anti-sprint védőháló**: a meglévő anti-sprint lista tiltja a live-flip-et amíg a paper validation gate-ek nem teljesülnek; ez a backlog tétel **csak akkor megy "Next candidates"-be**, ha a gate-ek mind ✓.
 - **⚠ Új blokkoló — joghatóság (2026-09-10, API-felmérés, élőben mérve).** A box IP-je Polymarket-oldalon **geoblockolt**: `GET https://polymarket.com/api/geoblock` a boxról → `{"blocked":true,"country":"DE","region":"SN"}` (Hetzner, Szászország). A [Polymarket geoblock-doksi](https://docs.polymarket.com/api-reference/geoblock) szerint **DE = close-only**: meglévő pozíció zárható, **új nem nyitható** — frontenden és API-n is. A Polymarket live-flip (`PAPER_MODE=false`) tehát a mostani boxról **technikailag sem működne**; a paper-mód (read-only piaci adat) nem érintett. Emellett **(a)** az SZTFH 2026 januárja óta ISP-szinten blokkoltatja a polymarket.com-ot Magyarországon, tiltott szerencsejáték gyanújával (ideiglenes intézkedés, a végleges határozat a [CMS](https://cms.law/en/hun/legal-updates/hungary-temporarily-blocks-access-to-polymarket-over-alleged-illegal-gambling) szerint függőben); **(b)** az [ESMA 2026-07-03-i statementje](https://www.esma.europa.eu/sites/default/files/2026-07/ESMA35-243228190-8148_Public_Statement_on_the_application_of_the_national_product_intervention_measures_on_binary_options_to_event_contracts.pdf) szerint a MiFID II Annex I C(4)–(10) alapmutatójú event contract pénzügyi eszköz, így a bináris-opciós retail-tilalom alá esik (a C(10) a klimatikus változókat is lefedi → a weather-piacok valószínűleg érintettek). **Új precondition:** jogi tisztázás a Polymarket live-flip előtt; a geoblock megkerülése (VPN, más régiós szerver) **nem opció**. A HL/F-Arb live-útját a Polymarket-geoblock nem érinti (külön venue). Részletek: [changelog 2026-09-10](../changelog/CHANGELOG-2026-09-10.md).
+- **Státusz 2026-10-12:** 🔴 **NYITOTT** (operátor- és jogi döntés-függő). Részteljesítés: a `@nktkas/hyperliquid` + `viem` deklarált függőség (B47, 2026-09-03), a `@polymarket/clob-client` a `package.json`-ban — a kulcsok/`PAPER_MODE=false` és a jogi tisztázás hiányzik; a paper-validációs kapuk (promóciós kapu) egyik ágon sem teljesülnek.
 - **Élesítés előtt ellenőrizni — live-order mértékegység (2026-09-10, 93. session, kódból, NEM igazolt).** A crypto live-út a `createAndPostOrder` `size` mezőjébe `sizeUSDC`-t tesz ([`crypto/execution.mts`](../../services/worker/src/pillars/crypto/execution.mts):177). A `@polymarket/clob-client`-ben ez a mező valószínűleg részvényszám. Ha így van, a live megbízás `sizeUSDC` darab részvényt venne, vagyis ár-szorzónyira alulméretezve, és a fill-részletek a `size_matched`-et USDC-nek olvassák. A paper-út nem érintett.
 
-### B11 — Walk-forward backtest framework 🟠 KRITIKUS INFRA
+### B11 — Walk-forward backtest framework 🟠 KRITIKUS INFRA — 🟡 RÉSZBEN (2026-09-03), a teljes backtest-motor nyitott
 
+- **Státusz 2026-10-12:** a **walk-forward scoring a prediction-ledgeren kész** (B49 #4, 2026-09-03: [`packages/core/src/walk-forward.mts`](../../packages/core/src/walk-forward.mts) + `WalkForwardCard`, [`math/21-walk-forward.md`](../math/21-walk-forward.md) — „a B11 Hetzner-mentes, backtest-motor-mentes verziója"); a B50 szerint a B11 a #3-mal jórészt redundáns. A historikus crypto-threshold offline backtest **nem elvégezhető** (B73, 2026-09-16, negatív). Nyitott: egy általános rolling-window backtest-motor — csak ha új signal/stratégia validációja megköveteli.
+- **Előfeltétel-javítás (2026-10-12):** a B2 és a Postgres-séma **teljesült** (2026-09-02, `migrations/001–007`, a closed trade-ek a `pillar_closed_trade` táblában). Az alábbi „Blobs-ban tartani" indoklás Netlify-kori.
 - **Precondition:** B2 (Hetzner) ✅ + Postgres séma — paper-history Blobs-ban tartani nem skálázódik historikus backteszteléshez.
 - **Becslés:** 1-2 hét
 - **Doksi:** `new-strategies.md #5` (Score: 8.5, ❌ NEM MEGVALÓSULT)
 - **Mit ad:** Walk-forward (rolling-window) backtest engine a closedTrades history-n + új signal-konfigurációk historikus IC-mérése. **Blokkolja minden új signal/strat live-flip-jét**, mert a paper-period (30+ trade) önmagában nem elég statistical power-t ad signal-tuning-ra.
 - **Sprint-szintű terv:** Hetzner phase 4 (Postgres trade log) után közvetlenül; az új stratégiák validációjához kötelező pre-requisite.
 
-### B12 — Trade logging persistence (Supabase / Postgres) 🟠 POST-HETZNER
+### B12 — Trade logging persistence (Supabase / Postgres) 🟠 POST-HETZNER — 🟡 NAGYRÉSZT KÉSZ (2026-09-02)
 
+- **Státusz 2026-10-12:** a fő cél (cross-restart closedTrades-perzisztencia Postgresben) **kész**: a Phase 2/5 óta normalizált session-táblák élnek ([`migrations/005_pillar_state.sql`](../../migrations/005_pillar_state.sql): `pillar_session`, `pillar_open_position`, `pillar_closed_trade`; a 2026-09-02-i deploy-verifikáció szerint ír). **Maradék (nem blokkoló, CLAUDE.md):** a prediction-ledger még a `blob_kv` compat-rétegen él — a `prediction_ledger` tábla ([`migrations/003_prediction_ledger.sql`](../../migrations/003_prediction_ledger.sql)) létezik, de a kód nem írja. A „Netlify Blobs session-bound / cold-start" indoklás alább Netlify-kori, ma nem igaz.
 - **Precondition:** B2 (Hetzner) ✅ — Postgres elérhetősége
 - **Becslés:** 2-3 nap
 - **Doksi:** CLAUDE.md `Ismert limitációk` (eredetileg, most pointer); master-plan.md C1 phase 4
 - **Mit ad:** Cross-restart closedTrades persistence — Netlify Blobs jelenleg session-bound, cold-start után state-ben marad de hosszú távon nem rekonciliálható multi-bot között. Postgres trade-log → Edge Tracker SQL-queries → custom dashboard, walk-forward backtest input (B11 előfeltétele).
 
-### B13 — Brier score + reliability diagram explicit metrics (B1 sub-task) 🟠
+### B13 — Brier score + reliability diagram explicit metrics (B1 sub-task) 🟠 ✅ KÉSZ 2026-09-01 (B41 #1)
+
+- **Bizonyíték:** `computeProperScores` (log-score + Brier-Murphy dekompozíció + Brier/log skill + `reliabilityBins`) a [`packages/core/src/statistics.mts`](../../packages/core/src/statistics.mts)-ben, az [`edge-tracker.mts`](../../services/api/src/routes/edge-tracker.mts) `properScores` mezője, `ProperScoresCard` reliability-diagrammal a [`EdgeTrackerPanel.tsx`](../../apps/web/src/components/EdgeTrackerPanel.tsx)-ben; teszt: [`proper-scores.test.mts`](../../packages/core/src/proper-scores.test.mts); commit `0deaf60` (2026-09-01). A „Bayes-update input a signal-combiner IC-ihez" rész nincs élesen bekötve → B1 maradéka.
 
 - **Precondition:** ≥200 closed trade egy boton (B1 azonos pre-conditionje); a `computeSummary` summary mezője már tartalmaz `calibrationDeviation`-t és `isWellCalibrated`-et, de **per-prediction-bin Brier score** + reliability-diagram plot hiányzik.
 - **Becslés:** 1-2 nap (B1 nagyobb scope-ja után)
 - **Doksi:** `new-strategies.md #6` (🟡 RÉSZBEN MEGVALÓSULT — calibration deviation megvan, Brier score + per-bin reliability hiányzik)
 - **Mit ad:** Per-bin Brier ($\frac{1}{N}\sum_i (p_i − o_i)^2$), reliability-diagram chart Edge Tracker tab-on, Bayes-update input a signal-combiner IC-ihez. Részben átfedi a B1 Tier-2 reliability work-ot, de azon belül egy konkrét sub-feature.
 
-### B14 — VWAP real-time WebSocket scanner 🟠
+### B14 — VWAP real-time WebSocket scanner 🟠 🔵 NYITOTT (2026-10-12)
 
+- **Státusz 2026-10-12:** nincs implementáció — a [`vwap-arb.mts`](../../services/api/src/routes/vwap-arb.mts) ma is 90 s-os cache-sel (`CACHE_TTL`) REST-hívásokat tesz; a WS-collectorok helye, a [`services/feeds/`](../../services/feeds/README.md), placeholder. **Előfeltétel-javítás:** a B2 (Hetzner) teljesült → a Netlify-kori akadály („Netlify Function-on nem futtatható WebSocket") megszűnt; a tétel most csak kapacitás- és prioritás-kérdés.
 - **Precondition:** B2 (Hetzner) ✅ — Netlify Function-on nem futtatható WebSocket-feliratkozás (Anti-sprint "Soha" Netlify-on)
 - **Becslés:** 1 hét
 - **Doksi:** `new-strategies.md #4` (Score: 8.5, ❌ NEM MEGVALÓSULT); CLAUDE.md `Hiányos implementációk` (eredetileg, most pointer)
 - **Mit ad:** A jelenlegi `vwap-arb` endpoint 90s cache-szel hív Polymarket CLOB-ot — real-time WebSocket-feliratkozás per-block VWAP recompute-tal sokkal nagyobb time-resolution-t ad. Hetzner-függő (24/7 WS connection kell).
 
-### B15 — Weather bot σ calibration refinement 🟡
+### B15 — Weather bot σ calibration refinement 🟡 ✅ FELVÁLTVA / KÉSZ más úton (EMOS, 2026-09-03 → 09-28)
+
+- **Bizonyíték:** a per-állomás empirikus σ-kalibrációt az EMOS/NGR végzi (B49 #6, [`math/23-emos.md`](../math/23-emos.md), 2026-09-03; seed B50 #5; súlyozott seed B59; σ-diszperzió-korrekció B58), élesben `weatherUseEmos=1`; 2026-09-28 óta a multi-model keverék SAJÁT EMOS-szal hajtja a μ/σ-t (B69, `weatherUseMultiModel=1`). A weather 2026-09-28 óta measure-only (B79). Nyitott σ-mellékszál: B72 (a megfigyelt napi max begyűjtése).
 
 - **Precondition:** ≥50 closed weather trade (jelenleg 2)
 - **Becslés:** 2-3 nap
 - **Doksi:** `math/16-weather-bot.md` line 269 TODO ("Kalibráció TODO. A bucket-matcher σ paramétere nincs historikus residual-eloszlásból mérve.")
 - **Mit ad:** Per-város / per-évszak residual-eloszlás → empirikus σ kalibráció a Gauss-PDF allokációhoz (helyettesíti a jelenlegi forecast-confidence-alapú σ-becslést). DEB-hez hasonló utófrissítés-pattern.
 
-### B16 — Technical-debt cluster (math/ + Netlify limitations) 🟡
+### B16 — Technical-debt cluster (math/ + Netlify limitations) 🟡 — sub-itemenként újraellenőrizve 2026-10-12 (1 kész · 1 elavult · 4 nyitott/nem ellenőrizhető)
 
 - **Precondition:** Operator-driven (egy konkrét sub-item ha élővé válik)
 - **Becslés:** 1 nap / sub-item
 - **Doksi-források:** `math/13-crypto-bot.md` "Maradó limitációk", `math/09-cond-prob.md` "Limitációk", CLAUDE.md `Ismert limitációk` (most pointer)
 - **Sub-itemek:**
-  - **Dashboard.tsx tab-array auto-generate** (jelenleg manuálisan szinkronizált új tabok esetén)
-  - **CV_edge real Monte Carlo** (10,000 path → ténylegesen, jelenleg IR-proxy)
-  - **Cooldown map Blobs-perzisztálás** (Netlify cold-start után in-memory elvész; `addOpenPosition` post-check enyhíti)
-  - **Live early-exit Netlify timeout** (`LIVE_EXIT_BUDGET_PER_TICK = 3`, worst case 90s — pre-live arch-review)
-  - **On-chain CTF redemption automatizálás** (cross-ref B6, jelenleg manuális hogy security-conscious)
-  - **VWAP correction Tab 11** + **CLOB execution risk** (cond-prob non-atomic batch)
+  - **Dashboard.tsx tab-array auto-generate** (jelenleg manuálisan szinkronizált új tabok esetén) — 🔵 **NYITOTT** (2026-10-12: az `apps/web/src/components/Dashboard.tsx` `VALID_TABS` ma is kézi lista)
+  - **CV_edge real Monte Carlo** (10,000 path → ténylegesen, jelenleg IR-proxy) — 🔵 **NYITOTT** (2026-10-12: `cvEdge = max(0, 1 − ir·0.8)` a [`signal-combiner.mts`](../../services/api/src/routes/signal-combiner.mts)-ben, továbbra is IR-proxy)
+  - **Cooldown map Blobs-perzisztálás** (Netlify cold-start után in-memory elvész; `addOpenPosition` post-check enyhíti) — ✅ **KÉSZ** (`8caa6e3`, 2026-05-10: „in-memory + Blobs persistence" a [`crypto/decision-engine.mts`](../../services/worker/src/pillars/crypto/decision-engine.mts)-ben; a tár ma `blob_kv`/Postgres, a hosszan futó worker-folyamatban a cold-start probléma amúgy is megszűnt)
+  - **Live early-exit Netlify timeout** (`LIVE_EXIT_BUDGET_PER_TICK = 3`, worst case 90s — pre-live arch-review) — ⛔ **ELAVULT (Netlify megszűnt, 2026-09)**: a Netlify-függvény időkorlátja nem létezik a Docker-workerben; a `LIVE_EXIT_BUDGET_PER_TICK = 3` konstans ([`pillars/index.mts`](../../services/worker/src/pillars/index.mts)) megmaradt, egy live-flip előtti átnézésnél újragondolható, de már nem timeout-kényszer.
+  - **On-chain CTF redemption automatizálás** (cross-ref B6, jelenleg manuális hogy security-conscious) — 🔵 **NYITOTT** (= B6)
+  - **VWAP correction Tab 11** + **CLOB execution risk** (cond-prob non-atomic batch) — (státusz nem ellenőrizhető a repóból egyértelműen; a `vwap-arb` 90 s-os cache-e változatlan)
 - **Sprint-szintű terv:** ha bármelyik sub-item operatórikus blokkolóvá válik (pl. live trade-flip előtt a "Live early-exit timeout" felmerül), önálló sprint indítható abból.
 
-### B17 — Strategy backlog → `new-strategies.md` pointer 🟢
+### B17 — Strategy backlog → `new-strategies.md` pointer 🟢 (pointer, nyitott — a „Hetzner-függő" jelzők 2026-09-02 óta nem blokkolnak)
 
 - **Precondition:** Sprint capacity szabad + 30+ closed trade meglevő stratégiákon (signal-IC stabilizáció előtt új stratégia hozzáadás Anti-sprint listán)
 - **Becslés:** stratégiánként 3 nap – 3 hét, lásd `new-strategies.md` Score-számolást
@@ -334,7 +360,9 @@ A korábbi B9 (Topup action) átkerült a "📋 Next sprint candidates" szekció
   - #12 Cointegration BTC/ETH pairs (~2 hét, pairs_spread pillar completion)
 - **Sprint-szintű terv:** prioritás-sorrend kizárólag a `new-strategies.md` Score alapján.
 
-### B18 — HL Perp directional long-bias vizsgálat 🟠
+### B18 — HL Perp directional long-bias vizsgálat 🟠 ✅ GYÖKÉROK MEGTALÁLVA + JAVÍTVA 2026-09-09 (→ B60)
+
+- **Bizonyíték:** a B60 (90. session, 2026-09-09) szerint a LONG-bias forrása a piac-keresés volt — a HL pillér coin-névre esett vissza és a globális top-80 volumen-listából egy **threshold** piacot választott, így a perp irányát egy ITM strike `p ≈ 0,9995`-je döntötte el; javítva `isDirectionalCryptoMarket` + crypto-tag Gamma-univerzum ([`signal-source.mts`](../../services/worker/src/pillars/hyperliquid/signal-source.mts), teszt: `packages/core/src/coin.test.mts`). Sem strukturális combiner-bias, sem regime: piac-osztályozási bug. A HL 2026-09-17 óta measure-only (B74, `directionalHalt`=1).
 
 - **Trigger:** 2026-05-29 HL performance-audit. A 22 closed trade **mind LONG** (21× BTC, 1× ETH), win rate 27.3%, calibration-deviation 32.7%, profit factor 0.31. A `getHlSignalForCoin` iránya = `finalProb >= 0.5 ? LONG : SHORT`, és a combiner `combined_probability`-ja a teljes 2026-05-12…17 ablakban > 0.5 maradt, miközben a BTC ~$81K → $73K esett.
 - **Precondition:** 30+ closed HL trade (n=22 most statisztikailag elégtelen IC/Sharpe következtetéshez) — a deadlock-fix (Sprint 42G) után gyűlhet újra.
@@ -345,7 +373,9 @@ A korábbi B9 (Topup action) átkerült a "📋 Next sprint candidates" szekció
 
 ---
 
-### B19 — Deploy-guard: top-level `.test.mts` ne tudja megbuktatni a Netlify buildet 🟡
+### B19 — Deploy-guard: top-level `.test.mts` ne tudja megbuktatni a Netlify buildet 🟡 ⛔ ELAVULT (Netlify megszűnt, 2026-09)
+
+- **Ok:** a `netlify/functions/` könyvtár már nem létezik, nincs Netlify-build, ami egy `.test` fájlt függvényként bundle-elhetne. **A hibaosztályt a helyére lépő kapu fedi:** a GitHub Actions [`ci.yml`](../../.github/workflows/ci.yml) (2026-09-03, `8313328`) minden `main`-push-on typecheck + a teljes teszt-suite + web-build, és a [`deploy.yml`](../../.github/workflows/deploy.yml) csak sikeres CI után rsync-el a boxra — a fejléce kifejezetten erre a „két hétig törött bundle" esetre (B19) hivatkozik.
 
 - **Trigger:** 2026-05-29 crypto deploy-gap audit. A Sprint 41-ben hozzáadott `signal-combiner-threshold.test.mts` a `netlify/functions/` **top-level**-jén volt → a Netlify functionként bundle-elte, a `.test` pont érvénytelen függvénynév → a **2026-05-15-i deploy elbukott**, és a Sprint 41-42B fixek **2 hétig élesítetlenek** maradtak (a bot a régi 15-gate, lapos-predikció kódot futtatta, $250→$109). Az **azonnali fix kész** (`5adf152`→ test áthelyezve `auto-trader/shared/`-be, commit `5d910c8`, deploy zöld) — ez a tétel a **megelőzés**.
 - **Becslés:** 1-2 óra.
@@ -355,7 +385,7 @@ A korábbi B9 (Topup action) átkerült a "📋 Next sprint candidates" szekció
 
 ---
 
-### B20 — Reverse F-Arb élesítése (Binance futures-short adapter) 🟠
+### B20 — Reverse F-Arb élesítése (Binance futures-short adapter) 🟠 🔵 NYITOTT (2026-10-12: operátor-döntés-függő; a CLAUDE.md nyitott tételei között)
 
 - **Trigger:** 2026-05-29 F-Arb audit + Sprint 44. A bidirekcionális F-Arb **paperben kész** (reverse = HL-long + Binance-perp-short, carry = −spread), de a reverse hedge Binance shortot igényel, amit a live `hedge-manager.mts` **nem tud** (szándékosan spot-only, „never enable futures or withdrawal"). Ezért a reverse jelenleg **paper-only** (live-ban detektálva de skippelve).
 - **Mit kell hozzá:** (1) Binance USDM futures-short adapter (HMAC, lot-precision, funding accrual a Binance lábra is); (2) explicit operator-döntés a Binance API-kulcs **futures** permjének engedélyezéséről (biztonsági posture-változás — jelenleg tudatosan tiltott); (3) a `fr-executor` reverse live-ágának kiépítése (nyit + zár + emergency-unwind a futures lábon).
@@ -380,6 +410,8 @@ A korábbi B9 (Topup action) átkerült a "📋 Next sprint candidates" szekció
 - **NEM ez (2026-06-04 user-felvetés):** blanket „reverse direction" toggle a Settingsbe. Az audit kimutatta: a fordítás 70% WR-t adna, **DE PnL-ben még mindig veszteséges (~−$30, payoff-aszimmetria miatt)**, és csak egyetlen lejtmenet-rezsimre illesztett szerencse (n=10). A principled megoldás a modell K-érzékennyé tétele — egy korrekt K-aware model OTM-en magától NO-t mond (a nyerő irány), vak megfordítás nélkül. Lásd a playbook §8.2/§8.9 spekulatív-irány-tiltását (vö. B18).
 
 ### B22 — Weather invert-direction toggle (kísérleti) ✅ IMPLEMENTED 2026-06-07 · ON döntés 2026-07-04 🟡
+
+> **Megjegyzés 2026-10-12:** az „ON" állapot **ma nem él** — a 2026-09-02-i tiszta indulás a Netlify-override-okat nem hozta át, a `weatherInvertDirection` default 0, és nincs a CLAUDE.md élő override-jai között (lásd B40). A knob a kódban megvan.
 
 - **🟢 INVERT ON — ✅ ALKALMAZVA 2026-07-05 (auth-olt API, verifikálva override+effective=1, weather reset $250/0):** a 78-trade audit (`forecast_edge` IC **−0.359**, fordított kalibráció: modell 63%→realizált 18%; flip a mintán 60% WR / +$29.55, mindkét direkció pozitívba flippel) **strukturális** inverz anti-edge-et igazolt — **felülírja a 06-13 invert-OFF döntést** (az n=9 „artifact" volt; ez n=78). Akció: `weatherInvertDirection=1` + weather reset. `weatherConfidenceMin` **marad 0.65** (NEM csökkentjük — a confidence az ensemble-szórást kapuzza, nem a bucket predictedProb-ját), selectionShrink 0.5 + minPrice 0.05 marad. **Fenntartás:** az ár-aszimmetria befogja a felső határt (a flip csak a vérzést állítja meg); élőben a fee + vékony order book tovább ront. **Monitoring:** 20-30 post-invert trade → újra-audit; ha az sem pozitív nettó → **B15 σ-modellfix** (a gyökér: valószínű bucket-matcher/σ kalibrációs inverzió). Lásd [changelog 2026-07-04](../changelog/CHANGELOG-2026-07-04.md).
 - **Implementálva (2026-06-07):** `weatherInvertDirection` (0/1) Settings-knob, default **OFF**, „⚠️ EXPERIMENTAL: invert (fade)" címke. A [`decision-engine.mts`](../../netlify/functions/auto-trader/weather/decision-engine.mts) `direction`-választása a net-edge gate-nél flip-el (`baseDirection` → invert), a cross-position gate a flippelt oldalon fut. Env: `WEATHER_INVERT_DIRECTION`. 2026-06-06 friss flip-audit (n=11) megerősítette: **−$87.88 → +$32.38** (de a swing 2 confident-NO trade-ben koncentrált — lásd changelog). **Default OFF marad** — B23 a preferált; csak akkor kapcsold ON, ha tudatos kísérleti hedge. Teszt: `adverse-selection-fixes.test.mts` (2 B22 direction-case + 2 sizing-case).
@@ -452,18 +484,21 @@ A korábbi B9 (Topup action) átkerült a "📋 Next sprint candidates" szekció
 - **Trigger:** az Edge Tracker **hamis számokat** mutat az operátornak: (1) a `days` default **30 nap** → a headline `totalPnl` csak a trailing szeletet mutatta (sports **−$47** a valós **−$285** helyett, nem rekoncilál a bankroll-deltával); (2) a `computeSummary` **hardkódolt $150** bankrollt használt → minden %-os stat (`totalPnlPct`, `maxDrawdownPct`, `kellyUsed`) hibás a $200–$450 botokra.
 - **Fix:** [edge-tracker.mts](../../netlify/functions/edge-tracker.mts) `days` default „30" → „all" (windowing opt-in `&days=`); új `resolveBankrollStart(category, mode)` a `STORE_SPECS`-ből olvassa a valós per-kategória `bankrollStart`-ot (all → összeg), és átadja a `computeSummary`-nak. Mock-adaton kihagyva. `tsc`+build zöld.
 
-### B33 — Nettó / peak-equity session-loss-limit (a bruttó odométer leváltása) 🟠
+### B33 — Nettó / peak-equity session-loss-limit (a bruttó odométer leváltása) 🟠 🔵 NYITOTT (2026-10-12 ellenőrizve)
 
+- **Státusz 2026-10-12:** nincs megvalósítva — a crypto gate-1 ma is `sessionLoss < sessionLossLimit` (bruttó), a hint ma is „nettó vesztesége" ([`services/worker/src/pillars/crypto/decision-engine.mts`](../../services/worker/src/pillars/crypto/decision-engine.mts):213–221), a HL ugyanígy ([`hyperliquid/decision-engine.mts`](../../services/worker/src/pillars/hyperliquid/decision-engine.mts):102). **Részleges átfedés:** a B49 #8 peak-to-current `drawdownKill` ([`packages/core/src/risk-overlay.mts`](../../packages/core/src/risk-overlay.mts)) élesben BE (`riskDdKillEnabled`=1), és a `sessionLossLimit` override 1000 (gyakorlatilag nem köt) — a bruttó-odométer patológia így ma nem okoz stopot, de a principled fix nincs kész.
 - **Precondition:** B29 (interim unbrick) élesítve. **Becslés:** ~1 nap + teszt.
-- **Feladat:** a `sessionLossLimit` guard **bruttó-veszteség** helyett **peak-equity drawdown**-t figyeljen (`peakEquity − bankrollCurrent ≥ limit`), szimmetrikusan crypto/HL/sports session-managereken. Ez a principled fix, ami megszünteti a „nettó +$690 de stopped" patológiát; B29 csak feloldja. A gate-1 hint szövege is javítandó (jelenleg tévesen „nettó vesztesége", valójában bruttó — [crypto/decision-engine.mts:219](../../netlify/functions/auto-trader/crypto/decision-engine.mts)).
+- **Feladat:** a `sessionLossLimit` guard **bruttó-veszteség** helyett **peak-equity drawdown**-t figyeljen (`peakEquity − bankrollCurrent ≥ limit`), szimmetrikusan crypto/HL/sports session-managereken. Ez a principled fix, ami megszünteti a „nettó +$690 de stopped" patológiát; B29 csak feloldja. A gate-1 hint szövege is javítandó (jelenleg tévesen „nettó vesztesége", valójában bruttó — [crypto/decision-engine.mts](../../services/worker/src/pillars/crypto/decision-engine.mts):219, monorepo-útvonal 2026-10-12).
 
 ### B34 — Combiner sign-aware negatív-IC kezelés + `useRealizedIC` bekapcsolása 🟠 RÉSZBEN KÉSZ (2026-09-01)
 
+- **Útvonal-frissítés 2026-10-12:** a lenti `netlify/functions/…` linkek helye a monorepóban: [`services/api/src/routes/trader-settings.mts`](../../services/api/src/routes/trader-settings.mts) (`useRealizedIC` default 1 — ellenőrizve) és [`services/api/src/routes/signal-combiner.mts`](../../services/api/src/routes/signal-combiner.mts). A ⚠-figyelmeztetés a mentett override-ról tárgytalan: a 2026-09-02-i tiszta indulás óta nincs `useRealizedIC` override (CLAUDE.md élő knob-lista). A „Marad" pont státusza: nyitott.
 - **2026-09-01 kész:** `useRealizedIC` schema **default 0→1** ([trader-settings.mts](../../netlify/functions/trader-settings.mts)). A sign-awareness **már benne van** a súly-alapú combinerben: negatív effektív IC → negatív súly → a jel hozzájárulása invertálódik (`combined += w·p`), a B30 clamp/totalW-guard biztonságossá teszi. HL `&category=hyperliquid`, crypto `&category=crypto` — mindkettő persistál realized-IC-t. ⚠️ **Ha mentett `useRealizedIC=0` override van, a default-change NEM írja felül** → operátornak Settings-ben 1-re kell váltania (auth).
 - **Marad (opcionális mélyítés):** dedikált **log-odds sign-aware** tilt directional/HL piacon (a threshold K-anchor tilt-ág mintájára [signal-combiner.mts:1229](../../netlify/functions/signal-combiner.mts)) — a súly-invert helyett explicit `1−p` hozzájárulás; + n≥30 gate jelenként. **Várt hatás:** HL ~breakeven → enyhén pozitív; crypto evGap csökken. Monitoring: deploy után az edge-tracker „Signal IC calibration" Effective oszlopa.
 
 ### B35 — Weather sizing/kalibráció overhaul (payoffRatio 0.44 gyökérok) 🟠 RÉSZBEN (2026-09-01)
 
+- **Státusz 2026-10-12:** a (2) σ-infláció/kalibráció pont **más úton kész** (EMOS + B58/B59 + B69 multi-model saját EMOS-szal, lásd B15); az (1) skill-alapú sizing, (3) weather fee-parity (az `applySettlementFee` ma csak a crypto paper-resolverben van) és (4) drága-favorit sapka **nyitott** (státusz a kód alapján: nincs `weatherMaxPrice` knob). **Gyakorlati prioritás alacsony:** a weather 2026-09-28 óta measure-only (B79), mert a piac ellen nincs edge (B76) — sizing-javítás addig nem hat. A `weather/decision-engine.mts` útvonala ma `services/worker/src/pillars/weather/`.
 - **2026-09-01 kész (interim de-risk):** új `weatherKellyScale` knob (default **0,5**) — a végső ¼-Kelly-frakció uniform szorzója ([weather/decision-engine.mts](../../netlify/functions/auto-trader/weather/decision-engine.mts)). Korlátozza a downside-t/vérzést, **NEM** payoff-fix. A teljes overhaul (lentebb) marad.
 - **Precondition:** friss 20–30 trade a knob-változtatások után (selectionShrink 1.0 + maxPos $15 már alkalmazva). **Becslés:** 2–3 nap.
 - **Feladat:** (1) a Kelly méret **leválasztása az ensemble-egyetértésről** — skill-alapú (realized reliability/Brier) shrinkage, hogy a legmagabiztosabban téves előrejelzés ne kapja a legnagyobb tétet; (2) σ-infláció ([B15](#b15--weather-bot-σ-calibration-refinement-)) — az alul-diszperz GFS σ nyersen megy a bucket-matcherbe; (3) **fee-modell parity**: a weather reconciler 0%, a gate 1% fee-t számol a 3.6% helyett → a paper-PnL felfelé torzul, javítandó az `applySettlementFee` mintára; (4) drága-favorit sapka (`weatherMaxPrice` vagy ár-skálázott edge-gate) — a ~0.68-áras favoritok a 2× nagyobb veszteségek forrása. Az irány JÓ (forecast_edge IC +0.393), a sizing a probléma.
@@ -483,6 +518,7 @@ A korábbi B9 (Topup action) átkerült a "📋 Next sprint candidates" szekció
 - **Tanulság (a 9. audit-sáv osztálya):** a tracker és a valóság szétcsúszott — a `sprints.md` nyitottként mutatott egy hat napja élő fixet. Pont ezt a drift-osztályt fogja a **napi ellenőrzés** (91. session).
 ### B37 — Sports fair-value redesign (Pinnacle de-vig) 🔴 STRATÉGIA-ÁTÉPÍTÉS
 
+- **Státusz 2026-10-12:** 🔴 **NYITOTT** (operátor/adat-függő: `ODDS_API_KEY` + event-matching). A de-vig matek kész és élesíthető knob mögött (B41 #9 multiplicative/power, B49 #7 Shin), de az élő döntés ma is a shrink-képlet ([`services/worker/src/pillars/sports/decision-engine.mts`](../../services/worker/src/pillars/sports/decision-engine.mts):75/79; snapshot: [`sports/index.mts`](../../services/worker/src/pillars/sports/index.mts):191). A bot a 2026-09-02-i tiszta indulás után újra futott (B55), majd 2026-09-25-én **manuálisan leállítva** (`stoppedReason="Manual stop"`, CLAUDE.md). A lenti `netlify/functions/…` linkek helye ma `services/worker/src/pillars/sports/`.
 - **Állapot:** a sports bot **leállítva** (2026-07-23, operátor) — jelenleg NINCS edge-forrás. **Becslés:** több nap (külső adat + de-vig + kalibráció).
 - **Feladat:** a „fair value" jelenleg `predicted = 0.5 + (yesPrice−0.5)·0.55` ([sports/decision-engine.mts:60](../../netlify/functions/auto-trader/sports/decision-engine.mts)) — a Polymarket **saját árát** húzza 0.5 felé → strukturálisan minden olcsó longshotot túlbecsül (evGap −$2677, ~10% WR). Kell: valódi **de-viggelt Pinnacle/sharp-book** referencia, belépés csak `devigged_true − pm_price > fee` esetén. Sub-fixek: NO-oldali edge leg-mismatch (`|P(YES) − noPrice|` a helyes `|P(NO) − noPrice|` helyett, ~3× felfújt edge, [sports/decision-engine.mts:82](../../netlify/functions/auto-trader/sports/decision-engine.mts)); paper settlement fee-parity (jelenleg 0%). **Amíg ez nincs → a bot maradjon leállítva/loss-limit-capelve** (`sportsSessionLossLimitEnabled=1` már alkalmazva).
 
@@ -511,11 +547,15 @@ A korábbi B9 (Topup action) átkerült a "📋 Next sprint candidates" szekció
    *Állás 2026-09-10 ~16 UTC: **19** tiszta crypto sor. B67-szabállyal számolva; a jelzés-alapú régi szabály túlszámolt.*
 3. **Amikor van adat:** (1) `cryptoSelectionShrink` knob, **default 0 = no-op**, a grossEdge előtt, a szélső ár-bucketekre; (2) `maxEdgeCap` plateau-sweep (**nem** a csúcs — [`@core/plateau.mts`](../../packages/core/src/plateau.mts) `selectPlateau`); (3) rezolúciós-ablak-tudatos aggregát cap a meglévő `checkBetaCap` **mellé**, nem helyette.
 4. **Kimenet-ellenőrzés:** a promóciós kapu (B50 #1) döntse el, nem a PnL.
-### B39 — evGap net-of-fee baseline 🟡
 
-- **Feladat:** a `tradeEv()` ([edge-tracker/statistics.mts](../../netlify/functions/edge-tracker/statistics.mts)) EV-baseline-ja **bruttó** a fee-re, miközben a realizált PnL nettó → az evGap fix ≈ −Σfee biast hordoz, ami összemossa a „modell-optimizmust" a puszta fee-drag-gel (a crypto/HL evGap-riasztások részben ez az artefakt). Fix: a fee levonása a `tradeEv`-ben (`max(proceeds,costBasis)·feePct` mintára), vagy a bias explicit dokumentálása a mezőn.
+*Állás 2026-10-12: a ≥30 tiszta crypto sor teljesülése a repóból nem ellenőrizhető (élő ledger-lekérdezés kell); a CLAUDE.md (2026-09-30) szerint a tétel továbbra is „≥30 tiszta crypto sor után" nyitott.*
+### B39 — evGap net-of-fee baseline 🟡 🔵 NYITOTT (2026-10-12: a `tradeEv()` ma is bruttó — [`packages/core/src/statistics.mts`](../../packages/core/src/statistics.mts):245, fee-levonás nélkül)
 
-### B40 — Weather invert-direction re-audit (IC-előjel ellentmondás) 🟡
+- **Feladat:** a `tradeEv()` ([edge-tracker/statistics.mts](../../netlify/functions/edge-tracker/statistics.mts) — ma: `packages/core/src/statistics.mts`) EV-baseline-ja **bruttó** a fee-re, miközben a realizált PnL nettó → az evGap fix ≈ −Σfee biast hordoz, ami összemossa a „modell-optimizmust" a puszta fee-drag-gel (a crypto/HL evGap-riasztások részben ez az artefakt). Fix: a fee levonása a `tradeEv`-ben (`max(proceeds,costBasis)·feePct` mintára), vagy a bias explicit dokumentálása a mezőn.
+
+### B40 — Weather invert-direction re-audit (IC-előjel ellentmondás) 🟡 ⛔ TÁRGYTALAN (2026-09-02 óta az invert OFF; a weather measure-only)
+
+- **Ok (2026-10-12):** a 2026-09-02-i tiszta indulás a Netlify-override-okat nem hozta át (run-on-defaults, [changelog 2026-09-02](../changelog/CHANGELOG-2026-09-02.md)), a `weatherInvertDirection` kód-defaultja 0 ([`trader-settings.mts`](../../services/api/src/routes/trader-settings.mts)), és nincs a CLAUDE.md 20 élő override-ja között → az invert **OFF**. Ráadásul a weather 2026-09-28 óta measure-only (B79), mert a piac ellen nincs edge (B76). Az ellentmondás így nem él; egy esetleges újranyitás csak a weather visszakapcsolásakor, a B69 σ-láncon mérve.
 
 - **Feladat:** a `weatherInvertDirection=1` (invert ON, a 2026-07-04 B22-döntés) mellett a `forecast_edge` realized IC **+0.393** (pozitív), miközben az invert bekapcsolásának indoka az akkori **−0.359** volt. A jelenlegi állapot: 56 trade, −$189.90, 51.8% WR, payoffRatio 0.44 (a veszteség sizing-eredetű, nem irány). Az IC-előjel vs invert-beállítás **ellentmondásos** — a signal-calibration IC-számítás szemantikáját (signal-vs-outcome vs signal-vs-bot-PnL invert mellett) tisztázni kell, majd dönteni: invert OFF + reset tiszta mintára, vagy marad. **Ne** flippeljük vakon (a session eleji audit már egyszer tévesen mondta „invert OFF"). Kapcsolódik: [B15](#b15--weather-bot-σ-calibration-refinement-), B35, **B41/#1 (proper-scoring: reliability-diagram teszi objektívvé az invert-döntést)**.
 
@@ -534,12 +574,14 @@ A korábbi B9 (Topup action) átkerült a "📋 Next sprint candidates" szekció
 - **#8 — Disagreement-gated extremizing ✅ IMPLEMENTED 2026-09-01 (default-OFF).** `combine()` új extremizing lépés: `sigmoid(a·logit(p))`, a = 1 + strength·0.7·disagreement (a jel-log-odds szórására kapuzva → nem túl-extremizálja a redundáns jeleket). `combinerExtremizeStrength` knob (default 0 = változatlan). A #3 log-odds pool élesítő párja. Új `shared/extremize.test.mts` (6 csoport) + math-doksi. Rollout #1 gain után.
 - **#9 — Sports Pinnacle de-vig ✅ IMPLEMENTED 2026-09-01 (default-OFF, B37 modell-fix).** `shared/devig.mts`: multiplicative + power de-vig (favorite-longshot korrekció) + `twoWayFairYes` + american-konverzió. Bekötve a `makeSportsDecision`-be a `pinnacleFairYes` inputon + `usePinnacleFairValue`/`sportsUsePinnacle` knob mögött (default 0); a fabrikált shrink helyett valódi de-viggelt fair value, odds-feed nélkül shrink-fallback (zéró regresszió). Új `shared/devig.test.mts` (7 csoport) zöld. **Nyitott data-task: az odds-feed** (ODDS_API_KEY, pl. the-odds-api; Polymarket↔Pinnacle event-matching a `pinnacleFairYes` feltöltéséhez) — enélkül a #9 matek él, de nem tüzel.
 - **Nyitott jelöltek (jóváhagyásra, discovery §7 A-lépcső):** #2–#9 LIVE bekapcsolása (a mérés + pozitív gain után); a sports **odds-feed** data-task (a #9 aktiválásához); #4 online AdaHedge + ADWIN/BOCPD regime-reset — kötődik **B34**; #5 HAR-RV (Yang–Zhang) vol-motor; #6 first-passage routing touch-piacokra; #7 Deribit SSVI+BL benchmark-signal; #8 disagreement-gated extremizing; #9 sports Pinnacle de-vig — **= B37**.
+- **Állás 2026-10-12:** az A-lépcső mind a 9 pontja implementálva; a B50-batch (2026-09-03) több knobot élesített (`useHarRv`, `useFirstPassage`, `useDeribitIV` = 1 a CLAUDE.md élő listáján), a `combinerLogOddsStrength`-et a B56b visszavonta. A „MOST (Netlify) / Hetzner UTÁN" ütemezés tárgytalan: a Hetzner-előfeltétel 2026-09-02 óta teljesült; a B-lépcsőből a `services/model` (Chronos) kód kész, a súly bekötése = runbook **Phase 7**, box-bővítés-függő. A lenti `edge-tracker/…`, `shared/…` hivatkozások ma a `packages/core/src/` alatt élnek.
 - **B-lépcső (Hetzner-precondition):** foundation model (Chronos-Bolt/TimesFM) mint *kalibrált* distribution-estimator; Realized-GARCH; logisztikus/GBM stacking; LLM-signal sportra. → a `hetzner-migration.md`-be új modell-service fázisként promotálandó, amikor odaérünk.
 - **Acceptance (#1, kész):** az Edge Tracker minden kategórián mutatja a Brier/Log-score/skill KPI-ket + reliability-diagramot; a Murphy-identitás önkonzisztens (unit-tesztben pinned).
 
 ### B42–B45 — teljes-audit follow-upok (2026-09-03) 🟡
 
 A 2026-09-03 teljes audit (5 bot + infra + security) implementált fixei: [changelog 2026-09-03](../changelog/CHANGELOG-2026-09-03.md). A NEM-azonnal-implementált maradékok:
+- **Státusz 2026-10-12 (kódból):** B42 🔵 nyitott ([`auth.mts`](../../services/api/src/routes/auth.mts) ma is `createHash("sha256")`) · B43 🔵 nyitott ([`signal-calibration.mts`](../../services/worker/src/pillars/shared/signal-calibration.mts):129 ma is `t.pnl > 0`) · B44 🔵 nyitott ([`sports/index.mts`](../../services/worker/src/pillars/sports/index.mts):191 ma is a shrink-képlet; csak B37-nél releváns) · B45 🔵 nyitott ([`kelly-sizer.mts`](../../services/worker/src/pillars/hyperliquid/kelly-sizer.mts):23 ma is konstans; a HL measure-only, tehát alacsony prioritás).
 - **B42 — login KDF-upgrade.** A jelszó jelenleg sótlan SHA-256 (a doc bcrypt-et ír). Bevezetni bcrypt/scrypt/argon2-t + az operátornak új `AUTH_PASSWORD_HASH`-t generálni (breaking → operátor-feladat). A timingSafeEqual + per-IP rate-limit már él.
 - **B43 — mély sign-aware realized-IC.** A `computeRealizedICs` (`shared/signal-calibration.mts`) csak `pnl>0`-val korrelál, iránytól függetlenül → HL SHORT-trade-eken zavaros IC. Korrelálja a signalt a direkcionális kimenettel. (A `t.side`→`t.direction` typo már javítva.) Shared-infra, óvatosan.
 - **B44 — sports snapshot Pinnacle fair value.** A `sports/index.mts` a `predictedProb`/snapshot-ot a shrink-képletből re-deriválja a döntést vezérlő `pinnacleFairYes` helyett. Csak `sportsUsePinnacle`/B37 bekapcsolásakor releváns (akkor P1).
@@ -575,7 +617,7 @@ A 2026-09-03 teljes audit (5 bot + infra + security) implementált fixei: [chang
   - **#8 vol-target + max-DD kill-switch** + **#9 ENB diverzifikáció-monitor**. ÚJ.
   - **#10 CTF auto-redeem cron** (→ B6). **#11 liq-cascade fade ETH/SOL** (→ new-strategies #7, Hetzner-WS). **#12 neglected-market scanner** (politics/macro MVP, NEM LLM). **#13 market-making/reward-farming** (ÚJ üzletág, live-infra). **#14 meta-labeling** (≥300-500 trade/bot).
 - **Skeptikus mentések (NE építsd):** negRisk/Σ-arb mint alfa (3,6s korrekció, likviditás-cap); Kalshi cross-arb mint executor (semantic non-fungibility — read-only scannerként OK); settlement-sniping (dispute-risk-prémium); on-chain flows (gyenge+drága); LLM likvid piacra (a piaci ár veri).
-- **Precondition:** operátor-jóváhagyás a §6 A-lépcső sorrendre; a B-lépcső (auto-redeem/liq-cascade/MM) Hetzner+live-infra-blokkolt (B10).
+- **Precondition:** operátor-jóváhagyás a §6 A-lépcső sorrendre; a B-lépcső (auto-redeem/liq-cascade/MM) Hetzner+live-infra-blokkolt (B10). *(2026-10-12: a Hetzner-rész teljesült — 2026-09-02; a live-infra/B10 nem.)*
 
 ### B50 — Training / paraméter-optimalizáció discovery (a bot „trainelése") 🟠 TRACKER
 
@@ -617,7 +659,7 @@ A 2026-09-03 teljes audit (5 bot + infra + security) implementált fixei: [chang
 - **BTC-viselkedés bit-azonos** (minden fetch default BTC, a BTC slug-ok ugyanúgy parse-olnak) → 0 regresszió a meglévő BTC-trade-ekre. Az ETH/SOL a deploy után élesedik (a `CRYPTO_COINS` env szűkíthető `BTC`-re, ha kell). Új env: `CRYPTO_COINS` ([env-vars.md](../current-state/env-vars.md)). Doksi: [`math/36-multi-coin.md`](../math/36-multi-coin.md).
 - **Follow-up (Backlog):** ETH/SOL Deribit-IV (#7) tesztelése ETH-chainen; per-coin realized-IC (a calibration jelenleg kategória-szintű, nem coin-szintű) → ha az ETH-edge eltér a BTC-től, coin-particionált IC kellhet; SOL-markets megjelenésekor a scan automatikusan felveszi.
 
-### B52 — Weather multi-model ensemble (GEFS-only → GEFS + IFS-ENS + AIFS-ENS + WeatherNext 2) — **1. lépcső ✅ IMPLEMENTED 2026-09-08 (82. session)**, 2-4. lépcső nyitva
+### B52 — Weather multi-model ensemble (GEFS-only → GEFS + IFS-ENS + AIFS-ENS + WeatherNext 2) — **1. lépcső ✅ IMPLEMENTED 2026-09-08 (82. session)**, ~~2-4. lépcső nyitva~~ → **mind a 4 lépcső ✅ (a (3) flip 2026-09-28, B69; 2026-10-12 ellenőrizve)** — a weather azóta measure-only (B79)
 
 - **Trigger (82. session, 2026-09-08):** a user kérdése — „be tudnánk integrálni weather api-kat vagy modelleket? elvileg a Gemini is pontosított a modelljén". **Élő API-felmérés + offline mérés** (kód NEM változott ebben a sessionben).
 - **A dokumentált weather-patológia** (`2026-07-23`): `forecast_edge` **IC +0.393** (az irány JÓ), de **payoffRatio 0.44** — „jó irány, rossz sizing". A B49 #6 EMOS/NGR ezt az **ensemble-underdispersion**t célozza *kalibrációval*. **Ez a tétel a forrásnál javítja ugyanazt.**
@@ -647,7 +689,7 @@ A 2026-09-03 teljes audit (5 bot + infra + security) implementált fixei: [chang
     - **Read-out:** [`scripts/eval-multimodel.ts`](../../scripts/eval-multimodel.ts) + [`packages/core/src/multi-model-eval.mts`](../../packages/core/src/multi-model-eval.mts) (+[31 assert](../../packages/core/src/multi-model-eval.test.mts)) — CRPS-skill + **var-ratio** (`mean(hiba²)/mean(σ²)`: >1 = underdispersed) + ±1σ/±2σ coverage, per állomás és összesítve, explicit PROMOTE/HOLD verdikttel. A teszt pineli a lényeget: *azonos pont-hiba mellett a becsületes σ jobb CRPS-t kap* — egy változat rosszabb MAE-vel is nyerhet.
     - **Knobok:** `weatherMultiModelRecord` (default **1** — csak logol; azért ON, mert a összehasonlítás **nem** backfillelhető: a WN2 historikus archívum csak ~2026-09-04-től él, az AIFS-ENS-nek nincs) + `weatherUseMultiModel` (default **0** — a flip). Env: `WEATHER_MULTIMODEL_RECORD`, `WEATHER_ENSEMBLE_MODELS`, `WEATHER_MULTIMODEL_INTERVAL_MIN`, `WEATHER_USE_MULTIMODEL` ([env-vars.md §13](../current-state/env-vars.md)).
     - **0 trading-hatás, élőben verifikálva** 4 állomáson: a recorder bekapcsolt fetch-csel a `predictedMaxC`/`confidence`/`modelUsed` **bit-azonos** a recorder nélküli hívással. Élő mérés Tokióra (2026-09-09 célnap): GEFS μ 33.97 σ 1.02 · IFS-ENS 30.80 · AIFS-ENS 28.78 · WN2 29.16 → keverék μ 30.68 **σ 2.21** (inter-modell 2.05). A GEFS **5.2 °C**-kal az AIFS fölött ül, miközben ±1.02 °C-ot állít magáról.
-  - **(2) ⏳ Deploy + 2-3 hét adatgyűjtés**, majd `bun scripts/eval-multimodel.ts`.
+  - **(2) ⏳ Deploy + 2-3 hét adatgyűjtés**, majd `bun scripts/eval-multimodel.ts`. — ✅ **teljesült** (2026-10-12 jelölés): a forward log 2026-09-28-ig 224 mintát gyűjtött, a kiértékelés a (3) flip alapja volt ([changelog 2026-09-28](../changelog/CHANGELOG-2026-09-28.md), 97. session).
   - **(3) ✅ Flip — 2026-09-28** (B69 2. lépés): 224 minta, keverék + saját EMOS × 1,0 = +8,1% [1,2; 15,5] out-of-sample. A dupla-számolás-veszélyt (lent) a flip-pár kezeli: `weatherSigmaInflation` vissza 1,0-ra. Eredeti feltétel: ≥30 címkézett snapshot + pozitív CRPS-skill.
     ⚠ **DUPLA-SZÁMOLÁS-VESZÉLY (2026-09-09):** a `weatherSigmaInflation` **2.25-ön ÉL**, és ugyanazt az alul-diszperziót korrigálja *utólag*, amit a multi-model keverék a *forrásnál* (az inter-modell tag). A flip előtt a σ-inflációt **újra kell mérni** a keverék σ-ján (`dispersionDiagnostics` a forward METAR-párokon), és nagy valószínűséggel **lejjebb kell venni vagy kikapcsolni** — különben a σ kétszer szélesedik, a confidence (`1 − σ/4`) beomlik, és a bot gyakorlatilag nem köt trade-et. A recorder `baseSd` mezője a **nyers** GEFS-szórást rögzíti (infláció előtt), tehát a B52 forecast-mérése maga NEM szennyezett — csak a trading-út. ⚠ Kevesebb trade lesz: a szélesebb σ lejjebb viszi a confidence-t (`1 − σ/4`), így a `weatherConfidenceMin` (0.65) több piacot blokkol — ez a szándék (Tokió a fenti példában kiesne: conf 0.745 → 0.448).
   - **(4) ✅ Regionális nagyfelbontás + további globális centrumok — IMPLEMENTED 2026-09-09 (85. session).** A lista **4 → 8 rendszer**: + `gem_global` (CMC, 21) és `ukmo_global_ensemble_20km` (MOGREPS-G, 18) mindenhol, + `icon_eu` (40 @ **13 km**) és `icon_d2` (20 @ **2 km**) Európában.
@@ -674,6 +716,8 @@ A 2026-09-03 teljes audit (5 bot + infra + security) implementált fixei: [chang
 
 ### B54 — A 10 bekapcsolt knob kiértékelése ⏸ BLOKKOLVA (B53 + minta-hiány)
 
+> **Állás 2026-10-12:** a B53 2026-09-09 óta élesben, a „≥2-3 hét friss adat" idő eltelt, de **knobonkénti kiértékelés nem dokumentált** a changelogban (státusz nem ellenőrizhető a repóból). Ami azóta történt: a 10 knobból a `combinerLogOddsStrength` visszavonva (B56b); a directional ág haltolva (B74), a weather measure-only (B79) — így több knob kontrasztja ma nem is mérhető élő döntésen. A maradék 9 a CLAUDE.md élő override-listáján változatlanul BE.
+
 - **Trigger:** a 80. session terve: „pár nap múlva Edge Tracker → a knobokat egyesével meghagyni/visszavenni."
 - **Miért nem megy most (2 független ok):**
   1. **Nincs pre-flip kar.** A config-fingerprint helyesen elválasztja a 09-03 22:09-es flippet (`101cde4d` = előtte, `3683673b` = utána), de a rescan-enkénti stamp-felülírás miatt a flip előtti sorok átcímkéződtek: **n=3 vs n=214**. A Thompson-bandit „101cde4d 58% prob-best"-je a **priorból** jön (nEff **0.4**), nem bizonyíték.
@@ -691,7 +735,7 @@ A 2026-09-03 teljes audit (5 bot + infra + security) implementált fixei: [chang
 - **Session-reset:** a sports paper-session nullázva (bankroll $50, 0 trade); a **ledger NEM lett törölve** — az a mérési adat, és a reset a rendszerben sem érinti.
 - **B37-nél visszavonandó:** amint a `pinnacleFairYes` fel van töltve, a forecast független lesz a Polymarket ártól → a sportsot ki kell venni az `AGGREGATE_EXCLUDED`-ből.
 
-### B56 — Crypto: a „lapos predikció" diagnózisa → a directional ág az, ami nem működik 🟠 (87. session, 2026-09-09)
+### B56 — Crypto: a „lapos predikció" diagnózisa → a directional ág az, ami nem működik 🟠 (87. session, 2026-09-09) — ✅ LEZÁRVA a B56b (2026-09-09) + B74 (directional halt, élesítve 2026-09-17) által
 
 - **Trigger:** a 84. session aggregált megállapítása („a crypto modell nem-informatív, `|p−0.5|`=0.119 vs a piac 0.296"). A user: „csináld a crypto diagnózist."
 - **⚠ Az aggregátum FÉLREVEZETETT — két ellentétes rezsimet fedett el.** Piac-típusonként bontva (98 ledger-sor, 91 rezolvált):
@@ -917,6 +961,7 @@ A 2026-09-03 teljes audit (5 bot + infra + security) implementált fixei: [chang
   - **(a) A weather ág eldobja a fill-modell eredményét.** A pozíció a kért USDC-t és a jegyzett árat (+1¢) könyveli, nem a VWAP-ot és a teljesült összeget ([`weather/index.mts`](../../services/worker/src/pillars/weather/index.mts):614-616). 33 zárt trade-ből 6-nál tér el a könyvelt költség a részvény × belépő szorzattól (arány 1,09–1,49).
   - **(b) A pozíció és a zárt trade nem őrzi a token-id-t és a fill-részleteket** (VWAP, teljesült USDC, részleges-e), így a fill-ek utólag nem auditálhatók.
 - **Státusz:** felderítve; az operátor 2026-09-10-én még nem indította (a B71-et választotta előbb).
+- **Állás 2026-10-12:** 🔵 továbbra is jelölt. Az (a) előfeltétel **részben** változott: a B75 (2026-09-28, `b7c0547`) óta a weather ág a könyv-VWAP-on kapuz (`checkExecutableEdge`), de a pozíció ma is a jegyzett árat könyveli (`entryPrice = quotedSidePrice`, [`weather/index.mts`](../../services/worker/src/pillars/weather/index.mts) ~636. sor) → az (a) pont nyitott; a (b) státusza nem ellenőrizve.
 
 ### B69 — B52 offline előkiértékelés historikus ensemble-archívumon ✅ LEFUTVA 2026-09-16 (94. session) — a pooling bizonyítottan javít
 
@@ -1114,6 +1159,8 @@ A 2026-09-03 teljes audit (5 bot + infra + security) implementált fixei: [chang
 
 ## ✅ Completed sprints (rolling 5 utolsó)
 
+> **Lezárt / történeti sprintek.** 2026-10-12-én ide került a fájl tetejéről a 2026-05-15-i „Active sprint (Sprint 42)" — változatlan szöveggel, történetiként jelölve. A záró-kritériumok teljesülése nem lett dokumentálva (a sprint-formátum ezután session-alapú munkára váltott); a 42A–E jelöltek mai státusza a „Next sprint candidates" fejléceiben.
+
 ### Sprint 47 (2026-06-04) — F-Arb structural sizing+threshold fix
 
 **Trigger:** user — „funding rate bot … fut, nem nyit semmit … miért nem nyit pozit". Élő diagnózis: a bot helyesen gate-el, de strukturálisan képtelen volt nyitni (0 trade 2026-04-21 óta).
@@ -1192,6 +1239,29 @@ A 2026-09-03 teljes audit (5 bot + infra + security) implementált fixei: [chang
 **Trigger:** Az operátor a sports bot session-jén "Session loss limit hit" auto-stopot kapott, és redeploy nélkül akarta beállítani a küszöböt. A crypto + HL bot már Settings-tunable volt, a sports nem. Weather + F-Arb nem rendelkezik session-loss-limit fogalommal — ha kell, B-backlog kandidátus.
 
 **Changelog:** [`CHANGELOG-2026-05-15.md`](../changelog/CHANGELOG-2026-05-15.md) "Follow-up" szekció.
+
+### Sprint 42 (2026-05-15 → ~2026-05-22) — (történeti, 2026-05)
+
+**Sprint cél:** Post-fix paper trade volume accumulation a vol_divergence K-extrakció root-cause javítás validálására — legalább 10 closed trade gyűlni a fix után, hogy a finalProb K-érzékeny mértékét és a `Combiner confidence (|p − 0.5|)` gate (#3) blokk-arányát mérni tudjuk.
+
+**Status:** in_progress (2026-05-15 indítva, post-Sprint-41 K-extrakció fix után)
+
+| # | Feladat | Owner | Acceptance criteria | Prio |
+|---|---------|-------|---------------------|------|
+| 1 | Post-K-fix vol_divergence validáció | operator | A reset után 10+ új closed trade-ben a vol_div `prob` mező **eltérése K szerint** (78K vs 80K vs 82K markets) ≥ 0.15. Edge Tracker calibration-view-ben látható a változás. | 🟠 |
+| 2 | Combiner confidence gate blokk-arány mérése | operator + bot | A K-fix után a 3. gate (`Combiner confidence`) blokk-rate-je növekedjen ≥30%-kal Normal preset alatt (a near-noise trade-ek kiestek). Ha nem nő → a fix nem érvényesül a 4 K-blind signal mean-reversion-je miatt → Sprint 42A trigger. | 🟠 |
+| 3 | Crypto Loose → Normal preset tervezett váltás | operator | A K-fix validálása után (10+ trade) → Settings → Normal. A combinerConfidenceMin 0.02 → 0.05 lépés meg kell maradjon production-ban a valódi noise-szűrésre. | 🟡 |
+| 4 | HL bot consecutive-loss pause tesztelés | operator | A 2026-05-14f Settings knob (`hlConsecutiveLossPauseHours`) validációja — ha trigger, az inline `Cancel pause` gomb működik (UI smoke test). | 🟢 |
+| 5 | Daily Coach mode check-in (RecommendationsCard) | operator | Naponta egyszer `/trade/<bot>/`-on átolvasni. Apply csak indokolt esetben, dismiss a többit. | 🟢 |
+
+**Sprint end-criteria (mindhárom kell):**
+- ✓ 10+ post-K-fix closed crypto trade gyűlt (combiner K-érzékenysége valós-time validálva)
+- ✓ vol_divergence `prob` mező eltérése piaconként K szerint ≥ 0.15 (a fix után 78K vs 82K piacon >70% eltérés várt)
+- ✓ Gate-3 blokk-arány Normal preset-en ≥30%-os növekedés a Sprint 41 előtti állapothoz képest (a near-noise contrarian-ek kiszűrve)
+
+**Sprint risk:**
+- ⚠️ Ha a 4 K-blind signal mean-reversion-je elnyomja a vol_div K-érzékenységét (combiner súlyozás `w = ic × (1 + |demeaned| × 0.5)` szerint a vol_div 12-15% súlyú) → finalProb még mindig 0.45-0.50 sávban marad → trigger a **Sprint 42A K-blind re-weighting** candidate-re.
+- ⚠️ Ha 24h alatt < 5 új closed trade → cron lassú vagy nincs piac → operator intervention.
 
 ### Sprint 41 (2026-05-15) — Outcome-overlap gate + 7-trade audit + vol_divergence K-extrakció fix
 
@@ -1275,7 +1345,7 @@ A 2026-09-03 teljes audit (5 bot + infra + security) implementált fixei: [chang
 | Új signal hozzáadása a 8-signal combinerhez | Zaj, mielőtt a meglévő 8 mért IC-vel kalibrálva nincs (jelenleg priorok, nem mért értékek) | 200+ trade után (B1 Tier 2) |
 | Live-flip bármelyik boton (`PAPER_MODE=false`) | Paper validation gate még nem teljesít (≥30 trade kell). `liveReadyOverrideEnabled` opt-in **csak tudatos kockázat** | Sprint 39+ után, ha N≥30 + IC≥5% + Sharpe≥0.5 + DD<25% mind ✓ |
 | Autopilot mode bekapcsolása a recommendations engine-en | Regime-shift drift kockázat sokkal nagyobb mint a 1-3 nap operator-latency | **Soha** (tudatos design) — vagy 200+ trade + 30+ nap stabil regime |
-| Sports bot teljes pipeline (P4.2) | Még stub szinten — addig a stratégia-spec sem véglegesedett | Sprint 42C-re, ha az operátor explicit kéri |
+| Sports bot teljes pipeline (P4.2) | Még stub szinten — addig a stratégia-spec sem véglegesedett *(2026-10-12: ELAVULT indok — a pipeline 2026-05-11 óta él, lásd 42E; a valódi tiltás ma: sports élesítés valódi odds-feed nélkül → B37)* | Sprint 42C-re, ha az operátor explicit kéri *(ma: a B37 odds-feed után)* |
 | Macro / Politics bot | Sport-tól is távolabb, hosszú lejáratú események, low-confidence | Sprint 50+ valószínű |
 | Kelly fraction auto-tuning Sharpe alapján | Hard guardrail, operator-only door | **Soha** |
 | Sanity cap (40%) felemelése | Model-error védőháló, ne mozdítsd | **Soha** kódból; csak operator manuálisan |
@@ -1300,9 +1370,9 @@ A 2026-09-03 teljes audit (5 bot + infra + security) implementált fixei: [chang
 | Operator-akció (Settings change, login, button click) | Active sprint táblázatba új sor |
 | Kód-fejlesztés a meglévő rendszerben | Next sprint candidates szekció |
 | Új signal / stratégia | `new-strategies.md`-be ÉS sprint candidates §3-as referenciával |
-| Új Netlify function / cron | Next sprint candidates VAGY backlog (precondition függő) |
+| Új API-route (`services/api/src/routes/`) / worker-ütemezés (`services/worker/src/scheduler.ts`) *(2026-10-12-ig: „Új Netlify function / cron" — a Netlify megszűnt)* | Next sprint candidates VAGY backlog (precondition függő) |
 | Új doksi / refactor | Active sprint vagy next, ha standalone |
-| Hetzner VPS-feladat | Backlog B2 vagy `hetzner-migration.md`-ba új fázis-lépés |
+| Hetzner VPS-feladat | Backlog B2 vagy `hetzner-migration.md`-ba új fázis-lépés *(2026-10-12: a B2 kész; box-/infra-feladat a [`migration-runbook.md`](./migration-runbook.md)-be — pl. Phase 7)* |
 
 ### Sprint completion criteria
 

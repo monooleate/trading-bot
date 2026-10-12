@@ -48,9 +48,9 @@
 - Auth + JWT cookie + admin password
 
 ### Mi NEM működik élesben
-- **Hetzner VPS nincs telepítve** — minden Netlify-on fut (signal + execution réteg ugyanazon a serverless platformon)
-- **LP Refresh Window execution** — WebSocket feedek hiányoznak (Hetzner kéne)
-- **Sports/Politics/Macro bot** — csak stub fájlok TODO-kkal
+- ~~**Hetzner VPS nincs telepítve** — minden Netlify-on fut (signal + execution réteg ugyanazon a serverless platformon)~~ → ✅ **2026-09-02 óta a Hetzner `analytics` boxon fut** (Docker co-host, paper; a Netlify-deploy nyugdíjazva — [`sprints.md` B2](./sprints.md), [`migration-runbook.md`](./migration-runbook.md)) *(2026-10-12 jelölés)*
+- **LP Refresh Window execution** — WebSocket feedek hiányoznak *(2026-10-12: a Hetzner-előfeltétel teljesült, a `services/feeds/` még placeholder — B5)*
+- **Sports/Politics/Macro bot** — csak stub fájlok TODO-kkal *(2026-10-12: a **sports** nem stub — teljes pipeline 2026-05-11 óta, élő edge-forrás nélkül, manuálisan leállítva B37-ig; politics/macro továbbra is stub)*
 - **Live HL trading** — SDK telepítés és HL_PRIVATE_KEY env kell hozzá
 - **Live Polymarket trading** — gate-ek átengedése után POLY_PRIVATE_KEY kell
 
@@ -91,6 +91,7 @@ HYPERLIQUID (execution célpont 2)            ← ✅ paper-mode kész
 
 **Valós state:** A teljes "execution réteg" Netlify Functions-on fut, nem Hetzner-en.
 Cron `*/3 * * * *` szerint. WebSocket helyett HTTP poll van mindenhol.
+*(2026-10-12: ELAVULT — 2026-09-02 óta a Hetzner boxon egy worker-konténer belső ütemezővel futtatja ([`services/worker/src/main.ts`](../../services/worker/src/main.ts)); a WebSocket helyett HTTP poll továbbra is igaz.)*
 
 ---
 
@@ -236,7 +237,7 @@ nagyobb súllyal kéne figyelni, A/B-t fadelni.
   - `HL_PAPER_MODE=false` redeploy
 
 **Tőke allokáció:** max leverage 3x, max pozíció 15% bankroll (HL_MAX_PCT_BANKROLL).
-**Telepítés helyett a Netlify Functions-on fut**, nem Hetzner-en.
+**Telepítés helyett a Netlify Functions-on fut**, nem Hetzner-en. *(2026-10-12: ELAVULT — 2026-09-02 óta a Hetzner box worker-konténerében fut, `services/worker/src/pillars/hyperliquid/`.)*
 
 ---
 
@@ -284,7 +285,7 @@ per-category routing `/trade/{category}/edge-tracker`.
 - ✅ Win rate breakdown
 - ✅ Calibration Health Badge (good/weak/noise/insufficient)
 - ✅ Per-trade view rationale-pop-overek
-- ⚠️ **Részben (eredeti 6 chart-ból):**
+- ⚠️ **Részben (eredeti 6 chart-ból):** *(2026-10-12: ELAVULT — mind a 4 chart megvan az `EdgeTrackerPanel.tsx`-ben: „Cumulative PnL vs Baselines" Random 50/50 overlay-jel, Calibration scatter, `EdgeDecayChart`, `WinRateHeatmap`; `git log -S` szerint `d089696` (2026-04-20) óta — lásd [`sprints.md` B7](./sprints.md))*
   - Random baseline összehasonlítás — nincs explicit baseline overlay
   - Kalibráció scatter — más vizualizáció (Badge instead)
   - Edge decay idősor — nincs külön chart
@@ -294,9 +295,10 @@ per-category routing `/trade/{category}/edge-tracker`.
 
 ## KORÁBBI CHATEKBŐL HIÁNYZÓ ELEMEK
 
-### C1 – Hetzner VPS Migráció 📋 **PLAN-ONLY**
+### C1 – Hetzner VPS Migráció 📋 **PLAN-ONLY** → ✅ **KÉSZ 2026-09-02** (Phase 7 nyitva; 2026-10-12 jelölés)
 **Státusz:** A `internal-docs/roadmap/hetzner-migration.md`-ban 7-fázisos
 action plan készen áll, **de Hetzner deploy nincs**.
+*(2026-10-12: ELAVULT — a stack a meglévő `analytics` boxon Docker co-hostként él (`https://trade.jmeszaros.dev`, paper), a terv a [`migration-runbook.md`](./migration-runbook.md) szerint ment (nem az alábbi CX22/PM2/Redis lista szerint); Phase 4 adat-migráció szándékosan kimaradt (tiszta indulás), a Netlify nyugdíjazva, nyitott: Phase 7 Chronos-súly. Az alábbi „Mit jelent…" blokk Netlify-kori.)*
 
 **Hátra (a plan szerint):**
 1. Ubuntu 24.04 VPS provision (CX22, €4/hó)
@@ -361,7 +363,8 @@ az utolsó N trade hibája alapján.
 
 ---
 
-### P4.2 – Sports/Politics/Macro Kategóriák ❌ **TODO (stub-ok)**
+### P4.2 – Sports/Politics/Macro Kategóriák ❌ **TODO (stub-ok)** → 🟡 **sports kész (edge-forrás nélkül), politics/macro stub** (2026-10-12 jelölés)
+*(2026-10-12: a sports-ra az alábbi ELAVULT — teljes pipeline él 2026-05-11 óta (`services/worker/src/pillars/sports/`: market-finder + decision-engine + session-manager + paper-resolver), valódi fair value nélkül → manuálisan leállítva B37-ig ([`sprints.md` 42E/B37](./sprints.md)). A `politics/` és `macro/` (`services/worker/src/pillars/`) ma is `// TODO` stub.)*
 **Status:** A 3 modul fájl létezik mint stub:
 - `auto-trader/sports/index.mts` — TODO Sprint 2 (NBA, NFL, Premier League)
 - `auto-trader/politics/index.mts` — TODO Sprint 3 (LLM news sentiment)
@@ -402,6 +405,8 @@ Napi felügyelet: 5-10 perc
 ---
 
 ## INFRASTRUKTÚRA ÖSSZEFOGLALÓ — TÉNYLEGES
+
+> **2026-10-12: az alábbi Netlify/Hetzner sorok ELAVULTAK.** Ma: Hetzner `analytics` box, Docker co-host (`https://trade.jmeszaros.dev`, paper) — Bun API ([`services/api/src/server.ts`](../../services/api/src/server.ts)) + egy worker-konténer belső ütemezővel ([`services/worker/src/main.ts`](../../services/worker/src/main.ts)) + Postgres; deploy: GitHub Actions CI → rsync ([`deploy.yml`](../../.github/workflows/deploy.yml)). A Netlify-deploy 2026-09-02 óta nyugdíjazva (csak a DNS-zóna maradt). A Polymarket/Hyperliquid sorok érvényesek.
 
 ```
 Netlify (ingyenes)                          ✅ ACTIVE
@@ -524,7 +529,7 @@ amiket az audit talált meg:
    automatikus redemption hívás. Minor effort (~2h).
 
 2. **HL live trading deps + env**
-   `npm i @nktkas/hyperliquid viem` + `HL_PRIVATE_KEY` + `HL_PAPER_MODE=false`.
+   `npm i @nktkas/hyperliquid viem` + `HL_PRIVATE_KEY` + `HL_PAPER_MODE=false`. *(2026-10-12: az `npm i` rész kész — B47, 2026-09-03; a kulcs/env és a paper-kapuk nyitottak.)*
    Csak akkor amikor a paper validation gate-eken átment.
 
 3. **Polymarket live trading deps + env**
@@ -540,13 +545,13 @@ amiket az audit talált meg:
 5. **C3 follow-up — globális LP wallet whitelist**
    `lp_wallets.json` Blobs + havi cron frissítés. ~2 nap.
 
-6. **P3.4 follow-up — hiányzó Edge Tracker chartok**
+6. ~~**P3.4 follow-up — hiányzó Edge Tracker chartok**~~ ✅ *(2026-10-12: a 4 chart megvan — [`sprints.md` B7](./sprints.md))*
    Random baseline overlay, Calibration scatter, Edge decay timeseries,
    Win-rate heatmap (napszak × kategória). ~3 nap.
 
 ### 🟡 NAGY SPRINT (új infra + új bot)
 
-7. **C1 — Hetzner VPS migráció**
+7. ~~**C1 — Hetzner VPS migráció**~~ ✅ *(2026-10-12: kész 2026-09-02, Phase 7 nyitva — [`sprints.md` B2](./sprints.md); a 8–9. pont „C1 (Hetzner)" előfeltétele ezzel teljesült)*
    A `hetzner-migration.md` 7-fázisa. ~1-2 hét.
    **Előfeltétele:** P2.2, P3.3, és long-term operábilis bot-mátrix.
 

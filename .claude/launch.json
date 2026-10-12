@@ -2,15 +2,14 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "netlify-dev",
-      "runtimeExecutable": "npx",
-      "runtimeArgs": ["netlify", "dev", "--no-open"],
-      "port": 8888
-    },
-    {
       "name": "web-dev",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["--prefix", "apps/web", "run", "dev"],
+      "runtimeArgs": [
+        "--prefix",
+        "apps/web",
+        "run",
+        "dev"
+      ],
       "port": 4321
     }
   ]
