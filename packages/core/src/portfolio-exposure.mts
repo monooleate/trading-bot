@@ -91,3 +91,83 @@ export function checkBetaCap(
         `current $${current.toFixed(0)} + new $${prospective.toFixed(0)})`,
   };
 }
+
+// ─── Resolution-window cap (B38 #3) ──────────────────────────────────────────
+//
+// WHY: the beta cap above sees TOTAL committed capital, not WHEN it settles.
+// Crypto threshold markets that resolve on the same day (BTC above 80k / 82k /
+// 84k on Oct 21, or BTC + ETH + SOL on the same date) are one correlated bet on
+// that day's print: 2026-10-21 opened three BTC strikes, two lost together. This
+// caps the capital resolving within ±windowHours of the new market's endDate at
+// `capFraction × crypto bankroll`, alongside (not instead of) the beta cap.
+//
+// Conservative by construction: all coins count (BTC/ETH/SOL are highly
+// correlated), exposure is GROSS costBasis (a YES@K_lo + NO@K_hi range pair is
+// partly hedged, but netting digitals across strikes is not linear — over-
+// counting is the safe side), and a position with no parseable endDate counts
+// as in-window. Positions already past endDate are excluded: their outcome is
+// fixed, only the resolver is pending.
+
+export interface WindowPosLike { costBasis: number; endDate?: string | null; }
+
+/** Σ costBasis of positions resolving within ±windowHours of targetEndMs
+ *  (past-endDate positions excluded, unknown endDate included). Pure. */
+export function windowExposureUsd(
+  positions: WindowPosLike[],
+  targetEndMs: number,
+  windowHours: number,
+  nowMs: number,
+): number {
+  const halfMs = windowHours * 3_600_000;
+  return (positions ?? []).reduce((s, p) => {
+    if (!(p?.costBasis > 0)) return s;
+    const end = p.endDate ? new Date(p.endDate).getTime() : NaN;
+    if (!Number.isFinite(end)) return s + p.costBasis;
+    if (end < nowMs) return s;
+    return Math.abs(end - targetEndMs) <= halfMs ? s + p.costBasis : s;
+  }, 0);
+}
+
+/**
+ * Decide whether a new crypto entry of `prospectiveUsd`, resolving at
+ * `targetEndDate`, keeps the same-window capital within
+ * `capFraction × bankrollUsd`. Pure.
+ *
+ * Fail-open (allowed=true) on a non-positive bankroll / capFraction /
+ * windowHours or an unparseable target endDate — same contract as
+ * checkBetaCap; the caller gates activation on the `enabled` flag.
+ */
+export function checkResolutionWindowCap(
+  positions: WindowPosLike[],
+  prospectiveUsd: number,
+  targetEndDate: string | null | undefined,
+  bankrollUsd: number,
+  capFraction: number,
+  windowHours: number,
+  nowMs: number,
+): BetaCapCheck {
+  const prospective = Math.max(0, prospectiveUsd || 0);
+  const targetMs = targetEndDate ? new Date(targetEndDate).getTime() : NaN;
+
+  if (!(bankrollUsd > 0) || !(capFraction > 0) || !(windowHours > 0) || !Number.isFinite(targetMs)) {
+    return { allowed: true, capUsd: Infinity, currentUsd: 0, prospectiveUsd: prospective, projectedUsd: prospective, utilization: 0 };
+  }
+
+  const current = windowExposureUsd(positions, targetMs, windowHours, nowMs);
+  const projected = current + prospective;
+  const capUsd = capFraction * bankrollUsd;
+  const allowed = projected <= capUsd + 1e-6;
+  return {
+    allowed,
+    capUsd,
+    currentUsd: current,
+    prospectiveUsd: prospective,
+    projectedUsd: projected,
+    utilization: projected / capUsd,
+    reason: allowed
+      ? undefined
+      : `resolution-window cap (B38): $${projected.toFixed(2)} resolving within ±${windowHours}h > $${capUsd.toFixed(2)} cap ` +
+        `(${(capFraction * 100).toFixed(0)}% of $${bankrollUsd.toFixed(0)} bankroll; ` +
+        `current $${current.toFixed(2)} + new $${prospective.toFixed(2)})`,
+  };
+}

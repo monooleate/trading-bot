@@ -190,6 +190,27 @@ export async function getEffectiveBetaCap(): Promise<{ enabled: boolean; fractio
   }
 }
 
+// Resolution-window cap options (B38 #3). Crypto capital resolving within
+// ±hours of a new market's endDate is capped at `fraction × crypto bankroll`.
+// Env default OFF; the `crypto` Blobs knobs `cryptoWindowCapEnabled` (0/1) +
+// `cryptoWindowCapFraction` + `cryptoWindowCapHours` override.
+export async function getEffectiveWindowCap(): Promise<{ enabled: boolean; fraction: number; hours: number }> {
+  const base = {
+    enabled: process.env.CRYPTO_WINDOW_CAP_ENABLED === "true",
+    fraction: parseFloat(process.env.CRYPTO_WINDOW_CAP_FRACTION || "0.12"),
+    hours: parseFloat(process.env.CRYPTO_WINDOW_CAP_HOURS || "12"),
+  };
+  try {
+    const mod: any = await import("@api/routes/trader-settings.mts");
+    const ov = await mod.loadRuntimeOverrides();
+    return {
+      enabled: ov.cryptoWindowCapEnabled != null ? ov.cryptoWindowCapEnabled === 1 : base.enabled,
+      fraction: ov.cryptoWindowCapFraction ?? base.fraction,
+      hours: ov.cryptoWindowCapHours ?? base.hours,
+    };
+  } catch { return base; }
+}
+
 // B57: how many crypto markets the runner scans per tick. Each slot costs a
 // FULL signal-combiner run (~8 external fetches), so this is the bot's main
 // external-API dial — Settings-tunable so the operator can trade coverage

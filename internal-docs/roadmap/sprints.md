@@ -549,6 +549,10 @@ A korábbi B9 (Topup action) átkerült a "📋 Next sprint candidates" szekció
 4. **Kimenet-ellenőrzés:** a promóciós kapu (B50 #1) döntse el, nem a PnL.
 
 *Állás 2026-10-12: a ≥30 tiszta crypto sor teljesülése a repóból nem ellenőrizhető (élő ledger-lekérdezés kell); a CLAUDE.md (2026-09-30) szerint a tétel továbbra is „≥30 tiszta crypto sor után" nyitott.*
+
+- **(3) ✅ IMPLEMENTED 2026-10-22, default-OFF** (user-kérés). `checkResolutionWindowCap` + `windowExposureUsd` ([`portfolio-exposure.mts`](../../packages/core/src/portfolio-exposure.mts)), crypto runner 4b' lépés a beta-cap mellett; knobok `cryptoWindowCapEnabled` 0 / `cryptoWindowCapFraction` 0,12 / `cryptoWindowCapHours` 12. Tesztek: `portfolio-exposure.test.mts` §6–8 (az okt. 21-i 3-strike eset, fail-open). Leírás: [`math/19`](../math/19-portfolio-exposure-cap.md) §4b.
+  **Visszamérés az élő 14 threshold-kötésen (10-06…10-21):** 6 blokk, mind nyerő (+$42) → **ne élesítsd** most; szórás-csökkentés, nem edge. Élesítés csak a promóciós kapu / több adat után, operátor-döntéssel.
+- **Nyitva marad:** (1) `cryptoSelectionShrink` (ledger-szimuláció előbb) és (2) `maxEdgeCap` plateau-sweep.
 ### B39 — evGap net-of-fee baseline 🟡 🔵 NYITOTT (2026-10-12: a `tradeEv()` ma is bruttó — [`packages/core/src/statistics.mts`](../../packages/core/src/statistics.mts):245, fee-levonás nélkül)
 
 - **Feladat:** a `tradeEv()` ([edge-tracker/statistics.mts](../../netlify/functions/edge-tracker/statistics.mts) — ma: `packages/core/src/statistics.mts`) EV-baseline-ja **bruttó** a fee-re, miközben a realizált PnL nettó → az evGap fix ≈ −Σfee biast hordoz, ami összemossa a „modell-optimizmust" a puszta fee-drag-gel (a crypto/HL evGap-riasztások részben ez az artefakt). Fix: a fee levonása a `tradeEv`-ben (`max(proceeds,costBasis)·feePct` mintára), vagy a bias explicit dokumentálása a mezőn.

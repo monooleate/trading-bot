@@ -56,6 +56,19 @@ checkBetaCap(current, prospective, combinedBankroll, capFraction):
 
 ---
 
+## 4b. Lejárati-ablak cap (B38 #3, 2026-10-22, default OFF)
+
+A beta-cap a **teljes** lekötött tőkét látja, azt nem, hogy **mikor** rezolvál. Az azonos napi printre lejáró crypto threshold-piacok (BTC 80k/82k/84k okt. 21-én, vagy BTC+ETH+SOL ugyanarra a dátumra) egyetlen korrelált fogadás.
+
+- **Képlet** (`checkResolutionWindowCap`, [`packages/core/src/portfolio-exposure.mts`](../../packages/core/src/portfolio-exposure.mts)): `Σ costBasis{ pozíció : |endDate − endDate_új| ≤ H } + új tét ≤ f × crypto bankroll`.
+- **Konzervatív:** minden coin számít; bruttó costBasis (egy YES@K_lo + NO@K_hi pár részben hedge-elt, de a digitálisok nettósítása strike-ok között nem lineáris); ismeretlen/parse-olhatatlan endDate → ablakon belül; a már lejárt (resolverre váró) pozíció kimarad, mert a kimenete fix.
+- **Fail-open** (mint a beta-cap): bankroll ≤ 0, f ≤ 0, H ≤ 0 vagy hiányzó új endDate → engedélyez.
+- **Bekötés:** crypto runner 4b' lépés, a beta-cap UTÁN, a végrehajtható-edge kapu ELŐTT; az élő `updatedSession`-ből olvas (a tick-en belüli nyitások is számítanak).
+- **Knobok** (`crypto` kategória, Risk & sizing): `cryptoWindowCapEnabled` (0), `cryptoWindowCapFraction` (0,12), `cryptoWindowCapHours` (12).
+- **Visszamérés (2026-10-06…21, 14 élő threshold-kötés, f=0,12, H=12):** a cap 6 kötést blokkolt volna, mind a 6 nyerő volt (+$42) → a +$9 helyett kb. −$33. n=14, egy rossz napot (okt. 21.) leszámítva a halmozott napok nyertek; ez szórás-csökkentő eszköz, nem edge-forrás, élesítése a promóciós kapu döntése.
+
+---
+
 ## 5. Maradó (follow-up — sprints.md B49)
 
 - **UI-láthatóság:** a `multi-status`-ba egy aggregát „crypto-beta utilization" mező (jelenleg csak a skip-reason logban látszik).

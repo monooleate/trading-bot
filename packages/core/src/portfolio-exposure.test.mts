@@ -9,6 +9,8 @@ import {
   cryptoExposureUsd,
   hlExposureUsd,
   checkBetaCap,
+  windowExposureUsd,
+  checkResolutionWindowCap,
 } from "./portfolio-exposure.mts";
 
 interface Failure { test: string; message: string; }
@@ -69,6 +71,57 @@ const approx = (a: number, b: number, eps = 1e-6) => Math.abs(a - b) < eps;
   const hlUsd = hlExposureUsd([{ sizeUSDC: 90, leverage: 3 }, { sizeUSDC: 90, leverage: 3 }, { sizeUSDC: 90, leverage: 3 }]); // 90
   const res = checkBetaCap(cryptoUsd + hlUsd, 15, 450, 0.25); // 190 + 15 vs 112.5
   expect(res.allowed === false, t, `barbell over-exposure blocked (proj ${res.projectedUsd} > ${res.capUsd})`);
+}
+
+// ── 6. resolution-window exposure (B38 #3) ───────────────────────────────────
+const NOW = Date.parse("2026-10-21T08:00:00Z");
+const OCT21 = "2026-10-21T16:00:00Z";
+{
+  const t = "window-exposure";
+  const target = Date.parse(OCT21);
+  const pos = [
+    { costBasis: 7, endDate: "2026-10-21T16:00:00Z" },   // same print → in
+    { costBasis: 5, endDate: "2026-10-22T03:00:00Z" },   // +11h → in (±12h)
+    { costBasis: 9, endDate: "2026-10-22T16:00:00Z" },   // +24h → out
+    { costBasis: 4, endDate: "2026-10-20T16:00:00Z" },   // already past endDate → out
+    { costBasis: 3, endDate: null },                     // unknown → in (conservative)
+    { costBasis: 2, endDate: "garbage" },                // unparseable → in
+    { costBasis: -1, endDate: OCT21 } as any,            // non-positive ignored
+  ];
+  expect(approx(windowExposureUsd(pos, target, 12, NOW), 17), t, `7+5+3+2=17, got ${windowExposureUsd(pos, target, 12, NOW)}`);
+  expect(approx(windowExposureUsd(pos, target, 1, NOW), 12), t, "±1h → 7+3+2=12");
+  expect(windowExposureUsd([], target, 12, NOW) === 0, t, "empty=0");
+}
+
+// ── 7. window cap: the 2026-10-21 case (three BTC strikes, one print) ─────────
+{
+  const t = "window-cap-oct21";
+  // crypto bankroll ~$120, cap 12% → $14.40. Two strikes already open ($7.4 + $6.8).
+  const open = [{ costBasis: 7.4, endDate: OCT21 }, { costBasis: 6.8, endDate: OCT21 }];
+  const third = checkResolutionWindowCap(open, 7.2, OCT21, 120, 0.12, 12, NOW);
+  expect(third.allowed === false, t, `third same-day strike blocked (proj ${third.projectedUsd} > ${third.capUsd})`);
+  expect(approx(third.currentUsd, 14.2), t, "current = both open strikes");
+  expect(typeof third.reason === "string" && third.reason.includes("B38"), t, "reason names B38");
+  // the first strike alone fits
+  const first = checkResolutionWindowCap([], 7.4, OCT21, 120, 0.12, 12, NOW);
+  expect(first.allowed === true, t, "first strike of the day allowed");
+  // a different day is a separate window — not blocked by Oct 21 exposure
+  const nextDay = checkResolutionWindowCap(open, 7.2, "2026-10-22T16:00:00Z", 120, 0.12, 12, NOW);
+  expect(nextDay.allowed === true && nextDay.currentUsd === 0, t, "next-day market has its own window");
+  // exactly at the cap is allowed (same epsilon as checkBetaCap)
+  const at = checkResolutionWindowCap([{ costBasis: 10, endDate: OCT21 }], 4.4, OCT21, 120, 0.12, 12, NOW);
+  expect(at.allowed === true, t, "projected == cap → allowed");
+}
+
+// ── 8. window cap fail-open on degenerate input ──────────────────────────────
+{
+  const t = "window-cap-fail-open";
+  const open = [{ costBasis: 500, endDate: OCT21 }];
+  expect(checkResolutionWindowCap(open, 50, OCT21, 0, 0.12, 12, NOW).allowed, t, "0 bankroll");
+  expect(checkResolutionWindowCap(open, 50, OCT21, 120, 0, 12, NOW).allowed, t, "0 fraction");
+  expect(checkResolutionWindowCap(open, 50, OCT21, 120, 0.12, 0, NOW).allowed, t, "0 windowHours");
+  expect(checkResolutionWindowCap(open, 50, null, 120, 0.12, 12, NOW).allowed, t, "missing target endDate");
+  expect(checkResolutionWindowCap(open, 50, "nope", 120, 0.12, 12, NOW).allowed, t, "unparseable target endDate");
 }
 
 // ─── CLI report ───────────────────────────────────────────────────────────

@@ -8,11 +8,11 @@
 import type { Context } from "@netlify/functions";
 import { checkAuth } from "@api/routes/_auth-guard.ts";
 import { CORS, getTraderConfig, getEffectiveTraderConfig, getEffectiveBtcExitConfig, getBtcExitConfig, getEffectiveBetaCap, getEffectiveRiskOverlay,
-  getEffectiveCryptoScanWindow, directionalHaltEnabled, makerShadowRecordEnabled,
+  getEffectiveWindowCap, getEffectiveCryptoScanWindow, directionalHaltEnabled, makerShadowRecordEnabled,
 } from "./shared/config.mts";
 import { isDirectionalCryptoMarket } from "@core/coin.mts";
 import { loadPortfolioBetaSnapshot } from "./shared/portfolio-exposure.mts";
-import { cryptoExposureUsd, checkBetaCap } from "@core/portfolio-exposure.mts";
+import { cryptoExposureUsd, checkBetaCap, checkResolutionWindowCap } from "@core/portfolio-exposure.mts";
 import { realisedVol, volTargetMultiplier, drawdownKill, equityReturnsFromTrades } from "@core/risk-overlay.mts";
 import { checkExecutableEdge } from "./shared/executable-edge.mts";
 import { loadShadowOrders, saveShadowOrders, processShadowOrders, placeShadowLadder, isMakerShadowEligible } from "./shared/maker-shadow-store.mts";
@@ -565,6 +565,9 @@ async function runCryptoTrader(
   // from the LIVE updatedSession at each entry so intra-tick opens count. OFF → no-op.
   const betaCap  = await getEffectiveBetaCap();
   const betaSnap = betaCap.enabled ? await loadPortfolioBetaSnapshot(config.paperMode) : null;
+  // Resolution-window cap (B38 #3) — same-window crypto positions are one
+  // correlated bet. Read from the LIVE updatedSession at each entry. OFF → no-op.
+  const windowCap = await getEffectiveWindowCap();
   // Portfolio risk overlays (B49 #8) — vol-target + drawdown kill-switch. OFF → no-op.
   const riskOverlay = await getEffectiveRiskOverlay();
   const results: any[] = [];
@@ -828,6 +831,26 @@ async function runCryptoTrader(
         if (!capChk.allowed) {
           log("DECISION_SKIP", config.paperMode, { market: market.slug, reason: capChk.reason });
           results.push({ ...marketContext, action: "skip", reason: capChk.reason });
+          continue;
+        }
+      }
+
+      // 4b'. Resolution-window cap (B38 #3), alongside the beta cap: capital
+      // resolving within ±hours of THIS market's endDate (all coins, gross
+      // costBasis, intra-tick opens included) ≤ fraction × crypto bankroll.
+      if (windowCap.enabled) {
+        const winChk = checkResolutionWindowCap(
+          updatedSession.openPositions as any,
+          sizeUSDC,
+          market.endDate,
+          updatedSession.bankrollCurrent || 0,
+          windowCap.fraction,
+          windowCap.hours,
+          Date.now(),
+        );
+        if (!winChk.allowed) {
+          log("DECISION_SKIP", config.paperMode, { market: market.slug, reason: winChk.reason });
+          results.push({ ...marketContext, action: "skip", reason: winChk.reason });
           continue;
         }
       }

@@ -340,6 +340,24 @@ edge-tracker storage-ba kerülnek.
 - **Default:** `0.25` (a discovery ~15-20%-ot javasol; 0,25 óvatosan generózus).
   Settings-knob: `betaCapFraction`.
 
+### `CRYPTO_WINDOW_CAP_ENABLED` 🟢 OPCIONÁLIS (default OFF) — B38 #3
+
+- **Mire való:** `"true"` → a crypto runner skippel egy belépőt, ha az új piac
+  endDate-je körüli ±ablakban lejáró crypto pozíciók + az új tét túllépné a
+  crypto bankroll hányadát (azonos napi strike-ok = egy korrelált fogadás).
+- **Hol használt:** `packages/core/src/portfolio-exposure.mts` (`checkResolutionWindowCap`);
+  `services/worker/src/pillars/index.mts`.
+- **Default:** OFF. Settings-knob `cryptoWindowCapEnabled` (0/1) override-olja.
+  Lásd [`math/19-portfolio-exposure-cap.md`](../math/19-portfolio-exposure-cap.md) §4b.
+
+### `CRYPTO_WINDOW_CAP_FRACTION` 🟢 OPCIONÁLIS (default 0.12)
+
+- A crypto bankroll hányada egy lejárati ablakban. Settings-knob: `cryptoWindowCapFraction`.
+
+### `CRYPTO_WINDOW_CAP_HOURS` 🟢 OPCIONÁLIS (default 12)
+
+- Az ablak fél-szélessége órában (±H az új piac endDate-je körül). Settings-knob: `cryptoWindowCapHours`.
+
 ---
 
 ### `RECORD_OI` 🟢 OPCIONÁLIS (default OFF) — B50 #2
