@@ -1159,6 +1159,32 @@ A 2026-09-03 teljes audit (5 bot + infra + security) implementált fixei: [chang
 - **Operátor-teendő:** a paper-tőke feltöltése a dashboard 💰 Top up gombjával (a min-méret és a Kelly-méret ne ütközzön) — lásd [changelog 2026-09-28](../changelog/CHANGELOG-2026-09-28.md).
 - **Tesztek:** [`executable-edge.test.mts`](../../packages/core/src/executable-edge.test.mts) (két élő eset szó szerint + valódi depth-walk) · [`risk-overlay.test.mts`](../../packages/core/src/risk-overlay.test.mts) B75-blokk (pozitív kontroll: a régi pnlPct-alap 0,25-öt ad ugyanarra a történetre). `tsc` 0 · **55/55** · build zöld. Doksi: [math/39](../math/39-executable-edge.md).
 
+### B80 — Forex: dokumentált FX-prémiumok + a „Spártai" módszer offline tesztje ⛔ LEFUTVA 2026-10-24/25 — mind a 6 FAIL, nincs forex bot
+
+- **Eredmény (2013–, alap-költség; Sharpe · PSR · DSR):** CARRY −0,22 · 0,21 · 0,00 · TSMOM −0,27 · 0,16 · 0,00 · VALUE −0,35 · 0,10 · 0,00 · COMBO −0,62 · 0,01 · 0,00 · **SPARTAN −1,27** · 0,00 · 0,00 → **mind FAIL**. 2004–2012: CARRY +0,21 (bruttó +0,38, az irodalommal egyező horgony), a többi negatív.
+- **Költség nélkül sem él:** 2013– felár 0 / költség ×0 mellett CARRY +0,06 · TSMOM −0,06 · VALUE −0,06 · SPARTAN −0,60 — a 0,27-es szerencse-sávon belül. A prémiumok a publikálás után G10-ben lecsengtek (a 2009–2021-es nullakamat a carryt kioltotta); a retail swap-felár (1%/év) önmagában ~0,2–0,3 Sharpe-ot visz el.
+- **Spártai EMA-36:** 764 trade 2013 óta, találati arány 28,8% (2R célnál a nullpont 33,3%), átlag −0,14R már költség előtt; a szoros stop miatt nagy a névérték, így a költség megduplázza a veszteséget.
+- **Kontrollok:** 200 véletlen top-3/bottom-3 portfólió 0,01 ± 0,27 (negatív) · a következő havi hozam előjele 4,56 (pozitív) → a mérőcső tud „semmit" és „valamit" is mondani.
+- **Javított artefakt az első futásban:** a Yahoo `range=max&interval=1d` csendben HAVI gyertyát ad → a Spártai szabály havi bárokon futott (53 trade). Javítva (`period1/period2`, és a script leáll, ha a gyertyák nem napiak); ugyanaz az előre regisztrált trial, paraméter nem változott.
+- **6. trial — SWITCH, előre regisztrálva 2026-10-25 (user-kérdés: „időszakosan váltani a jó stratégiára"):** minden hónap végén a három ex-ante 10% vol-ra skálázott láb (CARRY / TSMOM / VALUE, alap-költséggel) közül az fut a következő hónapban, amelyiknek a záró 252 napos hozama a legnagyobb; ha ez ≤ 0 → készpénz. Váltásonként 4 bp költség. Ettől N = 6 mind a hat trialra; ugyanaz a döntési szabály, 2013–. **Eredmény: Sharpe −0,37 · PSR 0,09 · DSR 0,00 → FAIL** (költség nélkül −0,02; 2004–2012: −0,15). A váltás negatív lábak között nem segít; a 252 napos múlt nem jelzi előre a következő hónap nyertesét.
+- **Döntés:** a szabály szerint FAIL → nincs `pillars/forex/`, utólagos hangolás nincs. Újranyitni csak új, előre regisztrált hipotézissel lehet (pl. EM-carry vagy intézményi költségszint), új trial-számlálással.
+
+<details><summary>Előregisztráció (2026-10-24, az első futás előtt)</summary>
+
+- **Miért:** user-kérdés (2026-10-24): lehet-e forex botot építeni, akár a Spartan Trader (Nikos Mermigas) szabályrendszerére. Mielőtt bármi infrastruktúra épül, egy kérdés: a dokumentált prémiumok és egy gépiesített Spártai szabály **a valós retail költségek után, a publikálás utáni években** pozitív-e. Offline, lokálisan futó script ([`eval-fx-premia.mts`](../../scripts/eval-fx-premia.mts) + pure [`fx-backtest.mts`](../../packages/core/src/fx-backtest.mts)); a box érintetlen.
+- **Adat:** FRED H.10 napi árfolyamok (9 G10 deviza USD ellen, 1999–), OECD 3 havi bankközi kamat (havi; a *döntés* az előző havi értéket látja, az *elszámolt* carry a tárgyhavit), Yahoo napi OHLC a Spártai szabályhoz (2004–).
+- **Hipotézisek — rögzített paraméterek, hangolás nincs (N = 5 trial):**
+  1. **CARRY:** 10 deviza (USD-vel), előző havi kamat szerint top-3 long / bottom-3 short, ±1/3 súly, havi újrasúlyozás.
+  2. **TSMOM:** devizánként a 12 havi (252 napos) excess hozam előjele, inverz 60 napos vol-súly (10% / σ / 9), havi.
+  3. **VALUE:** 5 éves (1260 napos) nominális árfolyam-változás negatívja szerint top-3 / bottom-3 (USD-vel), havi.
+  4. **COMBO:** a három, egyenként ex-ante 10% vol-ra skálázva (252 napos, késleltetett szórás), egyenlő súllyal.
+  5. **SPARTAN (gépiesített EMA-36 pullback-bounce, napi gyertya):** long, ha close > EMA36 és EMA36 > EMA36 5 nappal korábban, a nap low-ja ≤ EMA36, és zöld gyertya; belépés a következő nyitón; stop = a jelzőgyertya low − 0,25·ATR14; cél 2R; short tükrözve; 0,5% kockázat/trade, legfeljebb 5× tőkeáttétel/trade, devizapáronként egy pozíció; ha egy napon stop és cél is érintett → stop. (A forrásanyag trendvonal/Renko/S-R elemei nem gépiesíthetők egyértelműen — ez a módszer EMA-36-os magja.)
+- **Költség (alap):** oldalanként (fél-spread + slippage) EUR, JPY, GBP, CHF, CAD, AUD 1 bp · NZD 2 bp · SEK, NOK 5 bp; swap-felár **1%/év** a bruttó kitettségre. Érzékenység: felár 0 / 0,5 / 1 / 2 / 3%, költség ×0 / ×1 / ×2.
+- **Időszakok:** 2004-01 – 2012-12 (az irodalom mintája) és **2013-01 – (OOS, publikálás után)**. Ítélet csak a 2013+ időszakon.
+- **Döntési szabály (az eredmény előtt rögzítve):** **PASS** = DSR (N = 5) ≥ 0,95 a 2013+ alap-költségű napi hozamokon → csak ekkor épülhet paper-pillér (`pillars/forex/`, OANDA practice / IB paper). **ÍGÉRETES** = nettó Sharpe ≥ 0,3 és PSR ≥ 0,90 → forward paper-mérés megfontolható, pillér nem. Egyébként **FAIL** → nincs forex bot; utólagos paraméter-hangolás tilos (az új trial lenne, és a DSR-t rontja).
+
+</details>
+
 ---
 
 ## ✅ Completed sprints (rolling 5 utolsó)

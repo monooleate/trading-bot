@@ -384,6 +384,10 @@ Minden ötletet 4 dimenzió mentén értékelek:
 
 ---
 
+### #38 — Forex: G10 carry / TSMOM / value + Spártai EMA-36 — ⛔ ELVETVE (B80, 2026-10-24)
+
+Offline, előre regisztrált teszt: 2013 óta mind az öt változat negatív a retail költségek után, és költség nélkül sem lépi át a szerencse-sávot. Számok és újranyitási feltétel: → Backlog B80.
+
 ## 4. Realisztikus 12 hónapos terv
 
 ### Hónap 0-3: VPS migráció + bug fix + apex v2
