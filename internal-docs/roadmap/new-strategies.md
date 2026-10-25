@@ -388,6 +388,10 @@ Minden ötletet 4 dimenzió mentén értékelek:
 
 Offline, előre regisztrált teszt: 2013 óta mind az öt változat negatív a retail költségek után, és költség nélkül sem lépi át a szerencse-sávot. Számok és újranyitási feltétel: → Backlog B80.
 
+### #39 — Polymarket logikai arbitrázs (partíció + létra, végrehajtható áron) — ⛔ ELVETVE (B81, 2026-10-25)
+
+Három teljes szkennelés: a középáras sértések ~99,7%-a a könyvben nem végrehajtható; a szabály szerint számító rés mindháromszor ugyanaz az egy, ~$0,5–0,75 / $99-os tétel. Számok: → Backlog B81.
+
 ## 4. Realisztikus 12 hónapos terv
 
 ### Hónap 0-3: VPS migráció + bug fix + apex v2

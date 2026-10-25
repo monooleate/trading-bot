@@ -1185,6 +1185,26 @@ A 2026-09-03 teljes audit (5 bot + infra + security) implementált fixei: [chang
 
 </details>
 
+### B81 — Polymarket logikai arbitrázs végrehajtható áron (partíció + létra) ⛔ LEFUTVA 2026-10-25 — FAIL (1 esemény a ≥ 3 helyett)
+
+- **Eredmény (3 szkennelés, 08:39 / 10:40 / 12:41 UTC, ~21 900 aktív esemény, ~4 300 partíció, ~10 400 létra / ~133 000 beágyazott pár):** középáron szkennelésenként **~9 500–10 800 „sértés"** (amit a `condprob` tab lát) → valódi könyv-VWAP-on, díj után, q = 100-nál **24–28 nyereséges**, q = 1000-nél 3–6 → a szabály szerint **számító: mindháromban 1, mindig ugyanaz az esemény** (`who-wins-the-senate-pending-hormuz-agreement-before-the-midterms`, buy-all-YES, +$0,75 → +$0,55 → +$0,53 a ~$99-on, 10 nap, évesítve 28% → 20%; a kimerítő partíció is csak feltevés: a Szenátus R vagy D). A többi nyereséges tétel 0,05–5% nettó, de hónapokra-évekre leköti a tőkét (évesítve 0,1–9%) — ez a pénz időértéke, nem arbitrázs.
+- **Döntés:** FAIL → a cond-prob / logikai-arbitrázs irány lezárva; nincs recorder, nincs pillér. A `condprob` tab tájékoztató marad: a középáras jelzései ~99,7%-ban nem végrehajthatók — rá kereskedési döntést építeni csak a [`arb-scan.mts`](../../packages/core/src/arb-scan.mts) VWAP + díj logikájával szabad.
+- **Tanulság:** a nagy, likvid piacokon a logikai rés a középárban él, a könyvben nem; a detektor öt próbafutáson öt különböző hamis arbot gyártott (lent) — kontroll nélkül bármelyik „edge-nek" látszott volna.
+
+<details><summary>Előregisztráció (2026-10-25, az első hivatalos szkennelés előtt)</summary>
+
+- **Miért:** a B80 után a következő irány a *szerkezeti* edge (arbitrázs, nem jóslás). A `condprob` tab Gamma-középárakon jelez monotonicitás-sértést, de sosem mértük, hogy a rés a **könyv ask-oldalán, a taker díj után** megmarad-e. Offline, lokálisan futó, read-only scanner ([`eval-polymarket-arb.mts`](../../scripts/eval-polymarket-arb.mts) + pure [`arb-scan.mts`](../../packages/core/src/arb-scan.mts)); a box érintetlen, megbízás nincs.
+- **Családok (rögzítve):**
+  1. **PARTÍCIÓ** — `negRisk` esemény, NEM `negRiskAugmented`, minden alpiac nyitott és `acceptingOrders`: (a) minden YES megvétele (kifizetés pontosan 1/részvény), (b) minden NO megvétele (kifizetés n−1).
+  2. **LÉTRA** — egy eseményen belül ≥ 3 alpiac azonos címke-sablonnal és egy számmal vagy dátummal (strike, spread, „by/through <dátum>"); az irány (melyik a részhalmaz) a létra középár-sorrendjéből (Spearman |ρ| ≥ 0,8, különben kihagyva); minden (részhalmaz A, bővebb B) párra: YES(B) + NO(A) megvétele, kifizetés ≥ 1/részvény.
+- **Detektor-javítások az ítélet ELŐTT (2026-10-25, a próbafutásokból — mindegyik hamis arbot gyártott, nem hangolás):** (1) az 1,00-s ask valódi ár (eldőlt, de még nem lezárt piac), kiszűrve „ingyenes" lábat adott; (2) a létra-sablon a teljes **kérdésből** képződik, mert a Polymarket mindkét csapat spread-piacát azonos címkével („Spread −3.5") jelöli; (3) a létra **iránya a sablon szövegéből** jön (`rungDirection`: above/reach/O-U → nagyobb szűkebb; spread, below/dip → nagyobb bővebb; „by <dátum>" → későbbi bővebb; „through <dátum>" → későbbi szűkebb; ismeretlen → kihagyva), a középár csak vétózhat (≥ 3 szoros könyvű lépcső, |ρ| ≥ 0,8 az ellenkező irányba) — az üres könyvű lépcsők szemét-középára egy valódi spread-létrát megfordított; (4) dátumos létra a piac saját `endDate`-je szerint rendeződik (év nélküli címkénél a „March 31" 2027 az „October 31" 2026 elé került); (5) a „… or lower / or higher" felülírja az igét („reach 2,75% or lower" lefelé-létra), és a ↑ / ↓ nyíl a csoport-kulcs része (egy eseményben azonos kérdés-szöveggel két irányú létra élt). Mind az öt teszttel pinelve.
+- **Végrehajtható ár:** a CLOB könyv VWAP-ja q = 10 / 100 / 1000 részvényre (a NO ask a YES bid tükre); taker díj szintenként `rate × p × (1−p)` (a piac `feeSchedule.rate`-je, `feesEnabled=false` → 0); min. méret 5 részvény.
+- **„Számít" egy arb, ha** q = 100-nál a nettó nyereség ≥ 0,5% a ráfordításon ÉS az évesített hozam (az esemény `endDate`-jéig) ≥ 20%.
+- **Ítélet 3 szkennelés után (≥ 2 óra köz):** **ÍGÉRETES** = legalább 2 szkennelésben van számító arb, és összesen ≥ 3 különböző eseményen → következő lépés egy box-recorder a rés élettartamára és a kitöltésre (új B-tétel). Egyébként **FAIL** → a cond-prob irány lezárva, a tab marad tájékoztató. Referencia (nem ítélet): ugyanazok a párok Gamma-középáron hány sértést mutatnak.
+- **Ismert kockázat, amit a mérés nem fed:** UMA-feloldási vita / eltérő feloldás a láb-piacokon; a `negRisk` konverzió díja; a könyv a lekérés és a kötés között elmozdulhat. Live-végrehajtás amúgy is B10-blokkolt.
+
+</details>
+
 ---
 
 ## ✅ Completed sprints (rolling 5 utolsó)

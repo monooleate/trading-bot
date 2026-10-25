@@ -19,6 +19,7 @@ paths:
   - "scripts/eval-*.ts"
   - "scripts/eval-*.mts"
   - "packages/core/src/fx-backtest*.mts"
+  - "packages/core/src/arb-scan*.mts"
 ---
 
 # Prediction ledger + mérési réteg (Edge Tracker, promóciós kapu)
@@ -34,5 +35,6 @@ paths:
 - DSR `nTrials` = effektív trial-szám (`effectiveTrials()`, Jaccard-klaszter), literál fallbackkel.
 - Mérés-scriptet csak kontrollal hihetsz: a B73 (+92%) artefakt volt (a Gamma `tag_id=21` above-K készlet ár-idősor nélkül, 0,5-ös placeholderrel); in-sample alapvonal ellen a B69 keverék hamisan vesztesnek látszott. Artefaktból származó eredményt ne szállíts.
 - Külső idősort a granularitásáig ellenőrizz: a Yahoo chart API `range=max&interval=1d` csendben HAVI gyertyát ad (B80) → `period1/period2`, és a script álljon le, ha a medián bar-köz nem a vártnak felel meg.
+- Polymarket-arbitrázst csak könyv-VWAP-on + díjjal mérj, és a „talált" arbot egyenként nézd meg kézzel, mielőtt elhiszed (B81: öt próbafutás öt hamis arbot adott — 1,00-s ask kiszűrve, azonos címkéjű spread két csapatra, szemét-középár az irányban, év nélküli dátum, vegyes ↑/↓). A csoportkulcs a teljes kérdés, nem a `groupItemTitle`.
 - Megkülönböztetendő: „mértük, nincs skill" vs „nem tudtuk mérni" — a HL realized-IC 8 × pontosan 0,0 törött cső volt (`pnlUSDC` vs `pnl` mezőhiba); degenerált jelzést adj, ne skillt.
 - Ledger-írás minden scannelt piacra (taken + skipped), a skip-sor is `predictedProb`-ot visz — taken-only ledger torzít. A measure-only halt (B74/B79) is pusholja a skip-sort.
